@@ -2,121 +2,82 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <title>Admin – INDUSTREER Zeiterfassung</title>
+  <title>Admin – Stundennachweise</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f5f5f5;
-      padding: 40px;
-    }
-    h1 {
-      margin-bottom: 20px;
-    }
-    .box {
-      background: #fff;
-      padding: 20px;
-      border-radius: 6px;
-      max-width: 600px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-    }
-    button {
-      padding: 10px 16px;
-      margin-right: 10px;
-      margin-top: 10px;
-      font-size: 14px;
-      cursor: pointer;
-    }
-    .danger {
-      background: #c62828;
-      color: white;
-      border: none;
-    }
-    .primary {
-      background: #1565c0;
-      color: white;
-      border: none;
-    }
-    #status {
-      margin-top: 20px;
-      white-space: pre-wrap;
-      background: #eee;
-      padding: 10px;
-      border-radius: 4px;
-    }
+    body{font-family:Arial,sans-serif;background:#f5f5f5;padding:30px}
+    .box{background:#fff;padding:18px;border-radius:10px;max-width:720px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+    label{display:block;margin-top:12px;font-weight:700}
+    input{width:100%;padding:10px;margin-top:6px}
+    button{margin-top:14px;padding:10px 14px;cursor:pointer}
+    .danger{background:#c62828;color:#fff;border:0}
+    .primary{background:#1565c0;color:#fff;border:0}
+    pre{background:#eee;padding:10px;border-radius:6px;white-space:pre-wrap}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .hint{color:#444;margin-top:8px}
   </style>
 </head>
 <body>
-
-  <h1>Admin – Staffplan Import</h1>
-
   <div class="box">
-    <p><strong>1) Staffplan löschen (einmalig bei Fehlern)</strong></p>
+    <h2>Admin – Stundennachweise (ZIP)</h2>
+
     <button class="danger" onclick="clearStaffplan()">Staffplan löschen</button>
+    <div class="hint">Nur nutzen, wenn du neu importieren willst.</div>
 
-    <hr />
+    <hr/>
 
-    <p><strong>2) Staffplan importieren</strong></p>
-    <input type="file" id="fileInput" accept=".xlsx,.xls" />
-    <br />
-    <button class="primary" onclick="importStaffplan()">Importieren</button>
+    <h3>Export PDFs</h3>
+    <label>Kalenderwoche (Pflicht)</label>
+    <input id="kw" placeholder="z.B. CW49"/>
 
-    <div id="status"></div>
+    <div class="row">
+      <div>
+        <label>PO (optional)</label>
+        <input id="po" placeholder="z.B. 5100932217"/>
+      </div>
+      <div>
+        <label>Kunde (optional, alternativ zu PO)</label>
+        <input id="customer" placeholder="z.B. BASF"/>
+      </div>
+    </div>
+
+    <label>Requester (optional, nur mit Kunde)</label>
+    <input id="requester" placeholder="z.B. Max Mustermann"/>
+
+    <button class="primary" onclick="downloadZip()">PDFs als ZIP herunterladen</button>
+
+    <pre id="status"></pre>
   </div>
 
 <script>
 async function clearStaffplan() {
-  if (!confirm("ACHTUNG: Alle Staffplan-Daten werden gelöscht. Fortfahren?")) {
-    return;
-  }
+  if (!confirm("ACHTUNG: Alle Staffplan-Daten werden gelöscht. Fortfahren?")) return;
+  const status = document.getElementById("status");
+  status.textContent = "Lösche…";
 
-  document.getElementById("status").textContent = "Lösche Daten...";
-
-  try {
-    const res = await fetch("/api/staffplan/clear", {
-      method: "POST"
-    });
-    const data = await res.json();
-    document.getElementById("status").textContent =
-      "Erfolg:\n" + JSON.stringify(data, null, 2);
-  } catch (err) {
-    document.getElementById("status").textContent =
-      "Fehler beim Löschen:\n" + err;
-  }
+  const res = await fetch("/api/staffplan/clear", { method: "POST" });
+  const data = await res.json();
+  status.textContent = JSON.stringify(data, null, 2);
 }
 
-async function importStaffplan() {
-  const fileInput = document.getElementById("fileInput");
-  if (!fileInput.files.length) {
-    alert("Bitte zuerst eine Excel-Datei auswählen");
-    return;
-  }
+function downloadZip(){
+  const kw = document.getElementById("kw").value.trim();
+  const po = document.getElementById("po").value.trim();
+  const customer = document.getElementById("customer").value.trim();
+  const requester = document.getElementById("requester").value.trim();
 
-  const file = fileInput.files[0];
-  const reader = new FileReader();
+  if (!kw) { alert("KW ist Pflicht"); return; }
+  if (po && customer) { alert("Bitte entweder PO ODER Kunde verwenden (nicht beides)."); return; }
 
-  reader.onload = async () => {
-    const base64 = reader.result.split(",")[1];
-    document.getElementById("status").textContent = "Import läuft...";
+  const params = new URLSearchParams();
+  params.set("kw", kw);
+  if (po) params.set("po", po);
+  if (customer) params.set("customer", customer);
+  if (requester) params.set("requester", requester);
 
-    try {
-      const res = await fetch("/api/import/staffplan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileBase64: base64 })
-      });
-
-      const data = await res.json();
-      document.getElementById("status").textContent =
-        "Import-Ergebnis:\n" + JSON.stringify(data, null, 2);
-    } catch (err) {
-      document.getElementById("status").textContent =
-        "Import-Fehler:\n" + err;
-    }
-  };
-
-  reader.readAsDataURL(file);
+  const url = "/api/admin/pdfs?" + params.toString();
+  window.location.href = url; // Download
 }
 </script>
-
 </body>
 </html>
