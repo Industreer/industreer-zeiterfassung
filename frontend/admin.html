@@ -12,7 +12,7 @@
       padding: 20px;
     }
     h1 {
-      margin-bottom: 10px;
+      margin-bottom: 20px;
     }
     .box {
       background: #fff;
@@ -36,24 +36,44 @@
 
 <h1>INDUSTREER – Adminbereich</h1>
 
+<!-- Mitarbeiter -->
 <div class="box">
   <h2>Mitarbeiter importieren (CSV)</h2>
   <input type="file" id="empCsv" accept=".csv">
   <br>
-  <button onclick="importCsv('employees', 'empCsv')">Importieren</button>
+  <button onclick="importCsv('/api/import/employees', 'empCsv', 'empResult')">
+    Importieren
+  </button>
   <div class="result" id="empResult"></div>
 </div>
 
+<!-- Projekte -->
 <div class="box">
   <h2>Projekte importieren (CSV)</h2>
   <input type="file" id="projCsv" accept=".csv">
   <br>
-  <button onclick="importCsv('projects', 'projCsv')">Importieren</button>
+  <button onclick="importCsv('/api/import/projects', 'projCsv', 'projResult')">
+    Importieren
+  </button>
   <div class="result" id="projResult"></div>
 </div>
 
+<!-- Tageszuordnung -->
+<div class="box">
+  <h2>Tageszuordnung importieren (mehrere Tage)</h2>
+  <p>
+    CSV mit employee_id, project_id, work_date, approved
+  </p>
+  <input type="file" id="dayCsv" accept=".csv">
+  <br>
+  <button onclick="importCsv('/api/import/day-projects', 'dayCsv', 'dayResult')">
+    Importieren
+  </button>
+  <div class="result" id="dayResult"></div>
+</div>
+
 <script>
-async function importCsv(type, inputId) {
+async function importCsv(url, inputId, resultId) {
   const input = document.getElementById(inputId);
   if (!input.files.length) {
     alert("Bitte CSV-Datei auswählen");
@@ -62,21 +82,19 @@ async function importCsv(type, inputId) {
 
   const csvText = await input.files[0].text();
 
-  const res = await fetch(`/api/import/${type}`, {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ csv: csvText })
   });
 
   const data = await res.json();
-  const resultId = type === "employees" ? "empResult" : "projResult";
+  const result = document.getElementById(resultId);
 
   if (data.ok) {
-    document.getElementById(resultId).innerText =
-      `Erfolgreich importiert: ${data.imported}`;
+    result.innerText = `Erfolgreich importiert: ${data.imported}`;
   } else {
-    document.getElementById(resultId).innerText =
-      `Fehler: ${data.error || "Unbekannt"}`;
+    result.innerText = `Fehler: ${data.error || "Unbekannt"}`;
   }
 }
 </script>
