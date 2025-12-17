@@ -11,27 +11,22 @@
   button { cursor:pointer; }
   .ok { color:#0f0; font-size:1.15em; white-space:pre-line; }
   .err { color:#f66; white-space:pre-line; }
-  .hint { color:#bbb; font-size:0.95em; }
 </style>
 </head>
 <body>
 
 <div class="card" id="loginCard">
   <h2>Mitarbeiter Anmeldung</h2>
-  <input id="empId" placeholder="Mitarbeiter-ID" inputmode="numeric">
+  <input id="empId" placeholder="Mitarbeiter-ID">
   <button onclick="login()">Anmelden</button>
   <div class="err" id="loginErr"></div>
 </div>
 
 <div class="card" id="projectCard" style="display:none">
   <h2 id="welcome"></h2>
-  <div class="hint">Bitte Projekt auswählen (nur freigegebene Projekte für heute)</div>
   <select id="projectSelect"></select>
-
-  <div class="hint" style="margin-top:12px">Falls Projekt fehlt: Ausnahmeprojekt eingeben</div>
-  <input id="manualProject" placeholder="Projekt-ID (z.B. P-123)">
-  <button onclick="useManualProject()">Ausnahme verwenden</button>
-
+  <input id="manualProject" placeholder="Ausnahme Projekt-ID">
+  <button onclick="useManual()">Ausnahme verwenden</button>
   <button onclick="confirmProject()">Weiter</button>
   <div class="err" id="projErr"></div>
 </div>
@@ -45,122 +40,80 @@
 </div>
 
 <script>
-let employee = null;
-let projectId = null;
+let employee=null, projectId=null;
 
-function todayIso() {
-  return new Date().toISOString().slice(0,10);
+function todayIso(){ return new Date().toISOString().slice(0,10); }
+
+async function login(){
+  loginErr.innerText="";
+  const id=empId.value.trim();
+  if(!id) return;
+  const r=await fetch(`/api/terminal/login?employee_id=${id}`);
+  const d=await r.json();
+  if(!d.ok){ loginErr.innerText="Mitarbeiter nicht gefunden"; return; }
+  employee=d.employee;
+  loadProjects();
 }
 
-async function login() {
-  document.getElementById("loginErr").innerText = "";
-  const id = document.getElementById("empId").value.trim();
-  if (!id) return;
-
-  try {
-    const res = await fetch(`/api/terminal/login?employee_id=${encodeURIComponent(id)}`);
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "Login fehlgeschlagen");
-
-    employee = data.employee;
-    await loadProjects();
-  } catch (e) {
-    document.getElementById("loginErr").innerText = "❌ " + e.message;
+async function loadProjects(){
+  const r=await fetch(`/api/allowed-projects?employee_id=${employee.employee_id}&date=${todayIso()}`);
+  const d=await r.json();
+  projectSelect.innerHTML="";
+  if(d.projects.length){
+    d.projects.forEach(p=>{
+      const o=document.createElement("option");
+      o.value=p.project_id;
+      o.text=`${p.project_id} – ${p.name}`;
+      projectSelect.appendChild(o);
+    });
+  }else{
+    const o=document.createElement("option");
+    o.value="";
+    o.text="Kein Projekt zugewiesen";
+    projectSelect.appendChild(o);
   }
+  welcome.innerText=`Hallo ${employee.name}`;
+  loginCard.style.display="none";
+  projectCard.style.display="block";
 }
 
-async function loadProjects() {
-  document.getElementById("projErr").innerText = "";
-  const date = todayIso();
-
-  const res = await fetch(`/api/allowed-projects?employee_id=${encodeURIComponent(employee.employee_id)}&date=${encodeURIComponent(date)}`);
-  const data = await res.json();
-
-  const sel = document.getElementById("projectSelect");
-  sel.innerHTML = "";
-
-  if (!data.ok) {
-    document.getElementById("projErr").innerText = "❌ Projekte konnten nicht geladen werden";
-    return;
-  }
-
-  if (!data.projects.length) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.text = "— Kein Projekt zugewiesen —";
-    sel.appendChild(opt);
-  } else {
-    for (const p of data.projects) {
-      const opt = document.createElement("option");
-      opt.value = p.project_id;
-      opt.text = `${p.project_id} – ${p.name}`;
-      sel.appendChild(opt);
-    }
-  }
-
-  document.getElementById("welcome").innerText = `Hallo ${employee.name}`;
-  document.getElementById("loginCard").style.display = "none";
-  document.getElementById("projectCard").style.display = "block";
-}
-
-function useManualProject() {
-  const v = document.getElementById("manualProject").value.trim();
-  if (!v) return;
-  projectId = v;
+function useManual(){
+  const v=manualProject.value.trim();
+  if(!v){ projErr.innerText="Projekt-ID fehlt"; return; }
+  projectId=v;
   showActions("(Ausnahme)");
 }
 
-function confirmProject() {
-  const sel = document.getElementById("projectSelect");
-  const v = sel.value;
-
-  if (!v) {
-    document.getElementById("projErr").innerText = "❌ Kein Projekt zugewiesen. Bitte Ausnahmeprojekt eingeben.";
-    return;
-  }
-  projectId = v;
+function confirmProject(){
+  const v=projectSelect.value;
+  if(!v){ projErr.innerText="Kein Projekt ausgewählt"; return; }
+  projectId=v;
   showActions("");
 }
 
-function showActions(extra) {
-  document.getElementById("projectCard").style.display = "none";
-  document.getElementById("actionCard").style.display = "block";
-  document.getElementById("eventErr").innerText = "";
-
-  document.getElementById("headerText").innerText =
-    `${employee.name}\nProjekt: ${projectId} ${extra}\n(heute: ${todayIso()})`;
+function showActions(extra){
+  projectCard.style.display="none";
+  actionCard.style.display="block";
+  headerText.innerText=`${employee.name}\nProjekt: ${projectId} ${extra}`;
 }
 
-async function sendEvent(type) {
-  document.getElementById("eventErr").innerText = "";
-
-  try {
-    const res = await fetch("/api/time-event", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        employee_id: employee.employee_id,
-        project_id: projectId,
-        event_type: type,
-        date: todayIso(),
-        note: null
-      })
-    });
-
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "Buchung fehlgeschlagen");
-
-    // Anzeige 5 Sekunden
-    const msg = data.is_exception
-      ? `✅ Gespeichert (AUSNAHME)\nFreigabe erforderlich`
-      : `✅ Gespeichert`;
-
-    document.getElementById("actionCard").innerHTML = `<div class="ok">${msg}</div>`;
-
-    setTimeout(() => location.reload(), 5000);
-  } catch (e) {
-    document.getElementById("eventErr").innerText = "❌ " + e.message;
-  }
+async function sendEvent(type){
+  eventErr.innerText="";
+  if(!projectId){ eventErr.innerText="Kein Projekt"; return; }
+  const r=await fetch("/api/time-event",{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({
+      employee_id:employee.employee_id,
+      project_id:projectId,
+      event_type:type,
+      date:todayIso()
+    })
+  });
+  const d=await r.json();
+  if(!d.ok){ eventErr.innerText="Zeitbuchung fehlgeschlagen"; return; }
+  actionCard.innerHTML=`<div class="ok">Gespeichert${d.is_exception?" (AUSNAHME)":""}</div>`;
+  setTimeout(()=>location.reload(),4000);
 }
 </script>
 
