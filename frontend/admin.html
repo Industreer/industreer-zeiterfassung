@@ -1,83 +1,167 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8" />
-  <title>Admin – Stundennachweise</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="UTF-8">
+  <title>Admin – Zeiterfassung</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body{font-family:Arial,sans-serif;background:#f5f5f5;padding:30px}
-    .box{background:#fff;padding:18px;border-radius:10px;max-width:720px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
-    label{display:block;margin-top:12px;font-weight:700}
-    input{width:100%;padding:10px;margin-top:6px}
-    button{margin-top:14px;padding:10px 14px;cursor:pointer}
-    .danger{background:#c62828;color:#fff;border:0}
-    .primary{background:#1565c0;color:#fff;border:0}
-    pre{background:#eee;padding:10px;border-radius:6px;white-space:pre-wrap}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .hint{color:#444;margin-top:8px}
+    body { font-family: Arial, sans-serif; background:#f4f6f8; padding:20px; }
+    h1,h2 { margin-top:0; }
+    .box { background:#fff; padding:20px; border-radius:8px; margin-bottom:20px; box-shadow:0 2px 6px rgba(0,0,0,0.1); }
+    label { display:block; margin-top:10px; font-weight:bold; }
+    input,select { width:100%; padding:8px; margin-top:4px; }
+    button { margin-top:15px; padding:10px 14px; background:#1565c0; color:white; border:none; border-radius:4px; cursor:pointer; }
+    button.danger { background:#c62828; }
+    table { width:100%; border-collapse:collapse; margin-top:15px; }
+    th,td { border-bottom:1px solid #ddd; padding:8px; }
+    th { background:#eee; }
+    tr:hover { background:#f1f1f1; }
+    pre { background:#eee; padding:10px; border-radius:6px; white-space:pre-wrap; }
+    .small { font-size:12px; color:#666; }
   </style>
 </head>
 <body>
-  <div class="box">
-    <h2>Admin – Stundennachweise (ZIP)</h2>
 
-    <button class="danger" onclick="clearStaffplan()">Staffplan löschen</button>
-    <div class="hint">Nur nutzen, wenn du neu importieren willst.</div>
+<h1>Admin – Zeiterfassung</h1>
 
-    <hr/>
+<!-- ================= STAFFPLAN ================= -->
+<div class="box">
+  <h2>Staffplan importieren</h2>
 
-    <h3>Export PDFs</h3>
-    <label>Kalenderwoche (Pflicht)</label>
-    <input id="kw" placeholder="z.B. CW49"/>
+  <label>Excel-Datei (Staffplan)</label>
+  <input type="file" id="staffplanFile" accept=".xlsx,.xls">
 
-    <div class="row">
-      <div>
-        <label>PO (optional)</label>
-        <input id="po" placeholder="z.B. 5100932217"/>
-      </div>
-      <div>
-        <label>Kunde (optional, alternativ zu PO)</label>
-        <input id="customer" placeholder="z.B. BASF"/>
-      </div>
-    </div>
+  <button onclick="importStaffplan()">Staffplan importieren</button>
+  <button class="danger" onclick="clearStaffplan()">Staffplan löschen</button>
 
-    <label>Requester (optional, nur mit Kunde)</label>
-    <input id="requester" placeholder="z.B. Max Mustermann"/>
+  <pre id="staffplanStatus"></pre>
+</div>
 
-    <button class="primary" onclick="downloadZip()">PDFs als ZIP herunterladen</button>
+<!-- ================= EMPLOYEES ================= -->
+<div class="box">
+  <h2>Mitarbeiter anlegen / ändern</h2>
 
-    <pre id="status"></pre>
-  </div>
+  <label>Mitarbeiter-ID</label>
+  <input id="employee_id">
+
+  <label>Name</label>
+  <input id="name">
+
+  <label>E-Mail</label>
+  <input id="email">
+
+  <label>Sprache</label>
+  <select id="language">
+    <option value="de">Deutsch</option>
+    <option value="en">Englisch</option>
+    <option value="sk">Slowakisch</option>
+    <option value="hr">Kroatisch</option>
+    <option value="ru">Russisch</option>
+    <option value="tr">Türkisch</option>
+  </select>
+
+  <button onclick="saveEmployee()">Speichern</button>
+  <pre id="employeeStatus"></pre>
+</div>
+
+<div class="box">
+  <h2>Alle Mitarbeiter</h2>
+  <div class="small">Klick auf einen Mitarbeiter zum Bearbeiten</div>
+
+  <table id="employeeTable">
+    <thead>
+      <tr><th>ID</th><th>Name</th><th>E-Mail</th><th>Sprache</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
 
 <script>
+/* ================= STAFFPLAN ================= */
+
+async function importStaffplan() {
+  const fileInput = document.getElementById("staffplanFile");
+  if (!fileInput.files.length) {
+    alert("Bitte eine Excel-Datei auswählen");
+    return;
+  }
+
+  const file = fileInput.files[0];
+  const reader = new FileReader();
+
+  reader.onload = async () => {
+    const base64 = reader.result.split(",")[1];
+
+    const res = await fetch("/api/import/staffplan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileBase64: base64 })
+    });
+
+    const text = await res.text();
+    document.getElementById("staffplanStatus").textContent = text;
+
+    loadEmployees(); // neue Mitarbeiter anzeigen
+  };
+
+  reader.readAsDataURL(file);
+}
+
 async function clearStaffplan() {
-  if (!confirm("ACHTUNG: Alle Staffplan-Daten werden gelöscht. Fortfahren?")) return;
-  const status = document.getElementById("status");
-  status.textContent = "Lösche…";
-
+  if (!confirm("Staffplan wirklich löschen?")) return;
   const res = await fetch("/api/staffplan/clear", { method: "POST" });
+  document.getElementById("staffplanStatus").textContent = await res.text();
+}
+
+/* ================= EMPLOYEES ================= */
+
+async function loadEmployees() {
+  const res = await fetch("/api/employees");
   const data = await res.json();
-  status.textContent = JSON.stringify(data, null, 2);
+
+  const tbody = document.querySelector("#employeeTable tbody");
+  tbody.innerHTML = "";
+
+  data.forEach(emp => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${emp.employee_id}</td>
+      <td>${emp.name}</td>
+      <td>${emp.email || ""}</td>
+      <td>${emp.language}</td>
+    `;
+    tr.onclick = () => fillForm(emp);
+    tbody.appendChild(tr);
+  });
 }
 
-function downloadZip(){
-  const kw = document.getElementById("kw").value.trim();
-  const po = document.getElementById("po").value.trim();
-  const customer = document.getElementById("customer").value.trim();
-  const requester = document.getElementById("requester").value.trim();
-
-  if (!kw) { alert("KW ist Pflicht"); return; }
-  if (po && customer) { alert("Bitte entweder PO ODER Kunde verwenden (nicht beides)."); return; }
-
-  const params = new URLSearchParams();
-  params.set("kw", kw);
-  if (po) params.set("po", po);
-  if (customer) params.set("customer", customer);
-  if (requester) params.set("requester", requester);
-
-  const url = "/api/admin/pdfs?" + params.toString();
-  window.location.href = url; // Download
+function fillForm(emp) {
+  document.getElementById("employee_id").value = emp.employee_id;
+  document.getElementById("name").value = emp.name;
+  document.getElementById("email").value = emp.email || "";
+  document.getElementById("language").value = emp.language || "de";
 }
+
+async function saveEmployee() {
+  const body = {
+    employee_id: employee_id.value.trim(),
+    name: name.value.trim(),
+    email: email.value.trim() || null,
+    language: language.value
+  };
+
+  const res = await fetch("/api/employees/upsert", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+
+  employeeStatus.textContent = await res.text();
+  loadEmployees();
+}
+
+loadEmployees();
 </script>
+
 </body>
 </html>
