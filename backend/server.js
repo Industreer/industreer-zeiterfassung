@@ -1,9 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – BACKEND (FINAL)
-// - Healthcheck
-// - Staffplan Excel Import (robust, erstes Sheet)
-// - Debug Route
-// - PDF Stundennachweis
+// INDUSTREER ZEITERFASSUNG – BACKEND (FINAL STUNDEN-FIX)
 // ============================================================
 
 const express = require("express");
@@ -15,15 +11,9 @@ const { Pool } = require("pg");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ============================================================
-// Middleware
-// ============================================================
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
-// ============================================================
-// PostgreSQL
-// ============================================================
 const pool = new Pool({
   host: process.env.PGHOST,
   user: process.env.PGUSER,
@@ -33,9 +23,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// ============================================================
-// DB Init
-// ============================================================
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_plan (
@@ -53,64 +40,38 @@ async function initDb() {
   `);
 }
 
-// ============================================================
-// Healthcheck
-// ============================================================
+// ================= HEALTH =================
 app.get("/api/health", async (req, res) => {
-  try {
-    await pool.query("SELECT 1");
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ ok: false });
-  }
+  await pool.query("SELECT 1");
+  res.json({ ok: true });
 });
 
-// ============================================================
-// STEP A – STAFFPLAN IMPORT (ROBUST)
-// ============================================================
+// ================= IMPORT =================
 app.post("/api/import/staffplan", async (req, res) => {
   try {
-    if (!req.body.fileBase64) {
-      return res.status(400).json({ ok: false, error: "fileBase64 fehlt" });
-    }
-
     const buffer = Buffer.from(req.body.fileBase64, "base64");
     const workbook = XLSX.read(buffer, { type: "buffer" });
 
-    // ✅ immer erstes Tabellenblatt nehmen
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    if (!sheet) return res.status(400).json({ ok: false });
 
-    if (!sheet) {
-      return res.status(400).json({ ok: false, error: "Kein Tabellenblatt gefunden" });
-    }
-
-    // Kalenderwoche aus L2
     const calendarWeek = sheet["L2"]?.v;
-    if (!calendarWeek) {
-      return res.status(400).json({ ok: false, error: "Kalenderwoche (L2) fehlt" });
-    }
+    if (!calendarWeek) return res.status(400).json({ ok: false });
 
-    // Datumszeile: Zeile 4 ab Spalte L
+    // Datumszeile
     const dates = [];
     for (let c = 11; c < 200; c++) {
       const cell = sheet[XLSX.utils.encode_cell({ r: 3, c })];
       if (!cell) break;
-
-      const parsed = XLSX.SSF.parse_date_code(cell.v);
-      if (!parsed) break;
-
-      dates.push({
-        col: c,
-        date: new Date(parsed.y, parsed.m - 1, parsed.d)
-      });
+      const d = XLSX.SSF.parse_date_code(cell.v);
+      if (!d) break;
+      dates.push({ col: c, date: new Date(d.y, d.m - 1, d.d) });
     }
 
     let imported = 0;
 
-    // Mitarbeiter ab Zeile 6, immer +2
     for (let r = 5; r < 5000; r += 2) {
-      const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 8 })]; // Spalte I
+      const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 8 })];
       if (!nameCell) break;
 
       const employee_name = String(nameCell.v || "").trim();
@@ -124,8 +85,20 @@ app.post("/api/import/staffplan", async (req, res) => {
       if (!po_number) continue;
 
       for (const d of dates) {
-        const hoursCell = sheet[XLSX.utils.encode_cell({ r, c: d.col })];
-        if (!hoursCell || isNaN(hoursCell.v)) continue;
+        const cell = sheet[XLSX.utils.encode_cell({ r, c: d.col })];
+        if (!cell) continue;
+
+        // 🔑 STUNDEN ROBUST ERKENNEN
+        let hours = null;
+
+        if (typeof cell.v === "number") {
+          hours = cell.v;
+        } else if (typeof cell.w === "string") {
+          const cleaned = cell.w.replace(",", ".").match(/[\d.]+/);
+          if (cleaned) hours = parseFloat(cleaned[0]);
+        }
+
+        if (!hours || isNaN(hours) || hours <= 0) continue;
 
         await pool.query(
           `INSERT INTO staff_plan
@@ -140,7 +113,7 @@ app.post("/api/import/staffplan", async (req, res) => {
             requester,
             po_number,
             d.date,
-            Number(hoursCell.v)
+            hours
           ]
         );
 
@@ -148,122 +121,54 @@ app.post("/api/import/staffplan", async (req, res) => {
       }
     }
 
-    res.json({
-      ok: true,
-      calendarWeek,
-      imported
-    });
+    res.json({ ok: true, calendarWeek, imported });
 
   } catch (err) {
     console.error("IMPORT ERROR:", err);
-    res.status(500).json({ ok: false, error: "Import fehlgeschlagen" });
+    res.status(500).json({ ok: false });
   }
 });
 
-// ============================================================
-// DEBUG – ZEIGT, WAS IN DER DB IST
-// ============================================================
+// ================= DEBUG =================
 app.get("/api/debug/staffplan", async (req, res) => {
-  const result = await pool.query(`
+  const r = await pool.query(`
     SELECT DISTINCT employee_name, calendar_week, po_number
     FROM staff_plan
-    ORDER BY employee_name, calendar_week, po_number
+    ORDER BY employee_name
   `);
-  res.json(result.rows);
+  res.json(r.rows);
 });
 
-// ============================================================
-// STEP B – STUNDENNACHWEIS PDF
-// ============================================================
+// ================= PDF =================
 app.get("/api/timesheet/:employee/:kw/:po", async (req, res) => {
-  try {
-    const { employee, kw, po } = req.params;
+  const r = await pool.query(
+    `SELECT * FROM staff_plan
+     WHERE employee_name=$1 AND calendar_week=$2 AND po_number=$3
+     ORDER BY work_date`,
+    req.params.employee
+      ? [req.params.employee, req.params.kw, req.params.po]
+      : []
+  );
 
-    const result = await pool.query(
-      `SELECT * FROM staff_plan
-       WHERE employee_name = $1
-         AND calendar_week = $2
-         AND po_number = $3
-       ORDER BY work_date`,
-      [employee, kw, po]
+  if (!r.rows.length) return res.status(404).send("Keine Daten");
+
+  const doc = new PDFDocument({ margin: 40 });
+  res.setHeader("Content-Type", "application/pdf");
+  doc.pipe(res);
+
+  let sum = 0;
+  r.rows.forEach(row => {
+    sum += Number(row.planned_hours);
+    doc.text(
+      `${new Date(row.work_date).toLocaleDateString("de-DE")}  ${row.planned_hours} Std`
     );
-
-    if (!result.rows.length) {
-      return res.status(404).send("Keine Daten gefunden");
-    }
-
-    const rows = result.rows;
-
-    const doc = new PDFDocument({ margin: 40 });
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename=Stundennachweis_${employee}_${kw}_${po}.pdf`
-    );
-    doc.pipe(res);
-
-    // Header
-    doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
-    doc.moveDown();
-
-    doc.fontSize(10);
-    doc.text(`Name: ${rows[0].employee_name}`);
-    doc.text(`Code / Level: ${rows[0].employee_code} / ${rows[0].employee_level}`);
-    doc.text(`Ansprechpartner: ${rows[0].requester}`);
-    doc.text(`PO: ${rows[0].po_number}`);
-    doc.text(`Kalenderwoche: ${rows[0].calendar_week}`);
-    doc.moveDown(1.5);
-
-    // Tabelle
-    doc.font("Helvetica-Bold");
-    doc.text("Datum", 40);
-    doc.text("Stunden", 150);
-    doc.font("Helvetica");
-    doc.moveDown();
-
-    let sum = 0;
-
-    rows.forEach(r => {
-      const h = Number(r.planned_hours);
-      sum += h;
-
-      doc.text(new Date(r.work_date).toLocaleDateString("de-DE"), 40);
-      doc.text(h.toFixed(2), 150);
-      doc.moveDown();
-    });
-
-    doc.moveDown();
-    doc.font("Helvetica-Bold");
-    doc.text(`Summe: ${sum.toFixed(2)} Std`);
-    doc.font("Helvetica");
-
-    doc.moveDown(2);
-    doc.text("Datum: ____________________________");
-    doc.moveDown();
-    doc.text("Unterschrift Kunde: ____________________________");
-    doc.moveDown();
-    doc.text(`Name in Druckbuchstaben: ${rows[0].employee_name.toUpperCase()}`);
-
-    doc.end();
-
-  } catch (err) {
-    console.error("PDF ERROR:", err);
-    res.status(500).send("PDF-Erstellung fehlgeschlagen");
-  }
-});
-
-// ============================================================
-// Admin Page
-// ============================================================
-app.get("/admin", (req, res) => {
-  res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"));
-});
-
-// ============================================================
-// Start Server
-// ============================================================
-initDb().then(() => {
-  app.listen(PORT, () => {
-    console.log("Server läuft auf Port", PORT);
   });
+
+  doc.moveDown();
+  doc.text(`Summe: ${sum.toFixed(2)} Std`);
+  doc.end();
+});
+
+initDb().then(() => {
+  app.listen(PORT, () => console.log("Server läuft auf Port", PORT));
 });
