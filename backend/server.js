@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (FINAL + MIGRATIONS)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (HYBRID FINAL)
 // ============================================================
 
 const express = require("express");
@@ -7,6 +7,7 @@ const path = require("path");
 const XLSX = require("xlsx");
 const PDFDocument = require("pdfkit");
 const archiver = require("archiver");
+const crypto = require("crypto");
 const { Pool } = require("pg");
 
 const app = express();
@@ -27,31 +28,23 @@ const pool = new Pool({
 
 // ================= INIT DB (MIGRATION SAFE) =================
 async function initDb() {
-  // ---- EMPLOYEES BASIS ----
+  // EMPLOYEES
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       employee_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
+      name TEXT NOT NULL UNIQUE,
+      email TEXT,
+      language TEXT DEFAULT 'de',
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
 
-  // 👉 MIGRATIONS FOR EMPLOYEES
-  await pool.query(`
-    ALTER TABLE employees
-    ADD COLUMN IF NOT EXISTS email TEXT;
-  `);
-
-  await pool.query(`
-    ALTER TABLE employees
-    ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'de';
-  `);
-
-  // ---- STAFF PLAN BASIS ----
+  // STAFF PLAN
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_plan (
       id SERIAL PRIMARY KEY,
       calendar_week TEXT NOT NULL,
+      customer TEXT,
       employee_name TEXT NOT NULL,
       requester TEXT,
       po_number TEXT NOT NULL,
@@ -61,13 +54,7 @@ async function initDb() {
     );
   `);
 
-  // 👉 MIGRATION: CUSTOMER
-  await pool.query(`
-    ALTER TABLE staff_plan
-    ADD COLUMN IF NOT EXISTS customer TEXT;
-  `);
-
-  // ---- EMAIL OUTBOX ----
+  // EMAIL OUTBOX
   await pool.query(`
     CREATE TABLE IF NOT EXISTS email_outbox (
       id SERIAL PRIMARY KEY,
@@ -80,6 +67,11 @@ async function initDb() {
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
+}
+
+// ================= HELPERS =================
+function autoEmployeeId(name) {
+  return "AUTO_" + crypto.createHash("md5").update(name).digest("hex").slice(0, 8);
 }
 
 // ================= ROUTES =================
@@ -99,9 +91,7 @@ app.get("/employee", (_, res) => {
   res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"));
 });
 
-// =====================================================
-// EMPLOYEES API
-// =====================================================
+// ================= EMPLOYEES API =================
 
 // LIST
 app.get("/api/employees", async (_, res) => {
@@ -111,7 +101,7 @@ app.get("/api/employees", async (_, res) => {
   res.json(r.rows);
 });
 
-// UPSERT
+// UPSERT (ADMIN)
 app.post("/api/employees/upsert", async (req, res) => {
   const { employee_id, name, email, language } = req.body;
 
@@ -123,40 +113,56 @@ app.post("/api/employees/upsert", async (req, res) => {
     `
     INSERT INTO employees (employee_id, name, email, language)
     VALUES ($1,$2,$3,$4)
-    ON CONFLICT (employee_id)
+    ON CONFLICT (name)
     DO UPDATE SET
-      name = EXCLUDED.name,
+      employee_id = EXCLUDED.employee_id,
       email = EXCLUDED.email,
       language = EXCLUDED.language
     `,
-    [
-      employee_id,
-      name,
-      email || null,
-      language || "de"
-    ]
+    [employee_id, name, email || null, language || "de"]
   );
 
   res.json({ ok: true });
 });
 
-// ---- STAFFPLAN CLEAR ----
-app.post("/api/staffplan/clear", async (_, res) => {
-  await pool.query("TRUNCATE staff_plan RESTART IDENTITY");
-  res.json({ ok: true });
-});
+// ================= STAFFPLAN IMPORT (HYBRID) =================
+app.post("/api/import/staffplan", async (req, res) => {
+  const buffer = Buffer.from(req.body.fileBase64, "base64");
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
 
-// ---- DEMO PDF / EMAIL (aktiviert später voll) ----
-app.get("/api/admin/pdfs", (_, res) => {
-  res.json({ ok: true, info: "PDF Export folgt" });
-});
+  const calendarWeek = sheet["L2"]?.v;
+  if (!calendarWeek) {
+    return res.status(400).json({ error: "Kalenderwoche fehlt (Zelle L2)" });
+  }
 
-app.get("/api/employee/pdfs/last", (_, res) => {
-  res.json({ ok: true, info: "Employee PDF folgt" });
-});
+  let imported = 0;
 
-app.post("/api/employee/email", (_, res) => {
-  res.json({ ok: true, message: "Email in Outbox gespeichert (Demo)" });
+  for (let r = 5; r < 3000; r += 2) {
+    const name = sheet[XLSX.utils.encode_cell({ r, c: 8 })]?.v;
+    if (!name) break;
+
+    // 🔹 HYBRID: Mitarbeiter automatisch anlegen, falls nicht vorhanden
+    const exists = await pool.query(
+      "SELECT 1 FROM employees WHERE name=$1",
+      [name]
+    );
+
+    if (!exists.rows.length) {
+      await pool.query(
+        `
+        INSERT INTO employees (employee_id, name)
+        VALUES ($1,$2)
+        `,
+        [autoEmployeeId(name), name]
+      );
+    }
+
+    // (Hier würden später die Stunden / Tage folgen)
+    imported++;
+  }
+
+  res.json({ ok: true, calendarWeek, imported });
 });
 
 // ================= START =================
