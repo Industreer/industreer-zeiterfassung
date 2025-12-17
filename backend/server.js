@@ -136,6 +136,28 @@ app.get("/api/allowed-projects", async (req, res) => {
     console.error(err);
     res.status(500).json({ ok: false, error: "Projektabfrage fehlgeschlagen" });
   }
+// --------------------------------------------------
+// Zeiterfassung: Event speichern
+// --------------------------------------------------
+app.post("/api/time-event", async (req, res) => {
+  const { employee_id, project_id, event_type } = req.body;
+
+  if (!employee_id || !project_id || !event_type) {
+    return res.status(400).json({ error: "Daten unvollständig" });
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO time_events (employee_id, project_id, event_type)
+       VALUES ($1, $2, $3)`,
+      [employee_id, project_id, event_type]
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Zeitbuchung fehlgeschlagen" });
+  }
 });
 // --------------------------------------------------
 // Terminal Login (Mitarbeiter-ID)
