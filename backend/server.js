@@ -29,15 +29,24 @@ async function initDb() {
       name TEXT NOT NULL,
       language TEXT NOT NULL DEFAULT 'de'
     );
+
     CREATE TABLE IF NOT EXISTS projects (
       project_id TEXT PRIMARY KEY,
       name TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS employee_project_day (
+      employee_id TEXT REFERENCES employees(employee_id),
+      project_id TEXT REFERENCES projects(project_id),
+      work_date DATE NOT NULL,
+      approved BOOLEAN NOT NULL DEFAULT true,
+      PRIMARY KEY (employee_id, project_id, work_date)
     );
   `);
 }
 
 // --------------------
-// Hilfsfunktion: CSV flexibel lesen
+// Hilfsfunktion CSV (; oder ,)
 // --------------------
 function parseFlexibleCsv(text) {
   const delimiter = text.includes(";") ? ";" : ",";
@@ -65,36 +74,29 @@ app.get("/api/health", async (req, res) => {
 });
 
 // --------------------
-// CSV IMPORT – Mitarbeiter
+// API: erlaubte Projekte pro Tag (für Terminal)
 // --------------------
-app.post("/api/import/employees", async (req, res) => {
-  if (!req.body.csv) {
-    return res.status(400).json({ error: "CSV fehlt" });
+app.get("/api/allowed-projects", async (req, res) => {
+  const { employee_id, date } = req.query;
+  if (!employee_id || !date) {
+    return res.status(400).json({ error: "employee_id und date erforderlich" });
   }
 
-  const rows = parseFlexibleCsv(req.body.csv);
-  let imported = 0;
+  const r = await pool.query(
+    `SELECT p.project_id, p.name, epd.approved
+     FROM employee_project_day epd
+     JOIN projects p ON p.project_id = epd.project_id
+     WHERE epd.employee_id = $1 AND epd.work_date = $2`,
+    [employee_id, date]
+  );
 
-  for (const r of rows) {
-    if (!r.employee_id || !r.name) continue;
-
-    await pool.query(
-      `INSERT INTO employees (employee_id, name, language)
-       VALUES ($1,$2,$3)
-       ON CONFLICT (employee_id)
-       DO UPDATE SET name=$2, language=$3`,
-      [r.employee_id, r.name, r.language || "de"]
-    );
-    imported++;
-  }
-
-  res.json({ ok: true, imported });
+  res.json({ projects: r.rows });
 });
 
 // --------------------
-// CSV IMPORT – Projekte
+// CSV IMPORT – Tageszuordnung
 // --------------------
-app.post("/api/import/projects", async (req, res) => {
+app.post("/api/import/day-projects", async (req, res) => {
   if (!req.body.csv) {
     return res.status(400).json({ error: "CSV fehlt" });
   }
@@ -103,15 +105,22 @@ app.post("/api/import/projects", async (req, res) => {
   let imported = 0;
 
   for (const r of rows) {
-    if (!r.project_id || !r.name) continue;
+    if (!r.employee_id || !r.project_id || !r.work_date) continue;
 
     await pool.query(
-      `INSERT INTO projects (project_id, name)
-       VALUES ($1,$2)
-       ON CONFLICT (project_id)
-       DO UPDATE SET name=$2`,
-      [r.project_id, r.name]
+      `INSERT INTO employee_project_day
+       (employee_id, project_id, work_date, approved)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (employee_id, project_id, work_date)
+       DO UPDATE SET approved=$4`,
+      [
+        r.employee_id,
+        r.project_id,
+        r.work_date,
+        r.approved !== "false"
+      ]
     );
+
     imported++;
   }
 
