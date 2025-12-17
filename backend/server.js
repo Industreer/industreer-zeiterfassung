@@ -101,6 +101,26 @@ app.get("/api/health", async (req, res) => {
     res.status(500).json({ ok: false, error: "DB nicht erreichbar" });
   }
 });
+// --------------------------------------------------
+// Terminal Login (Mitarbeiter-ID)
+// --------------------------------------------------
+app.get("/api/terminal/login", async (req, res) => {
+  const { employee_id } = req.query;
+  if (!employee_id) {
+    return res.status(400).json({ error: "employee_id fehlt" });
+  }
+
+  const r = await pool.query(
+    "SELECT employee_id, name, language FROM employees WHERE employee_id = $1",
+    [employee_id]
+  );
+
+  if (r.rows.length === 0) {
+    return res.status(404).json({ error: "Mitarbeiter nicht gefunden" });
+  }
+
+  res.json({ ok: true, employee: r.rows[0] });
+});
 
 // ==================================================
 // CSV IMPORTS
