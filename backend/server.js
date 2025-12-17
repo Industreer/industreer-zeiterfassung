@@ -7,12 +7,15 @@ const { parse } = require("csv-parse/sync");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// --------------------------------------------------
+// Middleware
+// --------------------------------------------------
 app.use(express.json({ limit: "5mb" }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
-// --------------------
-// PostgreSQL
-// --------------------
+// --------------------------------------------------
+// PostgreSQL Verbindung
+// --------------------------------------------------
 const pool = new Pool({
   host: process.env.PGHOST,
   user: process.env.PGUSER,
@@ -22,6 +25,9 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+// --------------------------------------------------
+// Datenbank initialisieren
+// --------------------------------------------------
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
@@ -45,9 +51,11 @@ async function initDb() {
   `);
 }
 
-// --------------------
-// CSV Helper (; oder ,)
-// --------------------
+// --------------------------------------------------
+// Hilfsfunktionen
+// --------------------------------------------------
+
+// CSV mit ; oder ,
 function parseFlexibleCsv(text) {
   const delimiter = text.includes(";") ? ";" : ",";
   return parse(text, {
@@ -58,66 +66,113 @@ function parseFlexibleCsv(text) {
   });
 }
 
-// --------------------
+// Datum normalisieren (YYYY-MM-DD oder DD.MM.YYYY)
+function normalizeDate(dateStr) {
+  if (!dateStr) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return dateStr;
+  }
+
+  if (/^\d{2}\.\d{2}\.\d{4}$/.test(dateStr)) {
+    const [d, m, y] = dateStr.split(".");
+    return `${y}-${m}-${d}`;
+  }
+
+  return null;
+}
+
+// --------------------------------------------------
+// Seiten
+// --------------------------------------------------
 app.get("/admin", (req, res) => {
   res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"));
 });
 
-// --------------------
+// --------------------------------------------------
+// Healthcheck
+// --------------------------------------------------
 app.get("/api/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
     res.json({ ok: true, message: "DB verbunden" });
-  } catch {
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ ok: false, error: "DB nicht erreichbar" });
   }
 });
 
-// ======================================================
-// CSV IMPORTS (JETZT WIEDER VOLLSTÄNDIG)
-// ======================================================
+// ==================================================
+// CSV IMPORTS
+// ==================================================
 
+// --------------------
 // Mitarbeiter
+// --------------------
 app.post("/api/import/employees", async (req, res) => {
-  const rows = parseFlexibleCsv(req.body.csv || "");
-  let imported = 0;
+  try {
+    const rows = parseFlexibleCsv(req.body.csv || "");
+    let imported = 0;
+    let skipped = 0;
 
-  for (const r of rows) {
-    if (!r.employee_id || !r.name) continue;
+    for (const r of rows) {
+      if (!r.employee_id || !r.name) {
+        skipped++;
+        continue;
+      }
 
-    await pool.query(
-      `INSERT INTO employees (employee_id, name, language)
-       VALUES ($1,$2,$3)
-       ON CONFLICT (employee_id)
-       DO UPDATE SET name=$2, language=$3`,
-      [r.employee_id, r.name, r.language || "de"]
-    );
-    imported++;
+      await pool.query(
+        `INSERT INTO employees (employee_id, name, language)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (employee_id)
+         DO UPDATE SET name=$2, language=$3`,
+        [r.employee_id.trim(), r.name.trim(), r.language || "de"]
+      );
+      imported++;
+    }
+
+    res.json({ ok: true, imported, skipped });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Mitarbeiter-Import fehlgeschlagen" });
   }
-  res.json({ ok: true, imported });
 });
 
+// --------------------
 // Projekte
+// --------------------
 app.post("/api/import/projects", async (req, res) => {
-  const rows = parseFlexibleCsv(req.body.csv || "");
-  let imported = 0;
+  try {
+    const rows = parseFlexibleCsv(req.body.csv || "");
+    let imported = 0;
+    let skipped = 0;
 
-  for (const r of rows) {
-    if (!r.project_id || !r.name) continue;
+    for (const r of rows) {
+      if (!r.project_id || !r.name) {
+        skipped++;
+        continue;
+      }
 
-    await pool.query(
-      `INSERT INTO projects (project_id, name)
-       VALUES ($1,$2)
-       ON CONFLICT (project_id)
-       DO UPDATE SET name=$2`,
-      [r.project_id, r.name]
-    );
-    imported++;
+      await pool.query(
+        `INSERT INTO projects (project_id, name)
+         VALUES ($1,$2)
+         ON CONFLICT (project_id)
+         DO UPDATE SET name=$2`,
+        [r.project_id.trim(), r.name.trim()]
+      );
+      imported++;
+    }
+
+    res.json({ ok: true, imported, skipped });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Projekt-Import fehlgeschlagen" });
   }
-  res.json({ ok: true, imported });
 });
 
-// Tageszuordnung (robust, kein Server-Crash)
+// --------------------
+// Tageszuordnung (mehrere Tage, robust)
+// --------------------
 app.post("/api/import/day-projects", async (req, res) => {
   try {
     const rows = parseFlexibleCsv(req.body.csv || "");
@@ -125,7 +180,8 @@ app.post("/api/import/day-projects", async (req, res) => {
     let skipped = 0;
 
     for (const r of rows) {
-      if (!r.employee_id || !r.project_id || !r.work_date) {
+      const workDate = normalizeDate(r.work_date);
+      if (!r.employee_id || !r.project_id || !workDate) {
         skipped++;
         continue;
       }
@@ -140,25 +196,27 @@ app.post("/api/import/day-projects", async (req, res) => {
           [
             r.employee_id.trim(),
             r.project_id.trim(),
-            r.work_date.trim(),
+            workDate,
             r.approved !== "false"
           ]
         );
         imported++;
       } catch (dbErr) {
-        console.error("DB Fehler bei Zeile:", r, dbErr.message);
+        console.error("DB Fehler:", r, dbErr.message);
         skipped++;
       }
     }
 
     res.json({ ok: true, imported, skipped });
   } catch (err) {
-    console.error("CSV Import Fehler:", err);
-    res.status(500).json({ ok: false, error: "CSV Import fehlgeschlagen" });
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Tageszuordnung fehlgeschlagen" });
   }
 });
 
-// --------------------
+// ==================================================
+// Server starten
+// ==================================================
 initDb().then(() => {
   app.listen(PORT, () => {
     console.log("Server läuft auf Port " + PORT);
