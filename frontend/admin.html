@@ -1,110 +1,54 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8" />
-  <title>INDUSTREER – Admin</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body { font-family: Arial, sans-serif; background:#f4f6f8; margin:0; padding:20px; }
-    h1 { margin: 0 0 18px; }
-    .box { background:#fff; padding:16px; margin-bottom:14px; border-radius:10px; box-shadow:0 2px 6px rgba(0,0,0,0.08); }
-    button { padding:10px 14px; cursor:pointer; margin-top:10px; }
-    .result { margin-top:10px; font-weight:bold; white-space:pre-line; }
-    .small { color:#666; font-size:0.95em; }
-    input[type="file"] { margin-top:8px; }
-  </style>
+<meta charset="UTF-8">
+<title>Admin – Einsatzplan</title>
 </head>
 <body>
-  <h1>INDUSTREER – Adminbereich</h1>
 
-  <div class="box">
-    <h2>Healthcheck</h2>
-    <button onclick="health()">Health prüfen</button>
-    <div class="result" id="healthResult"></div>
-  </div>
+<h1>Einsatzplan Import</h1>
 
-  <div class="box">
-    <h2>Einsatzplan (Kundenvorgabe) importieren</h2>
-    <div class="small">
-      Erwartet Excel (.xlsx) mit Tabellenblatt <b>Staffplan</b><br>
-      Kalenderwoche: Zelle L2 (z.B. CW49), Datum: ab L4, Mitarbeiter: Spalte I ab Zeile 6 (jede zweite Zeile)
-    </div>
-    <input type="file" id="staffplanFile" accept=".xlsx" />
-    <br>
-    <button onclick="importStaffplan()">Einsatzplan importieren</button>
-    <div class="result" id="staffplanResult"></div>
-  </div>
+<input type="file" id="file" accept=".xlsx">
+<button onclick="importPlan()">Importieren</button>
 
-  <script>
-    async function health() {
-      const out = document.getElementById("healthResult");
-      out.innerText = "⏳ ...";
-      try {
-        const r = await fetch("/api/health");
-        const d = await r.json();
-        out.innerText = d.ok ? "✅ OK: " + (d.message || "") : "❌ Fehler";
-      } catch (e) {
-        out.innerText = "❌ Fehler: " + e.message;
-      }
-    }
+<pre id="out"></pre>
 
-    async function importStaffplan() {
-      const out = document.getElementById("staffplanResult");
-      out.innerText = "";
+<script>
+async function importPlan() {
+  const out = document.getElementById("out");
+  out.textContent = "Import läuft…";
 
-      const input = document.getElementById("staffplanFile");
-      if (!input.files.length) {
-        alert("Bitte die Kunden-Excel auswählen (.xlsx)");
-        return;
-      }
+  const file = document.getElementById("file").files[0];
+  if (!file) {
+    alert("Datei auswählen");
+    return;
+  }
 
-      try {
-        out.innerText = "⏳ Upload & Import läuft ...";
+  const base64 = await toBase64(file);
 
-        const file = input.files[0];
-        const base64 = await fileToBase64(file);
+  const res = await fetch("/api/import/staffplan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileBase64: base64 })
+  });
 
-        const res = await fetch("/api/import/staffplan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileBase64: base64 })
-        });
+  const text = await res.text();
+  try {
+    const json = JSON.parse(text);
+    out.textContent = JSON.stringify(json, null, 2);
+  } catch {
+    out.textContent = text;
+  }
+}
 
-        const text = await res.text();
-        let data;
-        try { data = JSON.parse(text); }
-        catch { throw new Error("Server-Antwort ist kein JSON:\n" + text.slice(0,200)); }
+function toBase64(file) {
+  return new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(",")[1]);
+    r.readAsDataURL(file);
+  });
+}
+</script>
 
-        if (!res.ok || !data.ok) {
-          throw new Error(data.error || "Import fehlgeschlagen");
-        }
-
-        out.innerText =
-          `✅ KW: ${data.calendarWeek}\n` +
-          `✅ Datums-Spalten: ${data.dateColumns}\n` +
-          `✅ Mitarbeiter erkannt: ${data.employeesDetected}\n` +
-          `✅ Importiert (Tage): ${data.imported}\n` +
-          `⚠ Übersprungen: ${data.skipped}`;
-      } catch (e) {
-        console.error(e);
-        out.innerText = "❌ Fehler beim Import";
-        alert("Import-Fehler: " + e.message);
-      }
-    }
-
-    function fileToBase64(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const res = reader.result;
-          // res ist "data:application/vnd...;base64,AAAA"
-          const base64 = String(res).split(",")[1];
-          resolve(base64);
-        };
-        reader.onerror = () => reject(new Error("Datei konnte nicht gelesen werden"));
-        reader.readAsDataURL(file);
-      });
-    }
-  </script>
 </body>
 </html>
