@@ -1,52 +1,120 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-<meta charset="UTF-8">
-<title>Admin – Einsatzplan</title>
+  <meta charset="UTF-8" />
+  <title>Admin – INDUSTREER Zeiterfassung</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      padding: 40px;
+    }
+    h1 {
+      margin-bottom: 20px;
+    }
+    .box {
+      background: #fff;
+      padding: 20px;
+      border-radius: 6px;
+      max-width: 600px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    button {
+      padding: 10px 16px;
+      margin-right: 10px;
+      margin-top: 10px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .danger {
+      background: #c62828;
+      color: white;
+      border: none;
+    }
+    .primary {
+      background: #1565c0;
+      color: white;
+      border: none;
+    }
+    #status {
+      margin-top: 20px;
+      white-space: pre-wrap;
+      background: #eee;
+      padding: 10px;
+      border-radius: 4px;
+    }
+  </style>
 </head>
 <body>
 
-<h1>Einsatzplan Import</h1>
+  <h1>Admin – Staffplan Import</h1>
 
-<input type="file" id="file" accept=".xlsx">
-<button onclick="importPlan()">Importieren</button>
+  <div class="box">
+    <p><strong>1) Staffplan löschen (einmalig bei Fehlern)</strong></p>
+    <button class="danger" onclick="clearStaffplan()">Staffplan löschen</button>
 
-<pre id="out"></pre>
+    <hr />
+
+    <p><strong>2) Staffplan importieren</strong></p>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" />
+    <br />
+    <button class="primary" onclick="importStaffplan()">Importieren</button>
+
+    <div id="status"></div>
+  </div>
 
 <script>
-async function importPlan() {
-  const out = document.getElementById("out");
-  out.textContent = "Import läuft…";
-
-  const file = document.getElementById("file").files[0];
-  if (!file) {
-    alert("Datei auswählen");
+async function clearStaffplan() {
+  if (!confirm("ACHTUNG: Alle Staffplan-Daten werden gelöscht. Fortfahren?")) {
     return;
   }
 
-  const base64 = await toBase64(file);
+  document.getElementById("status").textContent = "Lösche Daten...";
 
-  const res = await fetch("/api/import/staffplan", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fileBase64: base64 })
-  });
-
-  const text = await res.text();
   try {
-    const json = JSON.parse(text);
-    out.textContent = JSON.stringify(json, null, 2);
-  } catch {
-    out.textContent = text;
+    const res = await fetch("/api/staffplan/clear", {
+      method: "POST"
+    });
+    const data = await res.json();
+    document.getElementById("status").textContent =
+      "Erfolg:\n" + JSON.stringify(data, null, 2);
+  } catch (err) {
+    document.getElementById("status").textContent =
+      "Fehler beim Löschen:\n" + err;
   }
 }
 
-function toBase64(file) {
-  return new Promise((resolve) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result.split(",")[1]);
-    r.readAsDataURL(file);
-  });
+async function importStaffplan() {
+  const fileInput = document.getElementById("fileInput");
+  if (!fileInput.files.length) {
+    alert("Bitte zuerst eine Excel-Datei auswählen");
+    return;
+  }
+
+  const file = fileInput.files[0];
+  const reader = new FileReader();
+
+  reader.onload = async () => {
+    const base64 = reader.result.split(",")[1];
+    document.getElementById("status").textContent = "Import läuft...";
+
+    try {
+      const res = await fetch("/api/import/staffplan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileBase64: base64 })
+      });
+
+      const data = await res.json();
+      document.getElementById("status").textContent =
+        "Import-Ergebnis:\n" + JSON.stringify(data, null, 2);
+    } catch (err) {
+      document.getElementById("status").textContent =
+        "Import-Fehler:\n" + err;
+    }
+  };
+
+  reader.readAsDataURL(file);
 }
 </script>
 
