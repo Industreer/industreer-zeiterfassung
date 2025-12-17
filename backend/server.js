@@ -49,6 +49,17 @@ async function initDb() {
       PRIMARY KEY (employee_id, project_id, work_date)
     );
   `);
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS time_events (
+    id SERIAL PRIMARY KEY,
+    employee_id TEXT REFERENCES employees(employee_id),
+    project_id TEXT REFERENCES projects(project_id),
+    event_type TEXT NOT NULL,
+    event_time TIMESTAMP NOT NULL DEFAULT NOW(),
+    approved BOOLEAN NOT NULL DEFAULT true
+  );
+`);
+
 }
 
 // --------------------------------------------------
