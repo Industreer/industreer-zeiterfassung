@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – BACKEND (FINAL STUNDEN-FIX)
+// INDUSTREER ZEITERFASSUNG – BACKEND (FINAL PDF FIX)
 // ============================================================
 
 const express = require("express");
@@ -51,15 +51,11 @@ app.post("/api/import/staffplan", async (req, res) => {
   try {
     const buffer = Buffer.from(req.body.fileBase64, "base64");
     const workbook = XLSX.read(buffer, { type: "buffer" });
-
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    if (!sheet) return res.status(400).json({ ok: false });
 
     const calendarWeek = sheet["L2"]?.v;
-    if (!calendarWeek) return res.status(400).json({ ok: false });
-
-    // Datumszeile
     const dates = [];
+
     for (let c = 11; c < 200; c++) {
       const cell = sheet[XLSX.utils.encode_cell({ r: 3, c })];
       if (!cell) break;
@@ -82,20 +78,15 @@ app.post("/api/import/staffplan", async (req, res) => {
       const requester = sheet[XLSX.utils.encode_cell({ r, c: 6 })]?.v || "";
       const employee_level = sheet[XLSX.utils.encode_cell({ r, c: 7 })]?.v || "";
 
-      if (!po_number) continue;
-
       for (const d of dates) {
         const cell = sheet[XLSX.utils.encode_cell({ r, c: d.col })];
         if (!cell) continue;
 
-        // 🔑 STUNDEN ROBUST ERKENNEN
         let hours = null;
-
-        if (typeof cell.v === "number") {
-          hours = cell.v;
-        } else if (typeof cell.w === "string") {
-          const cleaned = cell.w.replace(",", ".").match(/[\d.]+/);
-          if (cleaned) hours = parseFloat(cleaned[0]);
+        if (typeof cell.v === "number") hours = cell.v;
+        else if (typeof cell.w === "string") {
+          const m = cell.w.replace(",", ".").match(/[\d.]+/);
+          if (m) hours = parseFloat(m[0]);
         }
 
         if (!hours || isNaN(hours) || hours <= 0) continue;
@@ -105,16 +96,8 @@ app.post("/api/import/staffplan", async (req, res) => {
            (calendar_week, employee_code, employee_name, employee_level,
             requester, po_number, work_date, planned_hours)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [
-            calendarWeek,
-            employee_code,
-            employee_name,
-            employee_level,
-            requester,
-            po_number,
-            d.date,
-            hours
-          ]
+          [calendarWeek, employee_code, employee_name, employee_level,
+           requester, po_number, d.date, hours]
         );
 
         imported++;
@@ -123,8 +106,8 @@ app.post("/api/import/staffplan", async (req, res) => {
 
     res.json({ ok: true, calendarWeek, imported });
 
-  } catch (err) {
-    console.error("IMPORT ERROR:", err);
+  } catch (e) {
+    console.error(e);
     res.status(500).json({ ok: false });
   }
 });
@@ -132,22 +115,26 @@ app.post("/api/import/staffplan", async (req, res) => {
 // ================= DEBUG =================
 app.get("/api/debug/staffplan", async (req, res) => {
   const r = await pool.query(`
-    SELECT DISTINCT employee_name, calendar_week, po_number
+    SELECT employee_name, calendar_week, po_number,
+           work_date, SUM(planned_hours) AS hours
     FROM staff_plan
-    ORDER BY employee_name
+    GROUP BY employee_name, calendar_week, po_number, work_date
+    ORDER BY employee_name, work_date
   `);
   res.json(r.rows);
 });
 
-// ================= PDF =================
+// ================= PDF (FIXED) =================
 app.get("/api/timesheet/:employee/:kw/:po", async (req, res) => {
+  const { employee, kw, po } = req.params;
+
   const r = await pool.query(
-    `SELECT * FROM staff_plan
+    `SELECT work_date, SUM(planned_hours) AS hours
+     FROM staff_plan
      WHERE employee_name=$1 AND calendar_week=$2 AND po_number=$3
+     GROUP BY work_date
      ORDER BY work_date`,
-    req.params.employee
-      ? [req.params.employee, req.params.kw, req.params.po]
-      : []
+    [employee, kw, po]
   );
 
   if (!r.rows.length) return res.status(404).send("Keine Daten");
@@ -156,12 +143,15 @@ app.get("/api/timesheet/:employee/:kw/:po", async (req, res) => {
   res.setHeader("Content-Type", "application/pdf");
   doc.pipe(res);
 
+  doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
+  doc.moveDown();
+
   let sum = 0;
+
   r.rows.forEach(row => {
-    sum += Number(row.planned_hours);
-    doc.text(
-      `${new Date(row.work_date).toLocaleDateString("de-DE")}  ${row.planned_hours} Std`
-    );
+    const h = Number(row.hours);
+    sum += h;
+    doc.text(`${new Date(row.work_date).toLocaleDateString("de-DE")}  ${h.toFixed(2)} Std`);
   });
 
   doc.moveDown();
