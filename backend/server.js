@@ -102,6 +102,31 @@ app.get("/api/health", async (req, res) => {
   }
 });
 // --------------------------------------------------
+// Erlaubte Projekte pro Tag (für Terminal)
+// --------------------------------------------------
+app.get("/api/allowed-projects", async (req, res) => {
+  const { employee_id, date } = req.query;
+
+  if (!employee_id || !date) {
+    return res.status(400).json({ error: "employee_id und date erforderlich" });
+  }
+
+  try {
+    const r = await pool.query(
+      `SELECT p.project_id, p.name, epd.approved
+       FROM employee_project_day epd
+       JOIN projects p ON p.project_id = epd.project_id
+       WHERE epd.employee_id = $1 AND epd.work_date = $2`,
+      [employee_id, date]
+    );
+
+    res.json({ ok: true, projects: r.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Projektabfrage fehlgeschlagen" });
+  }
+});
+// --------------------------------------------------
 // Terminal Login (Mitarbeiter-ID)
 // --------------------------------------------------
 app.get("/api/terminal/login", async (req, res) => {
