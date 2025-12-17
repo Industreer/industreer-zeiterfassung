@@ -1,6 +1,7 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – BACKEND (FINAL + DEBUG)
-// - Staffplan Excel Import
+// INDUSTREER ZEITERFASSUNG – BACKEND (FINAL)
+// - Healthcheck
+// - Staffplan Excel Import (robust, erstes Sheet)
 // - Debug Route
 // - PDF Stundennachweis
 // ============================================================
@@ -59,13 +60,13 @@ app.get("/api/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
     res.status(500).json({ ok: false });
   }
 });
 
 // ============================================================
-// STEP A – STAFFPLAN IMPORT
+// STEP A – STAFFPLAN IMPORT (ROBUST)
 // ============================================================
 app.post("/api/import/staffplan", async (req, res) => {
   try {
@@ -76,28 +77,32 @@ app.post("/api/import/staffplan", async (req, res) => {
     const buffer = Buffer.from(req.body.fileBase64, "base64");
     const workbook = XLSX.read(buffer, { type: "buffer" });
 
-    const sheet = workbook.Sheets["Staffplan"];
+    // ✅ immer erstes Tabellenblatt nehmen
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+
     if (!sheet) {
-      return res.status(400).json({ ok: false, error: "Tabellenblatt 'Staffplan' fehlt" });
+      return res.status(400).json({ ok: false, error: "Kein Tabellenblatt gefunden" });
     }
 
+    // Kalenderwoche aus L2
     const calendarWeek = sheet["L2"]?.v;
     if (!calendarWeek) {
       return res.status(400).json({ ok: false, error: "Kalenderwoche (L2) fehlt" });
     }
 
-    // Datumszeile: L4 →
+    // Datumszeile: Zeile 4 ab Spalte L
     const dates = [];
     for (let c = 11; c < 200; c++) {
       const cell = sheet[XLSX.utils.encode_cell({ r: 3, c })];
       if (!cell) break;
 
-      const d = XLSX.SSF.parse_date_code(cell.v);
-      if (!d) break;
+      const parsed = XLSX.SSF.parse_date_code(cell.v);
+      if (!parsed) break;
 
       dates.push({
         col: c,
-        date: new Date(d.y, d.m - 1, d.d)
+        date: new Date(parsed.y, parsed.m - 1, parsed.d)
       });
     }
 
@@ -105,7 +110,7 @@ app.post("/api/import/staffplan", async (req, res) => {
 
     // Mitarbeiter ab Zeile 6, immer +2
     for (let r = 5; r < 5000; r += 2) {
-      const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 8 })];
+      const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 8 })]; // Spalte I
       if (!nameCell) break;
 
       const employee_name = String(nameCell.v || "").trim();
@@ -143,7 +148,11 @@ app.post("/api/import/staffplan", async (req, res) => {
       }
     }
 
-    res.json({ ok: true, calendarWeek, imported });
+    res.json({
+      ok: true,
+      calendarWeek,
+      imported
+    });
 
   } catch (err) {
     console.error("IMPORT ERROR:", err);
@@ -152,7 +161,7 @@ app.post("/api/import/staffplan", async (req, res) => {
 });
 
 // ============================================================
-// DEBUG – ZEIGT WAS IN DER DB IST
+// DEBUG – ZEIGT, WAS IN DER DB IST
 // ============================================================
 app.get("/api/debug/staffplan", async (req, res) => {
   const result = await pool.query(`
@@ -193,6 +202,7 @@ app.get("/api/timesheet/:employee/:kw/:po", async (req, res) => {
     );
     doc.pipe(res);
 
+    // Header
     doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
     doc.moveDown();
 
@@ -204,25 +214,21 @@ app.get("/api/timesheet/:employee/:kw/:po", async (req, res) => {
     doc.text(`Kalenderwoche: ${rows[0].calendar_week}`);
     doc.moveDown(1.5);
 
+    // Tabelle
     doc.font("Helvetica-Bold");
     doc.text("Datum", 40);
-    doc.text("Soll", 150);
-    doc.text("Ist", 220);
-    doc.text("Tätigkeit", 290);
+    doc.text("Stunden", 150);
     doc.font("Helvetica");
     doc.moveDown();
 
     let sum = 0;
 
     rows.forEach(r => {
-      const date = new Date(r.work_date).toLocaleDateString("de-DE");
       const h = Number(r.planned_hours);
       sum += h;
 
-      doc.text(date, 40);
+      doc.text(new Date(r.work_date).toLocaleDateString("de-DE"), 40);
       doc.text(h.toFixed(2), 150);
-      doc.text(h.toFixed(2), 220);
-      doc.text("Montage", 290);
       doc.moveDown();
     });
 
