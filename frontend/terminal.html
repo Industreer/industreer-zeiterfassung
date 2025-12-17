@@ -1,132 +1,86 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8">
-  <title>Zeiterfassung – Terminal</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #111;
-      color: #fff;
-      text-align: center;
-      padding: 30px;
-    }
-    input, select, button {
-      font-size: 1.2em;
-      padding: 10px;
-      margin: 10px 0;
-      width: 100%;
-      max-width: 300px;
-    }
-    button {
-      cursor: pointer;
-    }
-    .card {
-      background: #222;
-      padding: 20px;
-      border-radius: 8px;
-      display: inline-block;
-      width: 100%;
-      max-width: 350px;
-    }
-    .success {
-      color: #0f0;
-      font-size: 1.3em;
-    }
-    .error {
-      color: #f55;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>Zeiterfassung Terminal</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { background:#111; color:#fff; font-family:Arial; text-align:center; }
+.card { background:#222; padding:20px; border-radius:8px; max-width:350px; margin:auto; }
+input,select,button { width:100%; padding:12px; margin:8px 0; font-size:1.1em; }
+button { cursor:pointer; }
+.success { color:#0f0; font-size:1.3em; }
+</style>
 </head>
 <body>
 
-<div class="card" id="loginBox">
+<div class="card" id="login">
   <h2>Mitarbeiter Anmeldung</h2>
-  <input id="employeeId" placeholder="Mitarbeiter-ID">
+  <input id="empId" placeholder="Mitarbeiter-ID">
   <button onclick="login()">Anmelden</button>
-  <div id="loginError" class="error"></div>
 </div>
 
-<div class="card" id="projectBox" style="display:none">
+<div class="card" id="project" style="display:none">
   <h2 id="welcome"></h2>
   <select id="projectSelect"></select>
-  <button onclick="confirmProject()">Projekt bestätigen</button>
+  <button onclick="showActions()">Projekt bestätigen</button>
 </div>
 
-<div class="card" id="successBox" style="display:none">
-  <div class="success" id="successText"></div>
-</div>
+<div class="card" id="actions" style="display:none"></div>
 
 <script>
 let employee = null;
+let projectId = null;
 
 async function login() {
-  const id = document.getElementById("employeeId").value.trim();
-  if (!id) return;
-
-  const err = document.getElementById("loginError");
-  err.innerText = "";
-
-  const res = await fetch(`/api/terminal/login?employee_id=${id}`);
-  const data = await res.json();
-
-  if (!res.ok) {
-    err.innerText = "Mitarbeiter nicht gefunden";
-    return;
-  }
-
-  employee = data.employee;
+  const id = empId.value.trim();
+  const r = await fetch(`/api/terminal/login?employee_id=${id}`);
+  const d = await r.json();
+  if (!d.ok) return alert("Mitarbeiter nicht gefunden");
+  employee = d.employee;
   loadProjects();
 }
 
 async function loadProjects() {
   const today = new Date().toISOString().slice(0,10);
-  const res = await fetch(
-    `/api/allowed-projects?employee_id=${employee.employee_id}&date=${today}`
-  );
-  const data = await res.json();
-
-  const select = document.getElementById("projectSelect");
-  select.innerHTML = "";
-
-  if (data.projects.length === 0) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.text = "Kein Projekt zugewiesen";
-    select.appendChild(opt);
-  } else {
-    for (const p of data.projects) {
-      const opt = document.createElement("option");
-      opt.value = p.project_id;
-      opt.text = `${p.project_id} – ${p.name}`;
-      select.appendChild(opt);
-    }
-  }
-
-  document.getElementById("welcome").innerText =
-    `Hallo ${employee.name}`;
-  document.getElementById("loginBox").style.display = "none";
-  document.getElementById("projectBox").style.display = "block";
+  const r = await fetch(`/api/allowed-projects?employee_id=${employee.employee_id}&date=${today}`);
+  const d = await r.json();
+  projectSelect.innerHTML="";
+  d.projects.forEach(p=>{
+    const o=document.createElement("option");
+    o.value=p.project_id;
+    o.text=`${p.project_id} – ${p.name}`;
+    projectSelect.appendChild(o);
+  });
+  welcome.innerText = `Hallo ${employee.name}`;
+  login.style.display="none";
+  project.style.display="block";
 }
 
-function confirmProject() {
-  const sel = document.getElementById("projectSelect");
-  const text = sel.options[sel.selectedIndex].text;
-
-  document.getElementById("projectBox").style.display = "none";
-  document.getElementById("successBox").style.display = "block";
-  document.getElementById("successText").innerText =
-    `${employee.name}\n${text}`;
-
-  setTimeout(resetTerminal, 5000);
+function showActions() {
+  projectId = projectSelect.value;
+  project.style.display="none";
+  actions.style.display="block";
+  actions.innerHTML = `
+    <div class="success">${employee.name}<br>${projectId}</div>
+    <button onclick="send('IN')">Arbeitsbeginn</button>
+    <button onclick="send('PAUSE')">Pause</button>
+    <button onclick="send('OUT')">Arbeitsende</button>
+  `;
 }
 
-function resetTerminal() {
-  employee = null;
-  document.getElementById("employeeId").value = "";
-  document.getElementById("successBox").style.display = "none";
-  document.getElementById("loginBox").style.display = "block";
+async function send(type) {
+  await fetch("/api/time-event", {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({
+      employee_id: employee.employee_id,
+      project_id: projectId,
+      event_type: type
+    })
+  });
+  actions.innerHTML = `<div class="success">Buchung gespeichert</div>`;
+  setTimeout(()=>location.reload(),3000);
 }
 </script>
 
