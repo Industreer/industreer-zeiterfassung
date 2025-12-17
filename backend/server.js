@@ -1,7 +1,8 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – BACKEND (FINAL)
-// Schritt A: Staffplan Excel Import
-// Schritt B: PDF Stundennachweis
+// INDUSTREER ZEITERFASSUNG – BACKEND (FINAL + DEBUG)
+// - Staffplan Excel Import
+// - Debug Route
+// - PDF Stundennachweis
 // ============================================================
 
 const express = require("express");
@@ -64,7 +65,7 @@ app.get("/api/health", async (req, res) => {
 });
 
 // ============================================================
-// STEP A – STAFFPLAN IMPORT (EXCEL MATRIX)
+// STEP A – STAFFPLAN IMPORT
 // ============================================================
 app.post("/api/import/staffplan", async (req, res) => {
   try {
@@ -80,13 +81,12 @@ app.post("/api/import/staffplan", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Tabellenblatt 'Staffplan' fehlt" });
     }
 
-    // Kalenderwoche aus L2
     const calendarWeek = sheet["L2"]?.v;
     if (!calendarWeek) {
       return res.status(400).json({ ok: false, error: "Kalenderwoche (L2) fehlt" });
     }
 
-    // Datumszeile: Zeile 4, ab Spalte L
+    // Datumszeile: L4 →
     const dates = [];
     for (let c = 11; c < 200; c++) {
       const cell = sheet[XLSX.utils.encode_cell({ r: 3, c })];
@@ -102,24 +102,21 @@ app.post("/api/import/staffplan", async (req, res) => {
     }
 
     let imported = 0;
-    let employees = 0;
 
     // Mitarbeiter ab Zeile 6, immer +2
     for (let r = 5; r < 5000; r += 2) {
-      const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 8 })]; // Spalte I
+      const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 8 })];
       if (!nameCell) break;
 
-      const employeeName = String(nameCell.v || "").trim();
-      if (!employeeName) continue;
+      const employee_name = String(nameCell.v || "").trim();
+      if (!employee_name) continue;
 
-      employees++;
-
-      const employeeCode = sheet[XLSX.utils.encode_cell({ r, c: 3 })]?.v || "";
-      const poNumber = sheet[XLSX.utils.encode_cell({ r, c: 4 })]?.v || "";
+      const employee_code = sheet[XLSX.utils.encode_cell({ r, c: 3 })]?.v || "";
+      const po_number = sheet[XLSX.utils.encode_cell({ r, c: 4 })]?.v || "";
       const requester = sheet[XLSX.utils.encode_cell({ r, c: 6 })]?.v || "";
-      const employeeLevel = sheet[XLSX.utils.encode_cell({ r, c: 7 })]?.v || "";
+      const employee_level = sheet[XLSX.utils.encode_cell({ r, c: 7 })]?.v || "";
 
-      if (!poNumber) continue;
+      if (!po_number) continue;
 
       for (const d of dates) {
         const hoursCell = sheet[XLSX.utils.encode_cell({ r, c: d.col })];
@@ -132,11 +129,11 @@ app.post("/api/import/staffplan", async (req, res) => {
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [
             calendarWeek,
-            employeeCode,
-            employeeName,
-            employeeLevel,
+            employee_code,
+            employee_name,
+            employee_level,
             requester,
-            poNumber,
+            po_number,
             d.date,
             Number(hoursCell.v)
           ]
@@ -146,17 +143,24 @@ app.post("/api/import/staffplan", async (req, res) => {
       }
     }
 
-    res.json({
-      ok: true,
-      calendarWeek,
-      employees,
-      imported
-    });
+    res.json({ ok: true, calendarWeek, imported });
 
   } catch (err) {
-    console.error("STAFFPLAN IMPORT ERROR:", err);
+    console.error("IMPORT ERROR:", err);
     res.status(500).json({ ok: false, error: "Import fehlgeschlagen" });
   }
+});
+
+// ============================================================
+// DEBUG – ZEIGT WAS IN DER DB IST
+// ============================================================
+app.get("/api/debug/staffplan", async (req, res) => {
+  const result = await pool.query(`
+    SELECT DISTINCT employee_name, calendar_week, po_number
+    FROM staff_plan
+    ORDER BY employee_name, calendar_week, po_number
+  `);
+  res.json(result.rows);
 });
 
 // ============================================================
@@ -189,7 +193,6 @@ app.get("/api/timesheet/:employee/:kw/:po", async (req, res) => {
     );
     doc.pipe(res);
 
-    // ===== HEADER =====
     doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
     doc.moveDown();
 
@@ -201,7 +204,6 @@ app.get("/api/timesheet/:employee/:kw/:po", async (req, res) => {
     doc.text(`Kalenderwoche: ${rows[0].calendar_week}`);
     doc.moveDown(1.5);
 
-    // ===== TABLE HEADER =====
     doc.font("Helvetica-Bold");
     doc.text("Datum", 40);
     doc.text("Soll", 150);
@@ -210,28 +212,23 @@ app.get("/api/timesheet/:employee/:kw/:po", async (req, res) => {
     doc.font("Helvetica");
     doc.moveDown();
 
-    let sumSoll = 0;
-    let sumIst = 0;
+    let sum = 0;
 
     rows.forEach(r => {
       const date = new Date(r.work_date).toLocaleDateString("de-DE");
-      const soll = Number(r.planned_hours);
-      const ist = soll; // Platzhalter – später echte IST-Zeiten
-
-      sumSoll += soll;
-      sumIst += ist;
+      const h = Number(r.planned_hours);
+      sum += h;
 
       doc.text(date, 40);
-      doc.text(soll.toFixed(2), 150);
-      doc.text(ist.toFixed(2), 220);
+      doc.text(h.toFixed(2), 150);
+      doc.text(h.toFixed(2), 220);
       doc.text("Montage", 290);
       doc.moveDown();
     });
 
     doc.moveDown();
     doc.font("Helvetica-Bold");
-    doc.text(`Summe Soll: ${sumSoll.toFixed(2)} Std`);
-    doc.text(`Summe Ist: ${sumIst.toFixed(2)} Std`);
+    doc.text(`Summe: ${sum.toFixed(2)} Std`);
     doc.font("Helvetica");
 
     doc.moveDown(2);
