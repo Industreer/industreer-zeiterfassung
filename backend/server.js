@@ -2,7 +2,7 @@
 const express = require("express");
 const path = require("path");
 const { pool, initDb } = require("./db");
-const { parseCsv } = require("./import");
+const { parseCsv } = require("./import.js");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
