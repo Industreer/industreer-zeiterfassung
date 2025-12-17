@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (FINAL STABIL)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (FINAL + MIGRATIONS)
 // ============================================================
 
 const express = require("express");
@@ -25,23 +25,33 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// ================= INIT DB =================
+// ================= INIT DB (MIGRATION SAFE) =================
 async function initDb() {
+  // ---- EMPLOYEES BASIS ----
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       employee_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      email TEXT,
-      language TEXT DEFAULT 'de',
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
 
+  // 👉 MIGRATIONS FOR EMPLOYEES
+  await pool.query(`
+    ALTER TABLE employees
+    ADD COLUMN IF NOT EXISTS email TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE employees
+    ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'de';
+  `);
+
+  // ---- STAFF PLAN BASIS ----
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_plan (
       id SERIAL PRIMARY KEY,
       calendar_week TEXT NOT NULL,
-      customer TEXT,
       employee_name TEXT NOT NULL,
       requester TEXT,
       po_number TEXT NOT NULL,
@@ -51,6 +61,13 @@ async function initDb() {
     );
   `);
 
+  // 👉 MIGRATION: CUSTOMER
+  await pool.query(`
+    ALTER TABLE staff_plan
+    ADD COLUMN IF NOT EXISTS customer TEXT;
+  `);
+
+  // ---- EMAIL OUTBOX ----
   await pool.query(`
     CREATE TABLE IF NOT EXISTS email_outbox (
       id SERIAL PRIMARY KEY,
@@ -67,13 +84,13 @@ async function initDb() {
 
 // ================= ROUTES =================
 
-// ---------- Health ----------
-app.get("/api/health", async (req, res) => {
+// ---- HEALTH ----
+app.get("/api/health", async (_, res) => {
   await pool.query("SELECT 1");
   res.json({ ok: true });
 });
 
-// ---------- Pages ----------
+// ---- PAGES ----
 app.get("/admin", (_, res) => {
   res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"));
 });
@@ -83,18 +100,18 @@ app.get("/employee", (_, res) => {
 });
 
 // =====================================================
-// 🔴 HIER WAR DER FEHLER – ROUTE FEHLTE
+// EMPLOYEES API
 // =====================================================
 
-// ---------- Employees: LIST ----------
-app.get("/api/employees", async (req, res) => {
-  const result = await pool.query(
+// LIST
+app.get("/api/employees", async (_, res) => {
+  const r = await pool.query(
     "SELECT employee_id, name, email, language FROM employees ORDER BY name"
   );
-  res.json(result.rows);
+  res.json(r.rows);
 });
 
-// ---------- Employees: ADD / UPDATE ----------
+// UPSERT
 app.post("/api/employees/upsert", async (req, res) => {
   const { employee_id, name, email, language } = req.body;
 
@@ -107,7 +124,10 @@ app.post("/api/employees/upsert", async (req, res) => {
     INSERT INTO employees (employee_id, name, email, language)
     VALUES ($1,$2,$3,$4)
     ON CONFLICT (employee_id)
-    DO UPDATE SET name=$2, email=$3, language=$4
+    DO UPDATE SET
+      name = EXCLUDED.name,
+      email = EXCLUDED.email,
+      language = EXCLUDED.language
     `,
     [
       employee_id,
@@ -120,19 +140,19 @@ app.post("/api/employees/upsert", async (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- Staffplan CLEAR ----------
+// ---- STAFFPLAN CLEAR ----
 app.post("/api/staffplan/clear", async (_, res) => {
-  await pool.query("TRUNCATE staff_plan");
+  await pool.query("TRUNCATE staff_plan RESTART IDENTITY");
   res.json({ ok: true });
 });
 
-// ---------- Dummy PDF Endpoints (kommen gleich) ----------
+// ---- DEMO PDF / EMAIL (aktiviert später voll) ----
 app.get("/api/admin/pdfs", (_, res) => {
-  res.status(501).json({ error: "PDF Export folgt im nächsten Schritt" });
+  res.json({ ok: true, info: "PDF Export folgt" });
 });
 
 app.get("/api/employee/pdfs/last", (_, res) => {
-  res.status(501).json({ error: "PDF Export folgt im nächsten Schritt" });
+  res.json({ ok: true, info: "Employee PDF folgt" });
 });
 
 app.post("/api/employee/email", (_, res) => {
