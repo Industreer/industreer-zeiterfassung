@@ -117,30 +117,45 @@ app.post("/api/import/projects", async (req, res) => {
   res.json({ ok: true, imported });
 });
 
-// Tageszuordnung
+// Tageszuordnung (robust, kein Server-Crash)
 app.post("/api/import/day-projects", async (req, res) => {
-  const rows = parseFlexibleCsv(req.body.csv || "");
-  let imported = 0;
+  try {
+    const rows = parseFlexibleCsv(req.body.csv || "");
+    let imported = 0;
+    let skipped = 0;
 
-  for (const r of rows) {
-    if (!r.employee_id || !r.project_id || !r.work_date) continue;
+    for (const r of rows) {
+      if (!r.employee_id || !r.project_id || !r.work_date) {
+        skipped++;
+        continue;
+      }
 
-    await pool.query(
-      `INSERT INTO employee_project_day
-       (employee_id, project_id, work_date, approved)
-       VALUES ($1,$2,$3,$4)
-       ON CONFLICT (employee_id, project_id, work_date)
-       DO UPDATE SET approved=$4`,
-      [
-        r.employee_id,
-        r.project_id,
-        r.work_date,
-        r.approved !== "false"
-      ]
-    );
-    imported++;
+      try {
+        await pool.query(
+          `INSERT INTO employee_project_day
+           (employee_id, project_id, work_date, approved)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (employee_id, project_id, work_date)
+           DO UPDATE SET approved=$4`,
+          [
+            r.employee_id.trim(),
+            r.project_id.trim(),
+            r.work_date.trim(),
+            r.approved !== "false"
+          ]
+        );
+        imported++;
+      } catch (dbErr) {
+        console.error("DB Fehler bei Zeile:", r, dbErr.message);
+        skipped++;
+      }
+    }
+
+    res.json({ ok: true, imported, skipped });
+  } catch (err) {
+    console.error("CSV Import Fehler:", err);
+    res.status(500).json({ ok: false, error: "CSV Import fehlgeschlagen" });
   }
-  res.json({ ok: true, imported });
 });
 
 // --------------------
