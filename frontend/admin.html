@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>INDUSTREER – Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: Arial, sans-serif; background:#f4f6f8; margin:0; padding:16px; }
+    h1 { margin-bottom:12px; }
+    .box { background:#fff; padding:16px; border-radius:8px; margin-bottom:16px; }
+    label { display:block; margin-top:8px; font-size:14px; }
+    input, button {
+      width:100%; padding:8px; margin-top:4px;
+      font-size:14px;
+    }
+    button { background:#1976d2; color:#fff; border:none; margin-top:12px; }
+    table { width:100%; border-collapse:collapse; margin-top:8px; }
+    th, td { border:1px solid #ccc; padding:6px; font-size:13px; }
+    th { background:#eee; }
+  </style>
+</head>
+<body>
+
+<h1>INDUSTREER – Adminbereich</h1>
+
+<div class="box">
+  <h2>Mitarbeiter anlegen</h2>
+  <label>ID</label>
+  <input id="empId">
+  <label>Name</label>
+  <input id="empName">
+  <button onclick="addEmployee()">Speichern</button>
+</div>
+
+<div class="box">
+  <h2>Projekt anlegen</h2>
+  <label>Projektnummer</label>
+  <input id="projId">
+  <label>Projektname</label>
+  <input id="projName">
+  <button onclick="addProject()">Speichern</button>
+</div>
+
+<div class="box">
+  <h2>Mitarbeiter</h2>
+  <button onclick="loadEmployees()">Aktualisieren</button>
+  <table>
+    <thead><tr><th>ID</th><th>Name</th></tr></thead>
+    <tbody id="empTable"></tbody>
+  </table>
+</div>
+
+<div class="box">
+  <h2>Projekte</h2>
+  <button onclick="loadProjects()">Aktualisieren</button>
+  <table>
+    <thead><tr><th>ID</th><th>Name</th></tr></thead>
+    <tbody id="projTable"></tbody>
+  </table>
+</div>
+
+<script>
+async function addEmployee() {
+  await fetch("/api/employees", {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({
+      id: empId.value,
+      name: empName.value
+    })
+  });
+  empId.value=""; empName.value="";
+  loadEmployees();
+}
+
+async function addProject() {
+  await fetch("/api/projects", {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({
+      id: projId.value,
+      name: projName.value
+    })
+  });
+  projId.value=""; projName.value="";
+  loadProjects();
+}
+
+async function loadEmployees() {
+  const r = await fetch("/api/employees");
+  const j = await r.json();
+  empTable.innerHTML = j.employees.map(e =>
+    `<tr><td>${e.id}</td><td>${e.name}</td></tr>`
+  ).join("");
+}
+
+async function loadProjects() {
+  const r = await fetch("/api/projects");
+  const j = await r.json();
+  projTable.innerHTML = j.projects.map(p =>
+    `<tr><td>${p.id}</td><td>${p.name}</td></tr>`
+  ).join("");
+}
+</script>
+
+</body>
+</html>
