@@ -1,20 +1,27 @@
+// ============================================================
+// INDUSTREER ZEITERFASSUNG – BACKEND (FINAL)
+// Schritt A: Staffplan Excel Import
+// Schritt B: PDF Stundennachweis
+// ============================================================
+
 const express = require("express");
 const path = require("path");
 const XLSX = require("xlsx");
+const PDFDocument = require("pdfkit");
 const { Pool } = require("pg");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-/* =======================
-   Middleware
-======================= */
+// ============================================================
+// Middleware
+// ============================================================
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
-/* =======================
-   PostgreSQL
-======================= */
+// ============================================================
+// PostgreSQL
+// ============================================================
 const pool = new Pool({
   host: process.env.PGHOST,
   user: process.env.PGUSER,
@@ -24,9 +31,9 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-/* =======================
-   DB Init
-======================= */
+// ============================================================
+// DB Init
+// ============================================================
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_plan (
@@ -44,21 +51,21 @@ async function initDb() {
   `);
 }
 
-/* =======================
-   Healthcheck
-======================= */
+// ============================================================
+// Healthcheck
+// ============================================================
 app.get("/api/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
     res.json({ ok: true });
-  } catch (e) {
+  } catch {
     res.status(500).json({ ok: false });
   }
 });
 
-/* =======================
-   STAFFPLAN IMPORT
-======================= */
+// ============================================================
+// STEP A – STAFFPLAN IMPORT (EXCEL MATRIX)
+// ============================================================
 app.post("/api/import/staffplan", async (req, res) => {
   try {
     if (!req.body.fileBase64) {
@@ -70,15 +77,16 @@ app.post("/api/import/staffplan", async (req, res) => {
 
     const sheet = workbook.Sheets["Staffplan"];
     if (!sheet) {
-      return res.status(400).json({ ok: false, error: "Sheet Staffplan fehlt" });
+      return res.status(400).json({ ok: false, error: "Tabellenblatt 'Staffplan' fehlt" });
     }
 
+    // Kalenderwoche aus L2
     const calendarWeek = sheet["L2"]?.v;
     if (!calendarWeek) {
-      return res.status(400).json({ ok: false, error: "L2 (KW) fehlt" });
+      return res.status(400).json({ ok: false, error: "Kalenderwoche (L2) fehlt" });
     }
 
-    // Datumszeile L4 →
+    // Datumszeile: Zeile 4, ab Spalte L
     const dates = [];
     for (let c = 11; c < 200; c++) {
       const cell = sheet[XLSX.utils.encode_cell({ r: 3, c })];
@@ -88,30 +96,33 @@ app.post("/api/import/staffplan", async (req, res) => {
       if (!d) break;
 
       dates.push({
-        c,
+        col: c,
         date: new Date(d.y, d.m - 1, d.d)
       });
     }
 
     let imported = 0;
+    let employees = 0;
 
-    // Mitarbeiter ab Zeile 6, +2
+    // Mitarbeiter ab Zeile 6, immer +2
     for (let r = 5; r < 5000; r += 2) {
-      const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 8 })];
+      const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 8 })]; // Spalte I
       if (!nameCell) break;
 
-      const employee_name = String(nameCell.v).trim();
-      if (!employee_name) continue;
+      const employeeName = String(nameCell.v || "").trim();
+      if (!employeeName) continue;
 
-      const employee_code = sheet[XLSX.utils.encode_cell({ r, c: 3 })]?.v || "";
-      const po_number = sheet[XLSX.utils.encode_cell({ r, c: 4 })]?.v || "";
+      employees++;
+
+      const employeeCode = sheet[XLSX.utils.encode_cell({ r, c: 3 })]?.v || "";
+      const poNumber = sheet[XLSX.utils.encode_cell({ r, c: 4 })]?.v || "";
       const requester = sheet[XLSX.utils.encode_cell({ r, c: 6 })]?.v || "";
-      const employee_level = sheet[XLSX.utils.encode_cell({ r, c: 7 })]?.v || "";
+      const employeeLevel = sheet[XLSX.utils.encode_cell({ r, c: 7 })]?.v || "";
 
-      if (!po_number) continue;
+      if (!poNumber) continue;
 
       for (const d of dates) {
-        const hoursCell = sheet[XLSX.utils.encode_cell({ r, c: d.c })];
+        const hoursCell = sheet[XLSX.utils.encode_cell({ r, c: d.col })];
         if (!hoursCell || isNaN(hoursCell.v)) continue;
 
         await pool.query(
@@ -121,11 +132,11 @@ app.post("/api/import/staffplan", async (req, res) => {
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [
             calendarWeek,
-            employee_code,
-            employee_name,
-            employee_level,
+            employeeCode,
+            employeeName,
+            employeeLevel,
             requester,
-            po_number,
+            poNumber,
             d.date,
             Number(hoursCell.v)
           ]
@@ -135,24 +146,119 @@ app.post("/api/import/staffplan", async (req, res) => {
       }
     }
 
-    res.json({ ok: true, calendarWeek, imported });
+    res.json({
+      ok: true,
+      calendarWeek,
+      employees,
+      imported
+    });
 
   } catch (err) {
-    console.error(err);
+    console.error("STAFFPLAN IMPORT ERROR:", err);
     res.status(500).json({ ok: false, error: "Import fehlgeschlagen" });
   }
 });
 
-/* =======================
-   Admin Page
-======================= */
+// ============================================================
+// STEP B – STUNDENNACHWEIS PDF
+// ============================================================
+app.get("/api/timesheet/:employee/:kw/:po", async (req, res) => {
+  try {
+    const { employee, kw, po } = req.params;
+
+    const result = await pool.query(
+      `SELECT * FROM staff_plan
+       WHERE employee_name = $1
+         AND calendar_week = $2
+         AND po_number = $3
+       ORDER BY work_date`,
+      [employee, kw, po]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).send("Keine Daten gefunden");
+    }
+
+    const rows = result.rows;
+
+    const doc = new PDFDocument({ margin: 40 });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename=Stundennachweis_${employee}_${kw}_${po}.pdf`
+    );
+    doc.pipe(res);
+
+    // ===== HEADER =====
+    doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
+    doc.moveDown();
+
+    doc.fontSize(10);
+    doc.text(`Name: ${rows[0].employee_name}`);
+    doc.text(`Code / Level: ${rows[0].employee_code} / ${rows[0].employee_level}`);
+    doc.text(`Ansprechpartner: ${rows[0].requester}`);
+    doc.text(`PO: ${rows[0].po_number}`);
+    doc.text(`Kalenderwoche: ${rows[0].calendar_week}`);
+    doc.moveDown(1.5);
+
+    // ===== TABLE HEADER =====
+    doc.font("Helvetica-Bold");
+    doc.text("Datum", 40);
+    doc.text("Soll", 150);
+    doc.text("Ist", 220);
+    doc.text("Tätigkeit", 290);
+    doc.font("Helvetica");
+    doc.moveDown();
+
+    let sumSoll = 0;
+    let sumIst = 0;
+
+    rows.forEach(r => {
+      const date = new Date(r.work_date).toLocaleDateString("de-DE");
+      const soll = Number(r.planned_hours);
+      const ist = soll; // Platzhalter – später echte IST-Zeiten
+
+      sumSoll += soll;
+      sumIst += ist;
+
+      doc.text(date, 40);
+      doc.text(soll.toFixed(2), 150);
+      doc.text(ist.toFixed(2), 220);
+      doc.text("Montage", 290);
+      doc.moveDown();
+    });
+
+    doc.moveDown();
+    doc.font("Helvetica-Bold");
+    doc.text(`Summe Soll: ${sumSoll.toFixed(2)} Std`);
+    doc.text(`Summe Ist: ${sumIst.toFixed(2)} Std`);
+    doc.font("Helvetica");
+
+    doc.moveDown(2);
+    doc.text("Datum: ____________________________");
+    doc.moveDown();
+    doc.text("Unterschrift Kunde: ____________________________");
+    doc.moveDown();
+    doc.text(`Name in Druckbuchstaben: ${rows[0].employee_name.toUpperCase()}`);
+
+    doc.end();
+
+  } catch (err) {
+    console.error("PDF ERROR:", err);
+    res.status(500).send("PDF-Erstellung fehlgeschlagen");
+  }
+});
+
+// ============================================================
+// Admin Page
+// ============================================================
 app.get("/admin", (req, res) => {
   res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"));
 });
 
-/* =======================
-   Start
-======================= */
+// ============================================================
+// Start Server
+// ============================================================
 initDb().then(() => {
   app.listen(PORT, () => {
     console.log("Server läuft auf Port", PORT);
