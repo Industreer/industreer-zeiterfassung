@@ -1,15 +1,24 @@
 // backend/server.js
 const express = require("express");
+const path = require("path");
 const app = express();
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-app.get("/api/health", (req, res) => {
-  res.json({ ok: true, message: "INDUSTREER Backend läuft" });
+// JSON erlauben
+app.use(express.json());
+
+// Statische Dateien aus /frontend ausliefern
+app.use(express.static(path.join(__dirname, "..", "frontend")));
+
+// Admin-Seite
+app.get("/admin", (req, res) => {
+  res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"));
 });
 
-app.get("/admin", (req, res) => {
-  res.send("<h1>Adminbereich läuft 🎉</h1><p>Backend erfolgreich gestartet.</p>");
+// Healthcheck
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, message: "INDUSTREER Backend läuft" });
 });
 
 app.listen(PORT, () => {
