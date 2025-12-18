@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (B5 IST-ZEITEN)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (B5 KOMPLETT & STABIL)
 // ============================================================
 
 const express = require("express");
@@ -12,8 +12,17 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // ================= MIDDLEWARE =================
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
+
+// ================= EXPLIZITE ROUTEN =================
+app.get("/employee", (req, res) => {
+  res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"));
+});
+
+app.get("/admin", (req, res) => {
+  res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"));
+});
 
 // ================= DATABASE =================
 const pool = new Pool({
@@ -54,8 +63,7 @@ async function initDb() {
 function calculateHours(start, end, breaks, autoBreak) {
   const diffMs = end - start;
   const diffHours = diffMs / 1000 / 60 / 60;
-  const totalBreak = (breaks + autoBreak) / 60;
-  return Math.max(0, diffHours - totalBreak);
+  return Math.max(0, diffHours - (breaks + autoBreak) / 60);
 }
 
 // ================= ROUTES =================
@@ -65,7 +73,9 @@ app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 // ---- EMPLOYEES ----
 app.get("/api/employees", async (_, res) => {
-  const r = await pool.query("SELECT * FROM employees ORDER BY name");
+  const r = await pool.query(
+    "SELECT employee_id, name, email, language FROM employees ORDER BY name"
+  );
   res.json(r.rows);
 });
 
@@ -115,6 +125,7 @@ app.post("/api/time/end", async (req, res) => {
     `
     SELECT * FROM time_entries
     WHERE employee_id=$1 AND work_date=$2
+    ORDER BY id DESC LIMIT 1
     `,
     [employee_id, today]
   );
@@ -126,7 +137,6 @@ app.post("/api/time/end", async (req, res) => {
   const entry = r.rows[0];
   const start = new Date(entry.start_time);
 
-  // gesetzliche Pause: 30 Min ab 6 Std
   const workedHours = (now - start) / 1000 / 60 / 60;
   const autoBreak = workedHours >= 6 ? 30 : 0;
 
@@ -151,9 +161,12 @@ app.post("/api/time/end", async (req, res) => {
   res.json({ ok: true, totalHours });
 });
 
-// ================= PDF (JETZT MIT IST-ZEITEN) =================
+// ================= PDF STUNDENNACHWEIS =================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   const { employeeId, kw, po } = req.params;
+  const activity =
+    req.query.activity ||
+    "Montage";
 
   const emp = await pool.query(
     "SELECT name FROM employees WHERE employee_id=$1",
@@ -179,28 +192,47 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
 
   doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
   doc.moveDown();
+
+  doc.fontSize(10);
   doc.text(`Name: ${employeeName}`);
   doc.text(`Kalenderwoche: ${kw}`);
-  doc.text(`PO: ${po}`);
+  doc.text(`PO / Auftrag: ${po}`);
   doc.moveDown();
+
+  doc.font("Helvetica-Bold");
+  doc.text("Datum", 40);
+  doc.text("Tätigkeit", 150);
+  doc.text("Stunden", 450, undefined, { align: "right" });
+  doc.moveDown(0.5);
+  doc.font("Helvetica");
 
   let sum = 0;
   entries.rows.forEach(e => {
     sum += Number(e.total_hours || 0);
-    doc.text(
-      `${new Date(e.work_date).toLocaleDateString("de-DE")}  ${Number(
-        e.total_hours
-      ).toFixed(2)} Std`
-    );
+    doc.text(new Date(e.work_date).toLocaleDateString("de-DE"), 40);
+    doc.text(activity, 150);
+    doc.text(Number(e.total_hours).toFixed(2), 450, undefined, { align: "right" });
   });
 
   doc.moveDown();
-  doc.text(`Gesamtstunden: ${sum.toFixed(2)}`);
+  doc.font("Helvetica-Bold");
+  doc.text("Gesamtstunden:", 150);
+  doc.text(sum.toFixed(2), 450, undefined, { align: "right" });
+  doc.font("Helvetica");
+
+  doc.moveDown(3);
+  doc.text("Ort / Datum: ________________________________");
+  doc.moveDown(2);
+  doc.text("Unterschrift Mitarbeiter: ________________________________");
+  doc.moveDown(2);
+  doc.text("Unterschrift Kunde: ________________________________");
 
   doc.end();
 });
 
 // ================= START =================
 initDb().then(() => {
-  app.listen(PORT, () => console.log("Server läuft auf Port", PORT));
+  app.listen(PORT, () => {
+    console.log("Server läuft auf Port", PORT);
+  });
 });
