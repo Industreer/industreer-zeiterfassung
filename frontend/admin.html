@@ -6,44 +6,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: Arial, sans-serif; background:#f4f6f8; padding:20px; }
-    h1,h2 { margin-top:0; }
     .box { background:#fff; padding:20px; border-radius:8px; margin-bottom:20px; box-shadow:0 2px 6px rgba(0,0,0,0.1); }
     label { display:block; margin-top:10px; font-weight:bold; }
     input,select { width:100%; padding:8px; margin-top:4px; }
+    input[readonly] { background:#eee; }
     button { margin-top:15px; padding:10px 14px; background:#1565c0; color:white; border:none; border-radius:4px; cursor:pointer; }
+    button.secondary { background:#555; }
     button.danger { background:#c62828; }
     table { width:100%; border-collapse:collapse; margin-top:15px; }
     th,td { border-bottom:1px solid #ddd; padding:8px; }
     th { background:#eee; }
     tr:hover { background:#f1f1f1; cursor:pointer; }
-    pre { background:#eee; padding:10px; border-radius:6px; white-space:pre-wrap; }
-    .small { font-size:12px; color:#666; }
-    .ok { color: green; font-weight: bold; }
+    .hint { font-size:12px; color:#666; }
+    .ok { color:green; font-weight:bold; }
   </style>
 </head>
 <body>
 
-<h1>Admin – Zeiterfassung</h1>
+<h1>Admin – Mitarbeiterverwaltung</h1>
 
-<!-- ================= STAFFPLAN ================= -->
 <div class="box">
-  <h2>Staffplan importieren</h2>
-
-  <label>Excel-Datei (Staffplan)</label>
-  <input type="file" id="staffplanFile" accept=".xlsx,.xls">
-
-  <button onclick="importStaffplan()">Staffplan importieren</button>
-  <button class="danger" onclick="clearStaffplan()">Staffplan löschen</button>
-
-  <pre id="staffplanStatus"></pre>
-</div>
-
-<!-- ================= EMPLOYEE FORM ================= -->
-<div class="box">
-  <h2>Mitarbeiter anlegen / ändern</h2>
+  <h2>Mitarbeiter bearbeiten</h2>
 
   <label>Mitarbeiter-ID</label>
   <input id="employee_id">
+  <div id="idHint" class="hint"></div>
 
   <label>Name</label>
   <input id="name">
@@ -62,58 +49,28 @@
   </select>
 
   <button onclick="saveEmployee()">Speichern</button>
+  <button class="secondary" onclick="enableIdChange()">ID offiziell ändern</button>
 
-  <pre id="employeeStatus"></pre>
+  <div id="status" class="hint"></div>
 </div>
 
-<!-- ================= EMPLOYEE LIST ================= -->
 <div class="box">
   <h2>Alle Mitarbeiter</h2>
-  <div class="small">Klick auf einen Mitarbeiter zum Bearbeiten</div>
-
   <table>
     <thead>
-      <tr>
-        <th>ID</th>
-        <th>Name</th>
-        <th>E-Mail</th>
-        <th>Sprache</th>
-      </tr>
+      <tr><th>ID</th><th>Name</th><th>E-Mail</th><th>Sprache</th></tr>
     </thead>
-    <tbody id="employeeTable"></tbody>
+    <tbody id="empTable"></tbody>
   </table>
 </div>
 
 <script>
-async function importStaffplan() {
-  const f = document.getElementById("staffplanFile").files[0];
-  if (!f) return alert("Bitte Excel-Datei auswählen");
-
-  const r = new FileReader();
-  r.onload = async () => {
-    const res = await fetch("/api/import/staffplan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileBase64: r.result.split(",")[1] })
-    });
-    staffplanStatus.textContent = await res.text();
-    await loadEmployees();
-  };
-  r.readAsDataURL(f);
-}
-
-async function clearStaffplan() {
-  if (!confirm("Staffplan wirklich löschen?")) return;
-  const res = await fetch("/api/staffplan/clear", { method: "POST" });
-  staffplanStatus.textContent = await res.text();
-}
+let allowIdEdit = false;
 
 async function loadEmployees() {
   const res = await fetch("/api/employees");
   const data = await res.json();
-
-  const tbody = document.getElementById("employeeTable");
-  tbody.innerHTML = "";
+  empTable.innerHTML = "";
 
   data.forEach(e => {
     const tr = document.createElement("tr");
@@ -121,10 +78,10 @@ async function loadEmployees() {
       <td>${e.employee_id}</td>
       <td>${e.name}</td>
       <td>${e.email || ""}</td>
-      <td>${e.language || "de"}</td>
+      <td>${e.language}</td>
     `;
     tr.onclick = () => fillForm(e);
-    tbody.appendChild(tr);
+    empTable.appendChild(tr);
   });
 }
 
@@ -133,6 +90,27 @@ function fillForm(e) {
   name.value = e.name;
   email.value = e.email || "";
   language.value = e.language || "de";
+
+  allowIdEdit = false;
+
+  if (e.employee_id.startsWith("AUTO_")) {
+    employee_id.readOnly = true;
+    idHint.textContent = "Automatisch angelegt (ID später änderbar)";
+  } else {
+    employee_id.readOnly = false;
+    idHint.textContent = "";
+  }
+}
+
+function enableIdChange() {
+  if (!employee_id.value.startsWith("AUTO_")) {
+    alert("ID ist bereits manuell");
+    return;
+  }
+  if (!confirm("ID wirklich offiziell ändern?")) return;
+  employee_id.readOnly = false;
+  allowIdEdit = true;
+  idHint.textContent = "⚠️ ID-Änderung aktiv – bitte sorgfältig";
 }
 
 async function saveEmployee() {
@@ -143,26 +121,14 @@ async function saveEmployee() {
     language: language.value
   };
 
-  if (!payload.employee_id || !payload.name) {
-    alert("ID und Name sind Pflicht");
-    return;
-  }
-
   const res = await fetch("/api/employees/upsert", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
 
-  const result = await res.json();
-  employeeStatus.innerHTML = `<span class="ok">✔ Gespeichert</span>\n${JSON.stringify(result, null, 2)}`;
-
-  // 🔧 WICHTIGER FIX
-  employee_id.value = "";
-  name.value = "";
-  email.value = "";
-  language.value = "de";
-
+  const r = await res.json();
+  status.innerHTML = `<span class="ok">✔ Gespeichert</span>`;
   await loadEmployees();
 }
 
