@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (LOGO UPLOAD)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (LOGO API FIX)
 // ============================================================
 
 const express = require("express");
@@ -16,7 +16,7 @@ const PORT = process.env.PORT || 10000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
-// ================= ROUTING =================
+// ================= ROUTES (PAGES) =================
 app.get("/employee", (_, res) =>
   res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"))
 );
@@ -62,31 +62,34 @@ async function migrate() {
   `);
 }
 
-// ================= LOGO UPLOAD =================
+// ================= LOGO STORAGE =================
+const LOGO_PATH = path.join(__dirname, "logo.png");
+
 const upload = multer({
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_, file, cb) => {
     if (!file.mimetype.startsWith("image/")) {
-      return cb(new Error("Nur Bilddateien erlaubt"));
+      return cb(new Error("Nur Bilder erlaubt"));
     }
     cb(null, true);
   }
 });
 
+// Upload
 app.post("/api/admin/logo", upload.single("logo"), (req, res) => {
-  const targetDir = path.join(__dirname, "..", "frontend", "assets");
-  const targetFile = path.join(targetDir, "logo.png");
-
-  if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true });
-  }
-
-  fs.writeFileSync(targetFile, req.file.buffer);
-
+  fs.writeFileSync(LOGO_PATH, req.file.buffer);
   res.json({ ok: true });
 });
 
-// ================= API =================
+// Serve logo
+app.get("/api/logo", (_, res) => {
+  if (!fs.existsSync(LOGO_PATH)) {
+    return res.sendStatus(404);
+  }
+  res.sendFile(LOGO_PATH);
+});
+
+// ================= HEALTH =================
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 // ================= START =================
