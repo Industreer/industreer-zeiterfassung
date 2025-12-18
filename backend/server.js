@@ -1,10 +1,9 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (B5 KOMPLETT & STABIL)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (B5.5 ÜBERSTUNDEN)
 // ============================================================
 
 const express = require("express");
 const path = require("path");
-const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
 const { Pool } = require("pg");
 
@@ -12,17 +11,16 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // ================= MIDDLEWARE =================
-app.use(express.json({ limit: "25mb" }));
+app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
-// ================= EXPLIZITE ROUTEN =================
-app.get("/employee", (req, res) => {
-  res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"));
-});
-
-app.get("/admin", (req, res) => {
-  res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"));
-});
+// ================= ROUTING =================
+app.get("/employee", (_, res) =>
+  res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"))
+);
+app.get("/admin", (_, res) =>
+  res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"))
+);
 
 // ================= DATABASE =================
 const pool = new Pool({
@@ -41,7 +39,8 @@ async function initDb() {
       employee_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT,
-      language TEXT DEFAULT 'de'
+      language TEXT DEFAULT 'de',
+      daily_hours NUMERIC(4,2) DEFAULT 8.0
     );
   `);
 
@@ -54,135 +53,127 @@ async function initDb() {
       end_time TIMESTAMP,
       break_minutes INT DEFAULT 0,
       auto_break_minutes INT DEFAULT 0,
-      total_hours NUMERIC(5,2)
+      total_hours NUMERIC(5,2),
+      overtime_hours NUMERIC(5,2)
     );
   `);
 }
 
 // ================= HELPERS =================
-function calculateHours(start, end, breaks, autoBreak) {
-  const diffMs = end - start;
-  const diffHours = diffMs / 1000 / 60 / 60;
-  return Math.max(0, diffHours - (breaks + autoBreak) / 60);
+function calcHours(start, end, breaks) {
+  return Math.max(
+    0,
+    (end - start) / 1000 / 60 / 60 - breaks / 60
+  );
 }
 
 // ================= ROUTES =================
-
-// ---- HEALTH ----
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
-// ---- EMPLOYEES ----
 app.get("/api/employees", async (_, res) => {
   const r = await pool.query(
-    "SELECT employee_id, name, email, language FROM employees ORDER BY name"
+    "SELECT employee_id, name, email, language, daily_hours FROM employees"
   );
   res.json(r.rows);
 });
 
 // ================= ZEITERFASSUNG =================
 
-// Arbeitsbeginn
+// START
 app.post("/api/time/start", async (req, res) => {
   const { employee_id } = req.body;
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
 
   await pool.query(
-    `
-    INSERT INTO time_entries (employee_id, work_date, start_time)
-    VALUES ($1,$2,$3)
-    `,
+    `INSERT INTO time_entries (employee_id, work_date, start_time)
+     VALUES ($1,$2,$3)`,
     [employee_id, today, now]
   );
 
-  res.json({ ok: true, message: "Arbeitsbeginn erfasst" });
+  res.json({ ok: true });
 });
 
-// Raucherpause
+// PAUSE
 app.post("/api/time/break", async (req, res) => {
   const { employee_id, minutes } = req.body;
   const today = new Date().toISOString().slice(0, 10);
 
   await pool.query(
-    `
-    UPDATE time_entries
-    SET break_minutes = break_minutes + $1
-    WHERE employee_id=$2 AND work_date=$3
-    `,
+    `UPDATE time_entries
+     SET break_minutes = break_minutes + $1
+     WHERE employee_id=$2 AND work_date=$3`,
     [minutes, employee_id, today]
   );
 
-  res.json({ ok: true, message: "Pause erfasst" });
+  res.json({ ok: true });
 });
 
-// Arbeitsende
+// ENDE + ÜBERSTUNDEN
 app.post("/api/time/end", async (req, res) => {
   const { employee_id } = req.body;
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
 
-  const r = await pool.query(
-    `
-    SELECT * FROM time_entries
-    WHERE employee_id=$1 AND work_date=$2
-    ORDER BY id DESC LIMIT 1
-    `,
+  const entryRes = await pool.query(
+    `SELECT * FROM time_entries
+     WHERE employee_id=$1 AND work_date=$2
+     ORDER BY id DESC LIMIT 1`,
     [employee_id, today]
   );
+  if (!entryRes.rows.length)
+    return res.status(400).json({ error: "Kein Start gefunden" });
 
-  if (!r.rows.length) {
-    return res.status(400).json({ ok: false, error: "Kein Start gefunden" });
-  }
-
-  const entry = r.rows[0];
-  const start = new Date(entry.start_time);
-
-  const workedHours = (now - start) / 1000 / 60 / 60;
-  const autoBreak = workedHours >= 6 ? 30 : 0;
-
-  const totalHours = calculateHours(
-    start,
-    now,
-    entry.break_minutes,
-    autoBreak
+  const empRes = await pool.query(
+    "SELECT daily_hours FROM employees WHERE employee_id=$1",
+    [employee_id]
   );
+
+  const entry = entryRes.rows[0];
+  const daily = Number(empRes.rows[0].daily_hours || 8);
+  const autoBreak =
+    (now - new Date(entry.start_time)) / 1000 / 60 / 60 >= 6 ? 30 : 0;
+
+  const total = calcHours(
+    new Date(entry.start_time),
+    now,
+    entry.break_minutes + autoBreak
+  );
+
+  const overtime = Math.max(0, total - daily);
 
   await pool.query(
-    `
-    UPDATE time_entries
-    SET end_time=$1,
-        auto_break_minutes=$2,
-        total_hours=$3
-    WHERE id=$4
-    `,
-    [now, autoBreak, totalHours, entry.id]
+    `UPDATE time_entries
+     SET end_time=$1,
+         auto_break_minutes=$2,
+         total_hours=$3,
+         overtime_hours=$4
+     WHERE id=$5`,
+    [now, autoBreak, total, overtime, entry.id]
   );
 
-  res.json({ ok: true, totalHours });
+  res.json({
+    ok: true,
+    totalHours: total.toFixed(2),
+    overtimeHours: overtime.toFixed(2)
+  });
 });
 
-// ================= PDF STUNDENNACHWEIS =================
+// ================= PDF =================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   const { employeeId, kw, po } = req.params;
-  const activity =
-    req.query.activity ||
-    "Montage";
 
   const emp = await pool.query(
     "SELECT name FROM employees WHERE employee_id=$1",
     [employeeId]
   );
-  if (!emp.rows.length) return res.status(404).send("Mitarbeiter nicht gefunden");
-
-  const employeeName = emp.rows[0].name;
+  if (!emp.rows.length) return res.sendStatus(404);
 
   const entries = await pool.query(
-    `
-    SELECT work_date, total_hours
-    FROM time_entries
-    WHERE employee_id=$1
-    ORDER BY work_date
-    `,
+    `SELECT work_date, total_hours, overtime_hours
+     FROM time_entries
+     WHERE employee_id=$1
+     ORDER BY work_date`,
     [employeeId]
   );
 
@@ -193,46 +184,25 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
   doc.moveDown();
 
-  doc.fontSize(10);
-  doc.text(`Name: ${employeeName}`);
-  doc.text(`Kalenderwoche: ${kw}`);
-  doc.text(`PO / Auftrag: ${po}`);
-  doc.moveDown();
+  let sum = 0, ot = 0;
 
-  doc.font("Helvetica-Bold");
-  doc.text("Datum", 40);
-  doc.text("Tätigkeit", 150);
-  doc.text("Stunden", 450, undefined, { align: "right" });
-  doc.moveDown(0.5);
-  doc.font("Helvetica");
-
-  let sum = 0;
   entries.rows.forEach(e => {
-    sum += Number(e.total_hours || 0);
-    doc.text(new Date(e.work_date).toLocaleDateString("de-DE"), 40);
-    doc.text(activity, 150);
-    doc.text(Number(e.total_hours).toFixed(2), 450, undefined, { align: "right" });
+    sum += Number(e.total_hours);
+    ot += Number(e.overtime_hours || 0);
+    doc.text(
+      `${new Date(e.work_date).toLocaleDateString("de-DE")}  ${Number(
+        e.total_hours
+      ).toFixed(2)} Std  (+${Number(e.overtime_hours).toFixed(2)} ÜStd)`
+    );
   });
 
   doc.moveDown();
-  doc.font("Helvetica-Bold");
-  doc.text("Gesamtstunden:", 150);
-  doc.text(sum.toFixed(2), 450, undefined, { align: "right" });
-  doc.font("Helvetica");
-
-  doc.moveDown(3);
-  doc.text("Ort / Datum: ________________________________");
-  doc.moveDown(2);
-  doc.text("Unterschrift Mitarbeiter: ________________________________");
-  doc.moveDown(2);
-  doc.text("Unterschrift Kunde: ________________________________");
-
+  doc.text(`Gesamtstunden: ${sum.toFixed(2)}`);
+  doc.text(`Überstunden: ${ot.toFixed(2)}`);
   doc.end();
 });
 
 // ================= START =================
 initDb().then(() => {
-  app.listen(PORT, () => {
-    console.log("Server läuft auf Port", PORT);
-  });
+  app.listen(PORT, () => console.log("Server läuft auf Port", PORT));
 });
