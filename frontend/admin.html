@@ -15,9 +15,10 @@
     table { width:100%; border-collapse:collapse; margin-top:15px; }
     th,td { border-bottom:1px solid #ddd; padding:8px; }
     th { background:#eee; }
-    tr:hover { background:#f1f1f1; }
+    tr:hover { background:#f1f1f1; cursor:pointer; }
     pre { background:#eee; padding:10px; border-radius:6px; white-space:pre-wrap; }
     .small { font-size:12px; color:#666; }
+    .ok { color: green; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -37,7 +38,7 @@
   <pre id="staffplanStatus"></pre>
 </div>
 
-<!-- ================= EMPLOYEES ================= -->
+<!-- ================= EMPLOYEE FORM ================= -->
 <div class="box">
   <h2>Mitarbeiter anlegen / ändern</h2>
 
@@ -61,103 +62,108 @@
   </select>
 
   <button onclick="saveEmployee()">Speichern</button>
+
   <pre id="employeeStatus"></pre>
 </div>
 
+<!-- ================= EMPLOYEE LIST ================= -->
 <div class="box">
   <h2>Alle Mitarbeiter</h2>
   <div class="small">Klick auf einen Mitarbeiter zum Bearbeiten</div>
 
-  <table id="employeeTable">
+  <table>
     <thead>
-      <tr><th>ID</th><th>Name</th><th>E-Mail</th><th>Sprache</th></tr>
+      <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>E-Mail</th>
+        <th>Sprache</th>
+      </tr>
     </thead>
-    <tbody></tbody>
+    <tbody id="employeeTable"></tbody>
   </table>
 </div>
 
 <script>
-/* ================= STAFFPLAN ================= */
-
 async function importStaffplan() {
-  const fileInput = document.getElementById("staffplanFile");
-  if (!fileInput.files.length) {
-    alert("Bitte eine Excel-Datei auswählen");
-    return;
-  }
+  const f = document.getElementById("staffplanFile").files[0];
+  if (!f) return alert("Bitte Excel-Datei auswählen");
 
-  const file = fileInput.files[0];
-  const reader = new FileReader();
-
-  reader.onload = async () => {
-    const base64 = reader.result.split(",")[1];
-
+  const r = new FileReader();
+  r.onload = async () => {
     const res = await fetch("/api/import/staffplan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileBase64: base64 })
+      body: JSON.stringify({ fileBase64: r.result.split(",")[1] })
     });
-
-    const text = await res.text();
-    document.getElementById("staffplanStatus").textContent = text;
-
-    loadEmployees(); // neue Mitarbeiter anzeigen
+    staffplanStatus.textContent = await res.text();
+    await loadEmployees();
   };
-
-  reader.readAsDataURL(file);
+  r.readAsDataURL(f);
 }
 
 async function clearStaffplan() {
   if (!confirm("Staffplan wirklich löschen?")) return;
   const res = await fetch("/api/staffplan/clear", { method: "POST" });
-  document.getElementById("staffplanStatus").textContent = await res.text();
+  staffplanStatus.textContent = await res.text();
 }
-
-/* ================= EMPLOYEES ================= */
 
 async function loadEmployees() {
   const res = await fetch("/api/employees");
   const data = await res.json();
 
-  const tbody = document.querySelector("#employeeTable tbody");
+  const tbody = document.getElementById("employeeTable");
   tbody.innerHTML = "";
 
-  data.forEach(emp => {
+  data.forEach(e => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${emp.employee_id}</td>
-      <td>${emp.name}</td>
-      <td>${emp.email || ""}</td>
-      <td>${emp.language}</td>
+      <td>${e.employee_id}</td>
+      <td>${e.name}</td>
+      <td>${e.email || ""}</td>
+      <td>${e.language || "de"}</td>
     `;
-    tr.onclick = () => fillForm(emp);
+    tr.onclick = () => fillForm(e);
     tbody.appendChild(tr);
   });
 }
 
-function fillForm(emp) {
-  document.getElementById("employee_id").value = emp.employee_id;
-  document.getElementById("name").value = emp.name;
-  document.getElementById("email").value = emp.email || "";
-  document.getElementById("language").value = emp.language || "de";
+function fillForm(e) {
+  employee_id.value = e.employee_id;
+  name.value = e.name;
+  email.value = e.email || "";
+  language.value = e.language || "de";
 }
 
 async function saveEmployee() {
-  const body = {
+  const payload = {
     employee_id: employee_id.value.trim(),
     name: name.value.trim(),
     email: email.value.trim() || null,
     language: language.value
   };
 
+  if (!payload.employee_id || !payload.name) {
+    alert("ID und Name sind Pflicht");
+    return;
+  }
+
   const res = await fetch("/api/employees/upsert", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(payload)
   });
 
-  employeeStatus.textContent = await res.text();
-  loadEmployees();
+  const result = await res.json();
+  employeeStatus.innerHTML = `<span class="ok">✔ Gespeichert</span>\n${JSON.stringify(result, null, 2)}`;
+
+  // 🔧 WICHTIGER FIX
+  employee_id.value = "";
+  name.value = "";
+  email.value = "";
+  language.value = "de";
+
+  await loadEmployees();
 }
 
 loadEmployees();
