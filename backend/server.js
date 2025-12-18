@@ -1,31 +1,38 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (LOGO API FIX)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (FINAL)
 // ============================================================
 
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
-const PDFDocument = require("pdfkit");
 const multer = require("multer");
+const PDFDocument = require("pdfkit");
 const { Pool } = require("pg");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ================= MIDDLEWARE =================
+// ============================================================
+// MIDDLEWARE
+// ============================================================
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
-// ================= ROUTES (PAGES) =================
-app.get("/employee", (_, res) =>
-  res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"))
-);
+// ============================================================
+// PAGE ROUTES
+// ============================================================
+app.get("/employee", (req, res) => {
+  res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"));
+});
 
-app.get("/admin", (_, res) =>
-  res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"))
-);
+app.get("/admin", (req, res) => {
+  res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"));
+});
 
-// ================= DATABASE =================
+// ============================================================
+// DATABASE
+// ============================================================
 const pool = new Pool({
   host: process.env.PGHOST,
   user: process.env.PGUSER,
@@ -35,7 +42,9 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// ================= AUTO MIGRATION =================
+// ============================================================
+// AUTO MIGRATION
+// ============================================================
 async function migrate() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
@@ -56,45 +65,221 @@ async function migrate() {
       end_time TIMESTAMP,
       break_minutes INT DEFAULT 0,
       auto_break_minutes INT DEFAULT 0,
-      total_hours NUMERIC(5,2),
-      overtime_hours NUMERIC(5,2) DEFAULT 0
+      total_hours NUMERIC(6,2),
+      overtime_hours NUMERIC(6,2) DEFAULT 0
     );
   `);
+
+  console.log("✅ DB migration done");
 }
 
-// ================= LOGO STORAGE =================
-const LOGO_PATH = path.join(__dirname, "logo.png");
+// ============================================================
+// LOGO STORAGE (RENDER FREE SAFE)
+// ============================================================
+const LOGO_PATH = path.join(__dirname, "logo.bin");
 
 const upload = multer({
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_, file, cb) => {
     if (!file.mimetype.startsWith("image/")) {
-      return cb(new Error("Nur Bilder erlaubt"));
+      return cb(new Error("Only images allowed"));
     }
     cb(null, true);
   }
 });
 
-// Upload
+// Upload logo
 app.post("/api/admin/logo", upload.single("logo"), (req, res) => {
-  fs.writeFileSync(LOGO_PATH, req.file.buffer);
-  res.json({ ok: true });
+  try {
+    fs.writeFileSync(LOGO_PATH, req.file.buffer);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 // Serve logo
-app.get("/api/logo", (_, res) => {
+app.get("/api/logo", (req, res) => {
   if (!fs.existsSync(LOGO_PATH)) {
     return res.sendStatus(404);
   }
-  res.sendFile(LOGO_PATH);
+  res.setHeader("Content-Type", "image/png");
+  res.send(fs.readFileSync(LOGO_PATH));
 });
 
-// ================= HEALTH =================
-app.get("/api/health", (_, res) => res.json({ ok: true }));
+// ============================================================
+// HEALTH
+// ============================================================
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true });
+});
 
-// ================= START =================
-migrate().then(() => {
-  app.listen(PORT, () =>
-    console.log("🚀 Server läuft auf Port", PORT)
+// ============================================================
+// TIME TRACKING
+// ============================================================
+app.post("/api/time/start", async (req, res) => {
+  const { employee_id } = req.body;
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+
+  await pool.query(
+    `INSERT INTO time_entries (employee_id, work_date, start_time)
+     VALUES ($1,$2,$3)`,
+    [employee_id, today, now]
   );
+
+  res.json({ ok: true, message: "Arbeitsbeginn erfasst" });
+});
+
+app.post("/api/time/break", async (req, res) => {
+  const { employee_id, minutes } = req.body;
+  const today = new Date().toISOString().slice(0, 10);
+
+  await pool.query(
+    `UPDATE time_entries
+     SET break_minutes = break_minutes + $1
+     WHERE employee_id=$2 AND work_date=$3`,
+    [minutes, employee_id, today]
+  );
+
+  res.json({ ok: true });
+});
+
+app.post("/api/time/end", async (req, res) => {
+  const { employee_id, testMinutes } = req.body;
+
+  const realNow = new Date();
+  const now = testMinutes
+    ? new Date(realNow.getTime() + testMinutes * 60000)
+    : realNow;
+
+  const today = now.toISOString().slice(0, 10);
+
+  const r = await pool.query(
+    `SELECT * FROM time_entries
+     WHERE employee_id=$1 AND work_date=$2
+     ORDER BY id DESC LIMIT 1`,
+    [employee_id, today]
+  );
+
+  if (!r.rows.length) {
+    return res.status(400).json({ ok: false });
+  }
+
+  const entry = r.rows[0];
+  const worked =
+    (now - new Date(entry.start_time)) / 1000 / 60 / 60;
+
+  const autoBreak = worked >= 6 ? 30 : 0;
+  const total = Math.max(
+    0,
+    worked - (entry.break_minutes + autoBreak) / 60
+  );
+
+  const emp = await pool.query(
+    "SELECT daily_hours FROM employees WHERE employee_id=$1",
+    [employee_id]
+  );
+
+  const daily = Number(emp.rows[0]?.daily_hours || 8);
+  const overtime = Math.max(0, total - daily);
+
+  await pool.query(
+    `UPDATE time_entries
+     SET end_time=$1,
+         auto_break_minutes=$2,
+         total_hours=$3,
+         overtime_hours=$4
+     WHERE id=$5`,
+    [now, autoBreak, total, overtime, entry.id]
+  );
+
+  res.json({
+    ok: true,
+    totalHours: total.toFixed(2),
+    overtimeHours: overtime.toFixed(2)
+  });
+});
+
+// ============================================================
+// PDF TIMESHEET
+// ============================================================
+app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
+  const { employeeId, kw, po } = req.params;
+
+  const emp = await pool.query(
+    "SELECT name FROM employees WHERE employee_id=$1",
+    [employeeId]
+  );
+  if (!emp.rows.length) return res.sendStatus(404);
+
+  const entries = await pool.query(
+    `SELECT work_date, total_hours, overtime_hours
+     FROM time_entries
+     WHERE employee_id=$1
+     ORDER BY work_date`,
+    [employeeId]
+  );
+
+  const doc = new PDFDocument({ margin: 40 });
+  res.setHeader("Content-Type", "application/pdf");
+  doc.pipe(res);
+
+  // LOGO
+  if (fs.existsSync(LOGO_PATH)) {
+    doc.image(LOGO_PATH, 40, 30, { width: 120 });
+    doc.moveDown(3);
+  }
+
+  doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
+  doc.moveDown();
+  doc.fontSize(10);
+  doc.text(`Mitarbeiter: ${emp.rows[0].name}`);
+  doc.text(`KW: ${kw}`);
+  doc.text(`PO: ${po}`);
+  doc.moveDown();
+
+  doc.font("Helvetica-Bold");
+  doc.text("Datum", 40);
+  doc.text("Arbeitszeit", 200);
+  doc.text("Überstunden", 330);
+  doc.moveDown(0.3);
+  doc.moveTo(40, doc.y).lineTo(550, doc.y).stroke();
+  doc.font("Helvetica");
+
+  let sum = 0;
+  let ot = 0;
+
+  entries.rows.forEach(e => {
+    sum += Number(e.total_hours || 0);
+    ot += Number(e.overtime_hours || 0);
+    doc.text(new Date(e.work_date).toLocaleDateString("de-DE"), 40);
+    doc.text((e.total_hours || 0) + " Std", 200);
+    doc.text((e.overtime_hours || 0) + " Std", 330);
+    doc.moveDown();
+  });
+
+  doc.moveDown();
+  doc.font("Helvetica-Bold");
+  doc.text("Gesamt:", 200);
+  doc.text(sum.toFixed(2) + " Std", 330);
+  doc.text("Überstunden:", 200);
+  doc.text(ot.toFixed(2) + " Std", 330);
+
+  doc.moveDown(3);
+  doc.text("Unterschrift Mitarbeiter: ____________________________");
+  doc.moveDown(2);
+  doc.text("Unterschrift Kunde: _________________________________");
+
+  doc.end();
+});
+
+// ============================================================
+// START
+// ============================================================
+migrate().then(() => {
+  app.listen(PORT, () => {
+    console.log("🚀 Server läuft auf Port", PORT);
+  });
 });
