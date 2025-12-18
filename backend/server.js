@@ -1,10 +1,9 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (B4)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (B5 IST-ZEITEN)
 // ============================================================
 
 const express = require("express");
 const path = require("path");
-const XLSX = require("xlsx");
 const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
 const { Pool } = require("pg");
@@ -13,7 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // ================= MIDDLEWARE =================
-app.use(express.json({ limit: "25mb" }));
+app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
 // ================= DATABASE =================
@@ -38,137 +37,170 @@ async function initDb() {
   `);
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS staff_plan (
+    CREATE TABLE IF NOT EXISTS time_entries (
       id SERIAL PRIMARY KEY,
-      calendar_week TEXT,
-      employee_name TEXT,
-      po_number TEXT
+      employee_id TEXT,
+      work_date DATE,
+      start_time TIMESTAMP,
+      end_time TIMESTAMP,
+      break_minutes INT DEFAULT 0,
+      auto_break_minutes INT DEFAULT 0,
+      total_hours NUMERIC(5,2)
     );
   `);
 }
 
 // ================= HELPERS =================
-function autoEmployeeId(name) {
-  return (
-    "AUTO_" +
-    crypto.createHash("md5").update(String(name)).digest("hex").slice(0, 8)
-  );
-}
-
-function getWeekDates(kw) {
-  const year = new Date().getFullYear();
-  const week = parseInt(kw.replace("CW", ""), 10);
-  const simple = new Date(year, 0, 1 + (week - 1) * 7);
-  const dow = simple.getDay();
-  const monday = new Date(simple);
-
-  if (dow <= 4) monday.setDate(simple.getDate() - simple.getDay() + 1);
-  else monday.setDate(simple.getDate() + 8 - simple.getDay());
-
-  return Array.from({ length: 5 }).map((_, i) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
-    return d;
-  });
+function calculateHours(start, end, breaks, autoBreak) {
+  const diffMs = end - start;
+  const diffHours = diffMs / 1000 / 60 / 60;
+  const totalBreak = (breaks + autoBreak) / 60;
+  return Math.max(0, diffHours - totalBreak);
 }
 
 // ================= ROUTES =================
-app.get("/api/health", async (_, res) => {
-  await pool.query("SELECT 1");
-  res.json({ ok: true });
-});
 
+// ---- HEALTH ----
+app.get("/api/health", (_, res) => res.json({ ok: true }));
+
+// ---- EMPLOYEES ----
 app.get("/api/employees", async (_, res) => {
-  const r = await pool.query(
-    "SELECT employee_id, name, email, language FROM employees ORDER BY name"
-  );
+  const r = await pool.query("SELECT * FROM employees ORDER BY name");
   res.json(r.rows);
 });
 
-// ================= PDF TIMESHEET (B4) =================
+// ================= ZEITERFASSUNG =================
+
+// Arbeitsbeginn
+app.post("/api/time/start", async (req, res) => {
+  const { employee_id } = req.body;
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+
+  await pool.query(
+    `
+    INSERT INTO time_entries (employee_id, work_date, start_time)
+    VALUES ($1,$2,$3)
+    `,
+    [employee_id, today, now]
+  );
+
+  res.json({ ok: true, message: "Arbeitsbeginn erfasst" });
+});
+
+// Raucherpause
+app.post("/api/time/break", async (req, res) => {
+  const { employee_id, minutes } = req.body;
+  const today = new Date().toISOString().slice(0, 10);
+
+  await pool.query(
+    `
+    UPDATE time_entries
+    SET break_minutes = break_minutes + $1
+    WHERE employee_id=$2 AND work_date=$3
+    `,
+    [minutes, employee_id, today]
+  );
+
+  res.json({ ok: true, message: "Pause erfasst" });
+});
+
+// Arbeitsende
+app.post("/api/time/end", async (req, res) => {
+  const { employee_id } = req.body;
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+
+  const r = await pool.query(
+    `
+    SELECT * FROM time_entries
+    WHERE employee_id=$1 AND work_date=$2
+    `,
+    [employee_id, today]
+  );
+
+  if (!r.rows.length) {
+    return res.status(400).json({ ok: false, error: "Kein Start gefunden" });
+  }
+
+  const entry = r.rows[0];
+  const start = new Date(entry.start_time);
+
+  // gesetzliche Pause: 30 Min ab 6 Std
+  const workedHours = (now - start) / 1000 / 60 / 60;
+  const autoBreak = workedHours >= 6 ? 30 : 0;
+
+  const totalHours = calculateHours(
+    start,
+    now,
+    entry.break_minutes,
+    autoBreak
+  );
+
+  await pool.query(
+    `
+    UPDATE time_entries
+    SET end_time=$1,
+        auto_break_minutes=$2,
+        total_hours=$3
+    WHERE id=$4
+    `,
+    [now, autoBreak, totalHours, entry.id]
+  );
+
+  res.json({ ok: true, totalHours });
+});
+
+// ================= PDF (JETZT MIT IST-ZEITEN) =================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   const { employeeId, kw, po } = req.params;
 
-  const allowedActivities = [
-    "Montage",
-    "Reisezeit",
-    "Inbetriebnahme",
-    "E-Installation"
-  ];
-
-  let activity = req.query.activity || "Montage";
-  if (!allowedActivities.includes(activity)) {
-    activity = "Montage";
-  }
-
-  const empRes = await pool.query(
+  const emp = await pool.query(
     "SELECT name FROM employees WHERE employee_id=$1",
     [employeeId]
   );
+  if (!emp.rows.length) return res.status(404).send("Mitarbeiter nicht gefunden");
 
-  if (!empRes.rows.length) {
-    return res.status(404).send("Mitarbeiter nicht gefunden");
-  }
+  const employeeName = emp.rows[0].name;
 
-  const employeeName = empRes.rows[0].name;
-  const days = getWeekDates(kw);
+  const entries = await pool.query(
+    `
+    SELECT work_date, total_hours
+    FROM time_entries
+    WHERE employee_id=$1
+    ORDER BY work_date
+    `,
+    [employeeId]
+  );
 
   const doc = new PDFDocument({ margin: 40 });
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader(
-    "Content-Disposition",
-    `inline; filename=Stundennachweis_${employeeName}_${kw}_${po}.pdf`
-  );
   doc.pipe(res);
 
-  // ===== HEADER =====
   doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
   doc.moveDown();
-
-  doc.fontSize(10);
   doc.text(`Name: ${employeeName}`);
   doc.text(`Kalenderwoche: ${kw}`);
-  doc.text(`PO / Auftragsnummer: ${po}`);
+  doc.text(`PO: ${po}`);
   doc.moveDown();
 
-  // ===== TABLE HEADER =====
-  doc.font("Helvetica-Bold");
-  doc.text("Datum", 40);
-  doc.text("Tätigkeit", 150);
-  doc.text("Arbeitsstunden", 450, undefined, { align: "right" });
-  doc.moveDown(0.5);
-  doc.font("Helvetica");
-
-  let total = 0;
-
-  days.forEach(d => {
-    const hours = 8.0;
-    total += hours;
-
-    doc.text(d.toLocaleDateString("de-DE"), 40);
-    doc.text(activity, 150);
-    doc.text(hours.toFixed(2), 450, undefined, { align: "right" });
+  let sum = 0;
+  entries.rows.forEach(e => {
+    sum += Number(e.total_hours || 0);
+    doc.text(
+      `${new Date(e.work_date).toLocaleDateString("de-DE")}  ${Number(
+        e.total_hours
+      ).toFixed(2)} Std`
+    );
   });
 
   doc.moveDown();
-  doc.font("Helvetica-Bold");
-  doc.text("Gesamtstunden:", 150);
-  doc.text(total.toFixed(2), 450, undefined, { align: "right" });
-  doc.font("Helvetica");
-
-  doc.moveDown(3);
-  doc.text("Ort / Datum: ________________________________");
-  doc.moveDown(2);
-  doc.text("Unterschrift Mitarbeiter: ________________________________");
-  doc.moveDown(2);
-  doc.text("Unterschrift Kunde: ________________________________");
+  doc.text(`Gesamtstunden: ${sum.toFixed(2)}`);
 
   doc.end();
 });
 
 // ================= START =================
 initDb().then(() => {
-  app.listen(PORT, () => {
-    console.log("Server läuft auf Port", PORT);
-  });
+  app.listen(PORT, () => console.log("Server läuft auf Port", PORT));
 });
