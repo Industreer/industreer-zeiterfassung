@@ -228,5 +228,85 @@ app.post("/api/import/staffplan", async (req, res) => {
 
 // ---------- Start ----------
 initDb().then(() => {
-  app.listen(PORT, () => console.log("Server läuft auf Port", PORT));
+  // ================= PDF TIMESHEET =================
+const PDFDocument = require("pdfkit");
+
+app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
+  const { employeeId, kw, po } = req.params;
+
+  // Mitarbeiter laden
+  const empRes = await pool.query(
+    "SELECT name FROM employees WHERE employee_id = $1",
+    [employeeId]
+  );
+
+  if (!empRes.rows.length) {
+    return res.status(404).send("Mitarbeiter nicht gefunden");
+  }
+
+  const employeeName = empRes.rows[0].name;
+
+  // Staffplan-Tage laden (nur Struktur, noch keine IST-Zeiten)
+  const planRes = await pool.query(
+    `
+    SELECT DISTINCT work_date
+    FROM staff_plan
+    WHERE calendar_week = $1
+      AND po_number = $2
+      AND employee_name = $3
+    ORDER BY work_date
+    `,
+    [kw, po, employeeName]
+  );
+
+  // PDF vorbereiten
+  const doc = new PDFDocument({ margin: 40 });
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename=Stundennachweis_${employeeName}_${kw}_${po}.pdf`
+  );
+
+  doc.pipe(res);
+
+  // ====== HEADER ======
+  doc.fontSize(18).text("Stundennachweis", { align: "center" });
+  doc.moveDown();
+
+  doc.fontSize(12);
+  doc.text(`Mitarbeiter: ${employeeName}`);
+  doc.text(`Kalenderwoche: ${kw}`);
+  doc.text(`PO: ${po}`);
+  doc.moveDown(2);
+
+  // ====== TABLE HEADER ======
+  doc.fontSize(11).text("Datum", 50, doc.y, { continued: true });
+  doc.text("Arbeitsstunden", 200);
+  doc.moveDown();
+
+  let total = 0;
+
+  // ====== TABLE ROWS ======
+  planRes.rows.forEach(r => {
+    const hours = 8.0; // TESTWERT
+    total += hours;
+
+    const d = new Date(r.work_date);
+    const dateStr = d.toLocaleDateString("de-DE");
+
+    doc.text(dateStr, 50, doc.y, { continued: true });
+    doc.text(hours.toFixed(2), 200);
+  });
+
+  doc.moveDown();
+  doc.text(`Gesamtstunden: ${total.toFixed(2)}`, { bold: true });
+
+  doc.moveDown(4);
+  doc.text("Unterschrift Mitarbeiter: __________________________");
+  doc.moveDown(2);
+  doc.text("Unterschrift Kunde: ______________________________");
+
+  doc.end();
+});
+app.listen(PORT, () => console.log("Server läuft auf Port", PORT));
 });
