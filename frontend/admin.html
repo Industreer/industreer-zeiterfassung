@@ -1,232 +1,70 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>Admin – Zeiterfassung</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body{font-family:Arial,sans-serif;background:#f4f6f8;padding:20px}
-    .box{background:#fff;padding:20px;border-radius:10px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
-    label{display:block;margin-top:10px;font-weight:700}
-    input,select{width:100%;padding:10px;margin-top:6px}
-    input[readonly]{background:#eee}
-    button{margin-top:12px;padding:10px 14px;border:0;border-radius:6px;cursor:pointer;background:#1565c0;color:#fff}
-    button.secondary{background:#555}
-    button.danger{background:#c62828}
-    table{width:100%;border-collapse:collapse;margin-top:12px}
-    th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left}
-    th{background:#eee}
-    tr:hover{background:#f1f1f1;cursor:pointer}
-    pre{background:#eee;padding:10px;border-radius:8px;white-space:pre-wrap}
-    .hint{font-size:12px;color:#666;margin-top:6px}
+    body { font-family: Arial, sans-serif; background:#f4f6f8; padding:20px; }
+    .box {
+      background:#fff;
+      padding:20px;
+      border-radius:10px;
+      max-width:600px;
+      margin:auto;
+      box-shadow:0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 { margin-top:0; }
+    button {
+      padding:10px;
+      font-size:16px;
+      border:none;
+      border-radius:6px;
+      background:#1565c0;
+      color:#fff;
+      cursor:pointer;
+    }
+    input { margin-top:10px; }
+    .msg { margin-top:10px; color:green; }
+    img { max-width:200px; margin-bottom:15px; }
   </style>
 </head>
 <body>
 
-  <h1>Admin</h1>
+<div class="box">
+  <h1>Admin-Bereich</h1>
 
-  <div class="box">
-    <h2>Staffplan</h2>
-    <label>Excel-Datei (Staffplan)</label>
-    <input type="file" id="staffplanFile" accept=".xlsx,.xls"/>
-    <button onclick="importStaffplan()">Staffplan importieren</button>
-    <button class="danger" onclick="clearStaffplan()">Staffplan löschen</button>
-    <pre id="staffplanStatus"></pre>
-  </div>
+  <h3>Firmenlogo</h3>
 
-  <div class="box">
-    <h2>Mitarbeiter bearbeiten</h2>
+  <img src="/assets/logo.png" onerror="this.style.display='none'">
 
-    <label>Mitarbeiter-ID</label>
-    <input id="employee_id" />
-    <div id="idHint" class="hint"></div>
+  <input type="file" id="logoFile" accept="image/*">
+  <br><br>
+  <button onclick="uploadLogo()">Logo hochladen</button>
 
-    <label>Name</label>
-    <input id="name" />
-
-    <label>E-Mail</label>
-    <input id="email" placeholder="name@firma.de"/>
-
-    <label>Sprache</label>
-    <select id="language">
-      <option value="de">Deutsch</option>
-      <option value="en">Englisch</option>
-      <option value="sk">Slowakisch</option>
-      <option value="hr">Kroatisch</option>
-      <option value="ru">Russisch</option>
-      <option value="tr">Türkisch</option>
-    </select>
-
-    <button onclick="saveEmployee()">Speichern</button>
-    <button class="secondary" onclick="startIdChange()">ID offiziell ändern</button>
-
-    <pre id="employeeStatus"></pre>
-  </div>
-
-  <div class="box">
-    <h2>Alle Mitarbeiter</h2>
-    <div class="hint">Klick auf einen Mitarbeiter lädt ihn ins Formular.</div>
-    <table>
-      <thead><tr><th>ID</th><th>Name</th><th>E-Mail</th><th>Sprache</th></tr></thead>
-      <tbody id="empTable"></tbody>
-    </table>
-  </div>
+  <div class="msg" id="msg"></div>
+</div>
 
 <script>
-  let selected = null;
-  let idChangeMode = false;
+async function uploadLogo() {
+  const file = document.getElementById("logoFile").files[0];
+  if (!file) return alert("Bitte Logo auswählen");
 
-  function el(id){ return document.getElementById(id); }
+  const fd = new FormData();
+  fd.append("logo", file);
 
-  async function fetchJson(url, options){
-    const res = await fetch(url, { cache: "no-store", ...options });
-    const text = await res.text();
-    try { return { ok: res.ok, status: res.status, json: JSON.parse(text), raw: text }; }
-    catch { return { ok: res.ok, status: res.status, json: null, raw: text }; }
+  const r = await fetch("/api/admin/logo", {
+    method: "POST",
+    body: fd
+  });
+
+  if (r.ok) {
+    document.getElementById("msg").textContent = "Logo erfolgreich hochgeladen";
+    setTimeout(() => location.reload(), 1000);
+  } else {
+    alert("Fehler beim Upload");
   }
-
-  async function loadEmployees(){
-    const r = await fetchJson("/api/employees");
-    if(!r.ok || !r.json){
-      el("employeeStatus").textContent = "Fehler beim Laden:\n" + r.raw;
-      return;
-    }
-    const tbody = el("empTable");
-    tbody.innerHTML = "";
-    r.json.forEach(e => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${e.employee_id}</td>
-        <td>${e.name}</td>
-        <td>${e.email || ""}</td>
-        <td>${e.language || "de"}</td>
-      `;
-      tr.onclick = () => fillForm(e);
-      tbody.appendChild(tr);
-    });
-  }
-
-  function fillForm(e){
-    selected = e;
-    idChangeMode = false;
-
-    el("employee_id").value = e.employee_id;
-    el("name").value = e.name;
-    el("email").value = e.email || "";
-    el("language").value = e.language || "de";
-
-    if(String(e.employee_id).startsWith("AUTO_")){
-      el("employee_id").readOnly = true;
-      el("idHint").textContent = "AUTO-Mitarbeiter: ID gesperrt (über „ID offiziell ändern“ möglich).";
-    } else {
-      el("employee_id").readOnly = false;
-      el("idHint").textContent = "";
-    }
-
-    el("employeeStatus").textContent = "";
-  }
-
-  async function saveEmployee(){
-    if(!selected){
-      el("employeeStatus").textContent = "Bitte zuerst einen Mitarbeiter aus der Liste auswählen.";
-      return;
-    }
-
-    const newId = el("employee_id").value.trim();
-    const payload = {
-      employee_id: newId,
-      name: el("name").value.trim(),
-      email: el("email").value.trim() || null,
-      language: el("language").value
-    };
-
-    if(!payload.employee_id || !payload.name){
-      el("employeeStatus").textContent = "ID und Name sind Pflicht.";
-      return;
-    }
-
-    // Wenn ID-Change aktiviert: erst ID ändern, dann Felder updaten
-    if(idChangeMode){
-      const change = await fetchJson("/api/employees/change-id", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ old_id: selected.employee_id, new_id: newId })
-      });
-      if(!change.ok){
-        el("employeeStatus").textContent = "ID-Änderung fehlgeschlagen:\n" + (change.raw || "");
-        return;
-      }
-      // selected aktualisieren
-      selected.employee_id = newId;
-      idChangeMode = false;
-      el("employee_id").readOnly = false;
-      el("idHint").textContent = "";
-    } else {
-      // ohne ID-Change: bei AUTO bleibt ID readonly und gleich
-      payload.employee_id = selected.employee_id;
-    }
-
-    const r = await fetchJson("/api/employees/update", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    if(!r.ok){
-      el("employeeStatus").textContent = "Speichern fehlgeschlagen:\n" + (r.raw || "");
-      return;
-    }
-
-    el("employeeStatus").textContent = "Gespeichert:\n" + JSON.stringify(r.json, null, 2);
-    await loadEmployees();
-
-    // Formular neu mit aktuellen Daten füllen (aus Response)
-    if(r.json && r.json.employee){
-      fillForm(r.json.employee);
-    }
-  }
-
-  function startIdChange(){
-    if(!selected){
-      alert("Bitte zuerst einen Mitarbeiter auswählen.");
-      return;
-    }
-    if(!String(selected.employee_id).startsWith("AUTO_")){
-      alert("Dieser Mitarbeiter hat bereits eine manuelle ID.");
-      return;
-    }
-    if(confirm("ID wirklich offiziell ändern?")){
-      idChangeMode = true;
-      el("employee_id").readOnly = false;
-      el("idHint").textContent = "⚠️ ID-Änderung aktiv: neue ID eingeben und dann Speichern.";
-    }
-  }
-
-  async function importStaffplan(){
-    const input = el("staffplanFile");
-    if(!input.files.length){ alert("Bitte Excel-Datei auswählen."); return; }
-    const file = input.files[0];
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = reader.result.split(",")[1];
-      const r = await fetchJson("/api/import/staffplan", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ fileBase64: base64 })
-      });
-      el("staffplanStatus").textContent = r.json ? JSON.stringify(r.json, null, 2) : r.raw;
-      await loadEmployees();
-    };
-    reader.readAsDataURL(file);
-  }
-
-  async function clearStaffplan(){
-    if(!confirm("Staffplan wirklich löschen?")) return;
-    const r = await fetchJson("/api/staffplan/clear", { method:"POST" });
-    el("staffplanStatus").textContent = r.json ? JSON.stringify(r.json, null, 2) : r.raw;
-  }
-
-  loadEmployees();
+}
 </script>
 
 </body>
