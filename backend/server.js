@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (B5.5 ÜBERSTUNDEN)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (AUTO-MIGRATION, B5.5)
 // ============================================================
 
 const express = require("express");
@@ -32,15 +32,14 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// ================= INIT DB =================
-async function initDb() {
+// ================= AUTO MIGRATION =================
+async function migrate() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       employee_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT,
-      language TEXT DEFAULT 'de',
-      daily_hours NUMERIC(4,2) DEFAULT 8.0
+      language TEXT DEFAULT 'de'
     );
   `);
 
@@ -53,10 +52,22 @@ async function initDb() {
       end_time TIMESTAMP,
       break_minutes INT DEFAULT 0,
       auto_break_minutes INT DEFAULT 0,
-      total_hours NUMERIC(5,2),
-      overtime_hours NUMERIC(5,2)
+      total_hours NUMERIC(5,2)
     );
   `);
+
+  // 🔽 SAFE COLUMN ADDS
+  await pool.query(`
+    ALTER TABLE employees
+    ADD COLUMN IF NOT EXISTS daily_hours NUMERIC(4,2) DEFAULT 8.0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE time_entries
+    ADD COLUMN IF NOT EXISTS overtime_hours NUMERIC(5,2) DEFAULT 0;
+  `);
+
+  console.log("✅ DB migration completed");
 }
 
 // ================= HELPERS =================
@@ -78,8 +89,6 @@ app.get("/api/employees", async (_, res) => {
 });
 
 // ================= ZEITERFASSUNG =================
-
-// START
 app.post("/api/time/start", async (req, res) => {
   const { employee_id } = req.body;
   const now = new Date();
@@ -94,7 +103,6 @@ app.post("/api/time/start", async (req, res) => {
   res.json({ ok: true });
 });
 
-// PAUSE
 app.post("/api/time/break", async (req, res) => {
   const { employee_id, minutes } = req.body;
   const today = new Date().toISOString().slice(0, 10);
@@ -109,10 +117,13 @@ app.post("/api/time/break", async (req, res) => {
   res.json({ ok: true });
 });
 
-// ENDE + ÜBERSTUNDEN
 app.post("/api/time/end", async (req, res) => {
-  const { employee_id } = req.body;
-  const now = new Date();
+  const { employee_id, testMinutes } = req.body;
+  const realNow = new Date();
+  const now = testMinutes
+    ? new Date(realNow.getTime() + testMinutes * 60000)
+    : realNow;
+
   const today = now.toISOString().slice(0, 10);
 
   const entryRes = await pool.query(
@@ -203,6 +214,8 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
 });
 
 // ================= START =================
-initDb().then(() => {
-  app.listen(PORT, () => console.log("Server läuft auf Port", PORT));
+migrate().then(() => {
+  app.listen(PORT, () =>
+    console.log("🚀 Server läuft auf Port", PORT)
+  );
 });
