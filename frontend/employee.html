@@ -24,152 +24,150 @@
       width: 100%;
       padding: 10px;
       margin-top: 8px;
+      font-size: 16px;
     }
     button {
-      background: #1565c0;
-      color: #fff;
       border: none;
       border-radius: 6px;
       cursor: pointer;
     }
+    .start { background:#2e7d32; color:#fff; }
+    .break { background:#f9a825; color:#000; }
+    .end { background:#c62828; color:#fff; }
+    .pdf { background:#1565c0; color:#fff; }
     .msg {
       margin-top: 15px;
-      font-size: 14px;
+      font-size: 15px;
+      min-height: 22px;
     }
     .ok { color: green; }
     .err { color: red; }
+    .status {
+      background:#eef;
+      padding:10px;
+      border-radius:6px;
+      margin-top:15px;
+      font-size:14px;
+    }
   </style>
 </head>
 <body>
 
 <div class="box">
-  <h1 id="title">Zeiterfassung</h1>
+  <h1>Zeiterfassung</h1>
 
+  <!-- LOGIN -->
   <div id="loginBox">
-    <label id="lblId">Mitarbeiter-ID</label>
+    <label>Mitarbeiter-ID</label>
     <input id="employeeId" placeholder="ID eingeben">
-    <button onclick="login()" id="btnLogin">Anmelden</button>
+    <button class="start" onclick="login()">Anmelden</button>
   </div>
 
+  <!-- MAIN -->
   <div id="mainBox" style="display:none">
-    <p id="welcome"></p>
+    <div class="status" id="liveStatus">Nicht eingestempelt</div>
 
-    <button onclick="printLastWeek()" id="btnLastWeek"></button>
-    <button onclick="chooseWeek()" id="btnChooseWeek"></button>
+    <button class="start" onclick="startWork()">🟢 Arbeitsbeginn</button>
 
-    <div class="msg" id="status"></div>
+    <label>Raucherpause (Minuten)</label>
+    <input id="breakMinutes" type="number" min="1" max="120" value="10">
+    <button class="break" onclick="addBreak()">🚬 Pause erfassen</button>
+
+    <button class="end" onclick="endWork()">🔴 Arbeitsende</button>
+
+    <hr>
+
+    <button class="pdf" onclick="printLastWeek()">📄 Stundenzettel letzte Woche</button>
+    <button class="pdf" onclick="printChooseWeek()">📄 Stundenzettel für KW wählen</button>
+
+    <div class="msg" id="statusMsg"></div>
   </div>
 </div>
 
 <script>
-/* ================= TRANSLATIONS ================= */
-const I18N = {
-  de: {
-    title: "Zeiterfassung",
-    employeeId: "Mitarbeiter-ID",
-    login: "Anmelden",
-    welcome: "Willkommen",
-    lastWeek: "Stundenzettel letzte Woche drucken",
-    chooseWeek: "Stundenzettel für KW wählen",
-    loginError: "Mitarbeiter nicht gefunden"
-  },
-  en: {
-    title: "Time Tracking",
-    employeeId: "Employee ID",
-    login: "Login",
-    welcome: "Welcome",
-    lastWeek: "Print last week's timesheet",
-    chooseWeek: "Choose calendar week",
-    loginError: "Employee not found"
-  },
-  sk: {
-    title: "Evidencia času",
-    employeeId: "ID zamestnanca",
-    login: "Prihlásiť",
-    welcome: "Vitajte",
-    lastWeek: "Vytlačiť výkaz za minulý týždeň",
-    chooseWeek: "Vybrať kalendárny týždeň",
-    loginError: "Zamestnanec nenájdený"
-  },
-  hr: {
-    title: "Evidencija vremena",
-    employeeId: "ID zaposlenika",
-    login: "Prijava",
-    welcome: "Dobrodošli",
-    lastWeek: "Ispis prošlog tjedna",
-    chooseWeek: "Odaberi tjedan",
-    loginError: "Zaposlenik nije pronađen"
-  },
-  ru: {
-    title: "Учёт времени",
-    employeeId: "ID сотрудника",
-    login: "Войти",
-    welcome: "Добро пожаловать",
-    lastWeek: "Печать за прошлую неделю",
-    chooseWeek: "Выбрать неделю",
-    loginError: "Сотрудник не найден"
-  },
-  tr: {
-    title: "Zaman Takibi",
-    employeeId: "Çalışan ID",
-    login: "Giriş",
-    welcome: "Hoş geldiniz",
-    lastWeek: "Geçen haftanın dökümünü yazdır",
-    chooseWeek: "Hafta seç",
-    loginError: "Çalışan bulunamadı"
-  }
-};
+let EMPLOYEE_ID = null;
+let startTime = null;
 
-let LANG = "de";
-let EMPLOYEE = null;
-
-function t(key) {
-  return (I18N[LANG] && I18N[LANG][key]) || key;
-}
-
-function applyLang() {
-  document.getElementById("title").textContent = t("title");
-  document.getElementById("lblId").textContent = t("employeeId");
-  document.getElementById("btnLogin").textContent = t("login");
-  document.getElementById("btnLastWeek").textContent = t("lastWeek");
-  document.getElementById("btnChooseWeek").textContent = t("chooseWeek");
-}
-
-/* ================= LOGIN ================= */
-async function login() {
+function login() {
   const id = document.getElementById("employeeId").value.trim();
   if (!id) return;
 
-  const res = await fetch("/api/employees");
-  const employees = await res.json();
-
-  const emp = employees.find(e => e.employee_id === id);
-  if (!emp) {
-    document.getElementById("status").textContent = t("loginError");
-    document.getElementById("status").className = "msg err";
-    return;
-  }
-
-  EMPLOYEE = emp;
-  LANG = emp.language || "de";
-  applyLang();
-
+  EMPLOYEE_ID = id;
   document.getElementById("loginBox").style.display = "none";
   document.getElementById("mainBox").style.display = "block";
-  document.getElementById("welcome").textContent =
-    `${t("welcome")}, ${emp.name}`;
+  setStatus("Angemeldet als " + id, true);
 }
 
-/* ================= ACTIONS ================= */
+function setStatus(text, ok=true) {
+  const el = document.getElementById("statusMsg");
+  el.textContent = text;
+  el.className = "msg " + (ok ? "ok" : "err");
+}
+
+function setLive(text) {
+  document.getElementById("liveStatus").textContent = text;
+}
+
+async function startWork() {
+  const r = await fetch("/api/time/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ employee_id: EMPLOYEE_ID })
+  });
+  const j = await r.json();
+  if (j.ok) {
+    startTime = new Date();
+    setLive("🕒 Arbeitszeit läuft seit " + startTime.toLocaleTimeString("de-DE"));
+    setStatus(j.message, true);
+  } else {
+    setStatus("Fehler beim Arbeitsbeginn", false);
+  }
+}
+
+async function addBreak() {
+  const minutes = Number(document.getElementById("breakMinutes").value || 0);
+  if (minutes <= 0) return;
+
+  const r = await fetch("/api/time/break", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ employee_id: EMPLOYEE_ID, minutes })
+  });
+  const j = await r.json();
+  if (j.ok) {
+    setLive("🚬 Pause erfasst (" + minutes + " Min)");
+    setStatus(j.message, true);
+  } else {
+    setStatus("Fehler bei Pause", false);
+  }
+}
+
+async function endWork() {
+  const r = await fetch("/api/time/end", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ employee_id: EMPLOYEE_ID })
+  });
+  const j = await r.json();
+  if (j.ok) {
+    setLive("🔴 Arbeitsende – Heute: " + j.totalHours.toFixed(2) + " Std");
+    setStatus("Arbeitszeit abgeschlossen", true);
+  } else {
+    setStatus(j.error || "Fehler beim Arbeitsende", false);
+  }
+}
+
 function printLastWeek() {
-  alert("PDF letzte Woche – kommt im nächsten Schritt 😉");
+  const kw = prompt("Kalenderwoche (z. B. CW49):");
+  if (!kw) return;
+  window.open(`/api/pdf/timesheet/${EMPLOYEE_ID}/${kw}/PO123`, "_blank");
 }
 
-function chooseWeek() {
-  alert("KW-Auswahl – kommt im nächsten Schritt 😉");
+function printChooseWeek() {
+  const kw = prompt("Kalenderwoche eingeben (z. B. CW49):");
+  if (!kw) return;
+  window.open(`/api/pdf/timesheet/${EMPLOYEE_ID}/${kw}/PO123`, "_blank");
 }
-
-applyLang();
 </script>
 
 </body>
