@@ -1,19 +1,16 @@
 {
   "name": "industreer-zeiterfassung-backend",
   "version": "1.0.0",
-  "description": "INDUSTREER Zeiterfassung Backend",
+  "description": "Zeiterfassung Backend",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
-  "engines": {
-    "node": ">=18"
-  },
   "dependencies": {
-    "archiver": "^7.0.1",
     "express": "^4.19.2",
+    "pg": "^8.11.5",
     "pdfkit": "^0.15.0",
-    "pg": "^8.12.0",
-    "xlsx": "^0.18.5"
+    "multer": "^1.4.5-lts.1"
   }
 }
