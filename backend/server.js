@@ -228,13 +228,33 @@ app.post("/api/import/staffplan", async (req, res) => {
 
 // ---------- Start ----------
 initDb().then(() => {
-  // ================= PDF TIMESHEET =================
+ // ================= PDF TIMESHEET =================
 const PDFDocument = require("pdfkit");
+
+function getWeekDates(kw) {
+  // kw z.B. "CW49"
+  const year = new Date().getFullYear();
+  const week = parseInt(kw.replace("CW", ""), 10);
+
+  const simple = new Date(year, 0, 1 + (week - 1) * 7);
+  const dow = simple.getDay();
+  const monday = new Date(simple);
+  if (dow <= 4) {
+    monday.setDate(simple.getDate() - simple.getDay() + 1);
+  } else {
+    monday.setDate(simple.getDate() + 8 - simple.getDay());
+  }
+
+  return Array.from({ length: 5 }).map((_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d;
+  });
+}
 
 app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   const { employeeId, kw, po } = req.params;
 
-  // Mitarbeiter laden
   const empRes = await pool.query(
     "SELECT name FROM employees WHERE employee_id = $1",
     [employeeId]
@@ -246,20 +266,6 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
 
   const employeeName = empRes.rows[0].name;
 
-  // Staffplan-Tage laden (nur Struktur, noch keine IST-Zeiten)
-  const planRes = await pool.query(
-    `
-    SELECT DISTINCT work_date
-    FROM staff_plan
-    WHERE calendar_week = $1
-      AND po_number = $2
-      AND employee_name = $3
-    ORDER BY work_date
-    `,
-    [kw, po, employeeName]
-  );
-
-  // PDF vorbereiten
   const doc = new PDFDocument({ margin: 40 });
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
@@ -269,7 +275,7 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
 
   doc.pipe(res);
 
-  // ====== HEADER ======
+  // ===== HEADER =====
   doc.fontSize(18).text("Stundennachweis", { align: "center" });
   doc.moveDown();
 
@@ -279,27 +285,26 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   doc.text(`PO: ${po}`);
   doc.moveDown(2);
 
-  // ====== TABLE HEADER ======
-  doc.fontSize(11).text("Datum", 50, doc.y, { continued: true });
+  // ===== TABLE HEADER =====
+  doc.fontSize(11);
+  doc.text("Datum", 50, doc.y, { continued: true });
   doc.text("Arbeitsstunden", 200);
   doc.moveDown();
 
+  const days = getWeekDates(kw);
   let total = 0;
 
-  // ====== TABLE ROWS ======
-  planRes.rows.forEach(r => {
-    const hours = 8.0; // TESTWERT
+  days.forEach(d => {
+    const hours = 8.0;
     total += hours;
 
-    const d = new Date(r.work_date);
     const dateStr = d.toLocaleDateString("de-DE");
-
     doc.text(dateStr, 50, doc.y, { continued: true });
     doc.text(hours.toFixed(2), 200);
   });
 
   doc.moveDown();
-  doc.text(`Gesamtstunden: ${total.toFixed(2)}`, { bold: true });
+  doc.fontSize(12).text(`Gesamtstunden: ${total.toFixed(2)}`);
 
   doc.moveDown(4);
   doc.text("Unterschrift Mitarbeiter: __________________________");
@@ -307,6 +312,4 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   doc.text("Unterschrift Kunde: ______________________________");
 
   doc.end();
-});
-app.listen(PORT, () => console.log("Server läuft auf Port", PORT));
 });
