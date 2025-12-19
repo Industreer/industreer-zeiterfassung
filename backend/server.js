@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (FINAL FINAL)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (CENTERED PDF LOGO)
 // ============================================================
 
 const express = require("express");
@@ -69,10 +69,10 @@ async function migrate() {
 }
 
 // ============================================================
-// LOGO UPLOAD (FORMAT SAFE)
+// LOGO STORAGE (FORMAT SAFE)
 // ============================================================
-const LOGO_META = path.join(__dirname, "logo.json");
 const LOGO_FILE = path.join(__dirname, "logo.bin");
+const LOGO_META = path.join(__dirname, "logo.json");
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -107,7 +107,7 @@ app.get("/api/logo", (_, res) => {
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 // ============================================================
-// PDF WITH LOGO (FORMAT SAFE)
+// PDF TIMESHEET (LOGO CENTERED & LARGE)
 // ============================================================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   const emp = await pool.query(
@@ -121,31 +121,46 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
     [req.params.employeeId]
   );
 
-  const doc = new PDFDocument({ margin: 40 });
+  const doc = new PDFDocument({ size: "A4", margin: 40 });
   res.setHeader("Content-Type", "application/pdf");
   doc.pipe(res);
 
-  // ===== LOGO (DER ENTSCHEIDENDE TEIL)
+  // ===== LOGO (ZENTRIERT & GROSS)
   if (fs.existsSync(LOGO_FILE) && fs.existsSync(LOGO_META)) {
     const buffer = fs.readFileSync(LOGO_FILE);
     const meta = JSON.parse(fs.readFileSync(LOGO_META));
     const format = meta.mimetype === "image/png" ? "PNG" : "JPEG";
-    doc.image(buffer, 40, 30, { width: 120, format });
-    doc.moveDown(3);
+
+    const logoWidth = 220;
+    const pageWidth = doc.page.width;
+    const x = (pageWidth - logoWidth) / 2;
+
+    doc.image(buffer, x, 40, { width: logoWidth, format });
+    doc.moveDown(6);
   }
 
-  doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
-  doc.moveDown();
-  doc.fontSize(10);
+  // ===== TITLE
+  doc.fontSize(18).font("Helvetica-Bold")
+     .text("STUNDENNACHWEIS", { align: "center" });
+
+  doc.moveDown(1.5);
+
+  doc.fontSize(10).font("Helvetica");
   doc.text(`Mitarbeiter: ${emp.rows[0].name}`);
-  doc.text(`KW: ${req.params.kw}`);
+  doc.text(`Kalenderwoche: ${req.params.kw}`);
   doc.text(`PO: ${req.params.po}`);
   doc.moveDown();
 
+  doc.font("Helvetica-Bold");
+  doc.text("Datum", 40);
+  doc.text("Arbeitszeit", 200);
+  doc.moveDown(0.3);
+  doc.font("Helvetica");
+
   entries.rows.forEach(e => {
-    doc.text(
-      `${new Date(e.work_date).toLocaleDateString("de-DE")} – ${e.total_hours} Std`
-    );
+    doc.text(new Date(e.work_date).toLocaleDateString("de-DE"), 40);
+    doc.text(`${e.total_hours} Std`, 200);
+    doc.moveDown();
   });
 
   doc.end();
