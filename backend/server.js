@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (PDF LAYOUT NACH MUSTER)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (PDF FEINLAYOUT)
 // ============================================================
 
 const express = require("express");
@@ -16,7 +16,6 @@ const PORT = process.env.PORT || 10000;
 // MIDDLEWARE
 // ============================================================
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
 // ============================================================
@@ -42,47 +41,12 @@ const pool = new Pool({
 });
 
 // ============================================================
-// MIGRATION
-// ============================================================
-async function migrate() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS employees (
-      employee_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT,
-      language TEXT DEFAULT 'de',
-      daily_hours NUMERIC(4,2) DEFAULT 8.0
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS time_entries (
-      id SERIAL PRIMARY KEY,
-      employee_id TEXT,
-      work_date DATE,
-      start_time TIMESTAMP,
-      end_time TIMESTAMP,
-      break_minutes INT DEFAULT 0,
-      total_hours NUMERIC(6,2)
-    );
-  `);
-}
-
-// ============================================================
 // LOGO STORAGE
 // ============================================================
 const LOGO_FILE = path.join(__dirname, "logo.bin");
 const LOGO_META = path.join(__dirname, "logo.json");
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  fileFilter: (_, file, cb) => {
-    if (!["image/png", "image/jpeg"].includes(file.mimetype)) {
-      return cb(new Error("Nur PNG oder JPG erlaubt"));
-    }
-    cb(null, true);
-  }
-});
+const upload = multer({ storage: multer.memoryStorage() });
 
 app.post("/api/admin/logo", upload.single("logo"), (req, res) => {
   fs.writeFileSync(LOGO_FILE, req.file.buffer);
@@ -103,19 +67,22 @@ app.get("/api/logo", (_, res) => {
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 // ============================================================
-// PDF – STUNDENNACHWEIS NACH MUSTER
+// PDF – STUNDENNACHWEIS (KOMPAKT, 1 SEITE)
 // ============================================================
-app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
-  const { employeeId, kw, po } = req.params;
+app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo/:internalPo", async (req, res) => {
+  const { employeeId, kw, customerPo, internalPo } = req.params;
 
-  const empRes = await pool.query(
+  const emp = await pool.query(
     "SELECT name FROM employees WHERE employee_id=$1",
     [employeeId]
   );
-  if (!empRes.rows.length) return res.sendStatus(404);
+  if (!emp.rows.length) return res.sendStatus(404);
 
-  const entriesRes = await pool.query(
-    "SELECT work_date, total_hours FROM time_entries WHERE employee_id=$1 ORDER BY work_date",
+  const entries = await pool.query(
+    `SELECT work_date, total_hours
+     FROM time_entries
+     WHERE employee_id=$1
+     ORDER BY work_date`,
     [employeeId]
   );
 
@@ -123,66 +90,65 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   res.setHeader("Content-Type", "application/pdf");
   doc.pipe(res);
 
-  // ===== LOGO (MITTIG, GROSS)
+  // ===== LOGO (MITTIG)
   if (fs.existsSync(LOGO_FILE)) {
     const buffer = fs.readFileSync(LOGO_FILE);
     const meta = JSON.parse(fs.readFileSync(LOGO_META));
     const format = meta.mimetype === "image/png" ? "PNG" : "JPEG";
-
-    const logoWidth = 220;
-    const x = (doc.page.width - logoWidth) / 2;
-    doc.image(buffer, x, 30, { width: logoWidth, format });
-    doc.moveDown(5);
+    const w = 200;
+    doc.image(buffer, (doc.page.width - w) / 2, 25, { width: w, format });
   }
 
-  // ===== TITEL
-  doc.font("Helvetica-Bold").fontSize(18)
-     .text("STUNDENNACHWEIS", { align: "center" });
-  doc.moveDown(1.5);
+  // ===== HEADER
+  doc.font("Helvetica-Bold").fontSize(16)
+     .text("STUNDENNACHWEIS", 0, 110, { align: "center" });
 
-  // ===== KOPFDATEN
-  doc.font("Helvetica").fontSize(10);
-  doc.text(`Mitarbeiter: ${empRes.rows[0].name}`);
-  doc.text(`Kalenderwoche: ${kw}`);
-  doc.text(`PO: ${po}`);
-  doc.moveDown(1.5);
+  doc.font("Helvetica").fontSize(9);
+  doc.text(`Mitarbeiter: ${emp.rows[0].name}`, 40, 140);
+  doc.text(`Kalenderwoche: ${kw}`, 40, 155);
+  doc.text(`Kunden-PO: ${customerPo}`, 300, 140);
+  doc.text(`Interne PO: ${internalPo}`, 300, 155);
 
-  // ===== TABELLENKOPF
-  const startY = doc.y;
+  // ===== TABELLE
+  let y = 185;
+  const rowH = 14;
+
   doc.font("Helvetica-Bold");
-  doc.text("Datum", 40, startY);
-  doc.text("Tätigkeit", 200, startY);
-  doc.text("Stunden", 450, startY, { width: 80, align: "right" });
+  doc.text("Datum", 40, y);
+  doc.text("Tätigkeit", 200, y);
+  doc.text("Std.", 500, y, { align: "right" });
+  y += rowH;
 
-  doc.moveDown(0.5);
-  doc.moveTo(40, doc.y).lineTo(550, doc.y).stroke();
-  doc.moveDown(0.5);
+  doc.moveTo(40, y).lineTo(550, y).stroke();
+  y += 4;
 
-  // ===== TABELLENINHALT
   doc.font("Helvetica");
   let sum = 0;
 
-  entriesRes.rows.forEach(r => {
+  entries.rows.forEach(r => {
     sum += Number(r.total_hours || 0);
-    doc.text(new Date(r.work_date).toLocaleDateString("de-DE"), 40);
-    doc.text("Arbeitszeit", 200);
-    doc.text(`${r.total_hours} Std`, 450, undefined, { width: 80, align: "right" });
-    doc.moveDown();
+
+    doc.text(new Date(r.work_date).toLocaleDateString("de-DE"), 40, y);
+    doc.text("Arbeitszeit", 200, y);
+    doc.text(r.total_hours.toFixed(2), 500, y, { align: "right" });
+
+    y += rowH;
   });
 
-  doc.moveDown();
+  // ===== SUMME
+  y += 6;
   doc.font("Helvetica-Bold");
-  doc.text("Gesamtstunden:", 350);
-  doc.text(`${sum.toFixed(2)} Std`, 450, undefined, { width: 80, align: "right" });
+  doc.text("Gesamtstunden:", 350, y);
+  doc.text(sum.toFixed(2), 500, y, { align: "right" });
 
   // ===== UNTERSCHRIFTEN
-  doc.moveDown(4);
+  y += 40;
   doc.font("Helvetica");
-  doc.text("Unterschrift Mitarbeiter:", 40);
-  doc.text("______________________________", 40);
-  doc.moveDown(2);
-  doc.text("Unterschrift Kunde:", 40);
-  doc.text("______________________________", 40);
+  doc.text("Unterschrift Mitarbeiter:", 40, y);
+  doc.text("__________________________", 40, y + 12);
+
+  doc.text("Unterschrift Kunde:", 300, y);
+  doc.text("__________________________", 300, y + 12);
 
   doc.end();
 });
@@ -190,8 +156,6 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
 // ============================================================
 // START
 // ============================================================
-migrate().then(() => {
-  app.listen(PORT, () => {
-    console.log("🚀 Server läuft auf Port", PORT);
-  });
+app.listen(PORT, () => {
+  console.log("🚀 Server läuft auf Port", PORT);
 });
