@@ -6,78 +6,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 420px;
-      margin: auto;
-      padding: 20px;
-      background: #f4f6f8;
-    }
-    .box {
-      background: #fff;
-      padding: 20px;
-      border-radius: 12px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-      text-align: center;
-    }
-    img.logo {
-      max-width: 200px;
-      margin-bottom: 10px;
-    }
-    input, textarea, select, button {
-      width: 100%;
-      padding: 12px;
-      margin-top: 10px;
-      font-size: 16px;
-      border-radius: 8px;
-      border: 1px solid #ccc;
-    }
-    textarea {
-      resize: vertical;
-      min-height: 60px;
-    }
-    button {
-      background: #1565c0;
-      color: #fff;
-      border: none;
-      cursor: pointer;
-    }
-    button.secondary {
-      background: #455a64;
-    }
-    button.pause {
-      background: #f57c00;
-    }
-    .timer {
-      font-size: 18px;
-      font-weight: bold;
-      margin-top: 10px;
-    }
-    .status {
-      margin-top: 10px;
-      font-size: 14px;
-    }
-    hr {
-      margin: 20px 0;
-    }
+    body { font-family: Arial, sans-serif; max-width: 420px; margin: auto; padding: 20px; background: #f4f6f8; }
+    .box { background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; }
+    img.logo { max-width: 200px; margin-bottom: 10px; }
+    input, textarea, select, button { width: 100%; padding: 12px; margin-top: 10px; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; }
+    textarea { resize: vertical; min-height: 60px; }
+    button { background: #1565c0; color: #fff; border: none; cursor: pointer; }
+    button.secondary { background: #455a64; }
+    button.pause { background: #f57c00; }
+    .timer { font-size: 18px; font-weight: bold; margin-top: 10px; }
+    .status { margin-top: 10px; font-size: 14px; }
+    hr { margin: 20px 0; }
   </style>
 </head>
 <body>
 
 <div class="box">
-
-  <!-- LOGO -->
   <img src="/api/logo" class="logo" onerror="this.style.display='none'">
 
-  <h2>Willkommen</h2>
+  <h2 id="welcome">Willkommen</h2>
 
-  <!-- MITARBEITER -->
-  <input id="employeeId" placeholder="Mitarbeiter-ID">
+  <input id="employeeId" placeholder="Mitarbeiter-ID" onblur="loadEmployeeName()">
 
-  <!-- ARBEITSBEGINN -->
   <button onclick="startWork()">Arbeitsbeginn</button>
 
-  <!-- TIMER -->
   <div id="timerBox" style="display:none;">
     <div class="timer">
       Start: <span id="startTimeText"></span><br>
@@ -87,7 +39,6 @@
 
   <hr>
 
-  <!-- TÄTIGKEIT AUSWAHL -->
   <select id="activitySelect">
     <option value="Arbeitszeit">Arbeitszeit</option>
     <option value="Montage">Montage</option>
@@ -96,44 +47,76 @@
     <option value="E-Installation">E-Installation</option>
   </select>
 
-  <!-- FREITEXT -->
-  <textarea id="activityText"
-    placeholder="Freier Text zur Tätigkeit (optional)">
-  </textarea>
+  <textarea id="activityText" placeholder="Freier Text zur Tätigkeit (optional)"></textarea>
 
-  <!-- RAUCHERPAUSE -->
   <button class="pause" onclick="startBreak()">Raucherpause starten</button>
   <button class="pause" onclick="endBreak()">Raucherpause beenden</button>
 
-  <!-- ARBEITSENDE -->
   <button onclick="endWork()">Arbeitsende</button>
 
   <hr>
 
-  <!-- PDF -->
-  <button class="secondary" onclick="printLastWeek()">
-    Stundenzettel letzte Woche drucken
-  </button>
-
-  <button class="secondary" onclick="printSelectWeek()">
-    Stundenzettel für KW wählen
-  </button>
+  <button class="secondary" onclick="printLastWeek()">Stundenzettel letzte Woche drucken</button>
+  <button class="secondary" onclick="printSelectWeek()">Stundenzettel für KW wählen</button>
 
   <div class="status" id="status"></div>
 </div>
 
 <script>
-let startTimestamp = null;
 let timerInterval = null;
 let pauseStart = null;
 
-function setStatus(t) {
-  document.getElementById("status").innerText = t;
+function setStatus(t){ document.getElementById("status").innerText = t; }
+
+function lsKey(id){ return `workStart_${id}`; }
+
+async function loadEmployeeName() {
+  const id = employeeId.value.trim();
+  if (!id) return;
+
+  try {
+    const r = await fetch(`/api/employee/${encodeURIComponent(id)}`);
+    if (!r.ok) {
+      welcome.innerText = "Willkommen";
+      return;
+    }
+    const j = await r.json();
+    if (j.ok && j.employee?.name) {
+      welcome.innerText = `Willkommen, ${j.employee.name}`;
+      restoreTimerIfRunning(); // falls schon gestartet
+    }
+  } catch {
+    welcome.innerText = "Willkommen";
+  }
+}
+
+function startTimer(startISO) {
+  const start = new Date(startISO);
+  startTimeText.innerText = start.toLocaleTimeString("de-DE");
+  timerBox.style.display = "block";
+
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    const diff = Math.floor((Date.now() - start.getTime()) / 1000);
+    const h = String(Math.floor(diff / 3600)).padStart(2, "0");
+    const m = String(Math.floor((diff % 3600) / 60)).padStart(2, "0");
+    const s = String(diff % 60).padStart(2, "0");
+    elapsed.innerText = `${h}:${m}:${s}`;
+  }, 1000);
+}
+
+function restoreTimerIfRunning() {
+  const id = employeeId.value.trim();
+  if (!id) return;
+  const stored = localStorage.getItem(lsKey(id));
+  if (stored) startTimer(stored);
 }
 
 async function startWork() {
-  const id = employeeId.value;
+  const id = employeeId.value.trim();
   if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
+
+  await loadEmployeeName();
 
   const r = await fetch("/api/time/start", {
     method: "POST",
@@ -144,20 +127,11 @@ async function startWork() {
   const j = await r.json();
   if (!j.ok) return setStatus("Fehler beim Arbeitsbeginn");
 
-  startTimestamp = new Date();
-  startTimeText.innerText = startTimestamp.toLocaleTimeString("de-DE");
-  timerBox.style.display = "block";
-  timerInterval = setInterval(updateTimer, 1000);
+  // Startzeit speichern (damit Timer nach Reload bleibt)
+  localStorage.setItem(lsKey(id), j.start_time);
+  startTimer(j.start_time);
 
   setStatus("Arbeitsbeginn erfasst");
-}
-
-function updateTimer() {
-  const diff = Math.floor((Date.now() - startTimestamp.getTime()) / 1000);
-  const h = String(Math.floor(diff / 3600)).padStart(2, "0");
-  const m = String(Math.floor((diff % 3600) / 60)).padStart(2, "0");
-  const s = String(diff % 60).padStart(2, "0");
-  elapsed.innerText = `${h}:${m}:${s}`;
 }
 
 function startBreak() {
@@ -166,19 +140,18 @@ function startBreak() {
 }
 
 function endBreak() {
-  if (!pauseStart) return;
+  if (!pauseStart) return setStatus("Keine Raucherpause aktiv");
   const min = (Date.now() - pauseStart.getTime()) / 60000;
   pauseStart = null;
   setStatus(`Raucherpause beendet (${min.toFixed(1)} Min)`);
 }
 
 async function endWork() {
-  const id = employeeId.value;
+  const id = employeeId.value.trim();
+  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
 
   let activity = activityText.value.trim();
-  if (!activity) {
-    activity = activitySelect.value;
-  }
+  if (!activity) activity = activitySelect.value;
 
   const r = await fetch("/api/time/end", {
     method: "POST",
@@ -189,12 +162,15 @@ async function endWork() {
   const j = await r.json();
   if (!j.ok) return setStatus("Fehler beim Arbeitsende");
 
-  clearInterval(timerInterval);
+  // Timer stoppen & löschen
+  localStorage.removeItem(lsKey(id));
+  if (timerInterval) clearInterval(timerInterval);
   timerBox.style.display = "none";
-  setStatus("Arbeitsende erfasst");
+
+  setStatus(`Arbeitsende erfasst (${j.hours || "?"} Std)`);
 }
 
-function getKW(d) {
+function getKW(d){
   d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay()||7));
   const y = new Date(Date.UTC(d.getUTCFullYear(),0,1));
@@ -202,20 +178,34 @@ function getKW(d) {
 }
 
 function printLastWeek() {
-  const id = employeeId.value;
+  const id = employeeId.value.trim();
+  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
   const po = prompt("Kunden-PO:");
-  if (!id || !po) return;
+  if (!po) return;
+
   const d = new Date(); d.setDate(d.getDate() - 7);
-  window.open(`/api/pdf/timesheet/${id}/CW${getKW(d)}/${po}`, "_blank");
+  const kw = "CW" + getKW(d);
+  window.open(`/api/pdf/timesheet/${encodeURIComponent(id)}/${kw}/${encodeURIComponent(po)}`, "_blank");
 }
 
 function printSelectWeek() {
-  const id = employeeId.value;
+  const id = employeeId.value.trim();
+  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
   const kw = prompt("Kalenderwoche (z. B. CW49):");
   const po = prompt("Kunden-PO:");
-  if (!id || !kw || !po) return;
-  window.open(`/api/pdf/timesheet/${id}/${kw}/${po}`, "_blank");
+  if (!kw || !po) return;
+
+  window.open(`/api/pdf/timesheet/${encodeURIComponent(id)}/${encodeURIComponent(kw)}/${encodeURIComponent(po)}`, "_blank");
 }
+
+// beim Laden: wenn ID schon drin ist, Timer wiederherstellen
+window.addEventListener("load", () => {
+  const id = employeeId.value.trim();
+  if (id) {
+    loadEmployeeName();
+    restoreTimerIfRunning();
+  }
+});
 </script>
 
 </body>
