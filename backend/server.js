@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (PDF FEINLAYOUT)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (NUMERIC FIX)
 // ============================================================
 
 const express = require("express");
@@ -67,7 +67,7 @@ app.get("/api/logo", (_, res) => {
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 // ============================================================
-// PDF – STUNDENNACHWEIS (KOMPAKT, 1 SEITE)
+// PDF – STUNDENNACHWEIS (FINAL STABIL)
 // ============================================================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo/:internalPo", async (req, res) => {
   const { employeeId, kw, customerPo, internalPo } = req.params;
@@ -90,7 +90,7 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo/:internalPo", async (req
   res.setHeader("Content-Type", "application/pdf");
   doc.pipe(res);
 
-  // ===== LOGO (MITTIG)
+  // ===== LOGO
   if (fs.existsSync(LOGO_FILE)) {
     const buffer = fs.readFileSync(LOGO_FILE);
     const meta = JSON.parse(fs.readFileSync(LOGO_META));
@@ -126,11 +126,12 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo/:internalPo", async (req
   let sum = 0;
 
   entries.rows.forEach(r => {
-    sum += Number(r.total_hours || 0);
+    const hours = Number(r.total_hours || 0);
+    sum += hours;
 
     doc.text(new Date(r.work_date).toLocaleDateString("de-DE"), 40, y);
     doc.text("Arbeitszeit", 200, y);
-    doc.text(r.total_hours.toFixed(2), 500, y, { align: "right" });
+    doc.text(hours.toFixed(2), 500, y, { align: "right" });
 
     y += rowH;
   });
