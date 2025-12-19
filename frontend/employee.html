@@ -1,195 +1,116 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8">
-  <title>Zeiterfassung – Mitarbeiter</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-
+  <meta charset="UTF-8" />
+  <title>Mitarbeiter – Zeiterfassung</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      background: #f4f6f8;
-      padding: 20px;
-    }
-    .box {
-      background: #fff;
-      padding: 20px;
-      border-radius: 10px;
       max-width: 420px;
-      margin: 40px auto;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      margin: auto;
+      padding: 20px;
       text-align: center;
     }
-    .logo {
-      max-width: 180px;
-      margin-bottom: 15px;
+
+    img.logo {
+      max-width: 200px;
+      margin-bottom: 20px;
     }
-    h1 {
-      margin-top: 0;
-    }
-    label {
-      display: block;
-      margin-top: 10px;
-      font-weight: bold;
-      text-align: left;
-    }
-    input, button {
+
+    select, input, button {
       width: 100%;
       padding: 10px;
-      margin-top: 8px;
+      margin-top: 10px;
       font-size: 16px;
     }
+
     button {
-      border: none;
-      border-radius: 6px;
       cursor: pointer;
-    }
-    .start { background:#2e7d32; color:#fff; }
-    .break { background:#f9a825; color:#000; }
-    .end { background:#c62828; color:#fff; }
-    .pdf { background:#1565c0; color:#fff; }
-    .msg {
-      margin-top: 15px;
-      font-size: 15px;
-      min-height: 22px;
-    }
-    .ok { color: green; }
-    .err { color: red; }
-    .status {
-      background:#eef;
-      padding:10px;
-      border-radius:6px;
-      margin-top:15px;
-      font-size:14px;
-      text-align:left;
     }
   </style>
 </head>
-
 <body>
 
-<div class="box">
-
   <!-- LOGO -->
-  <img
-    src="/api/logo"
-    class="logo"
-    alt="Firmenlogo"
-    onerror="this.style.display='none';"
+  <img src="/api/logo" class="logo" onerror="this.style.display='none'" />
+
+  <h2>Mitarbeiter Zeiterfassung</h2>
+
+  <!-- MITARBEITER-ID -->
+  <input id="employeeId" placeholder="Mitarbeiter-ID" />
+
+  <!-- ARBEITSBEGINN -->
+  <button onclick="startWork()">Arbeitsbeginn</button>
+
+  <hr />
+
+  <!-- TÄTIGKEIT -->
+  <label for="activity">Tätigkeit</label>
+  <select id="activity" onchange="toggleCustomActivity()">
+    <option value="Arbeitszeit">Arbeitszeit</option>
+    <option value="Montage">Montage</option>
+    <option value="Inbetriebnahme">Inbetriebnahme</option>
+    <option value="Reisezeit">Reisezeit</option>
+    <option value="E-Installation">E-Installation</option>
+    <option value="custom">Sonstiges (Text eingeben)</option>
+  </select>
+
+  <!-- FREITEXT -->
+  <input
+    id="customActivity"
+    placeholder="Tätigkeit eingeben"
+    style="display:none"
   />
 
-  <h1>Zeiterfassung</h1>
+  <!-- ARBEITSENDE -->
+  <button onclick="endWork()">Arbeitsende</button>
 
-  <!-- LOGIN -->
-  <div id="loginBox">
-    <label>Mitarbeiter-ID</label>
-    <input id="employeeId" placeholder="ID eingeben" />
-    <button class="start" onclick="login()">Anmelden</button>
-  </div>
+  <script>
+    function toggleCustomActivity() {
+      const sel = document.getElementById("activity");
+      const custom = document.getElementById("customActivity");
+      custom.style.display = sel.value === "custom" ? "block" : "none";
+    }
 
-  <!-- MAIN -->
-  <div id="mainBox" style="display:none">
-    <div class="status" id="liveStatus">Nicht eingestempelt</div>
+    async function startWork() {
+      const id = document.getElementById("employeeId").value;
+      if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
 
-    <button class="start" onclick="startWork()">🟢 Arbeitsbeginn</button>
+      const res = await fetch("/api/time/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employee_id: id })
+      });
 
-    <label>Raucherpause (Minuten)</label>
-    <input id="breakMinutes" type="number" min="1" max="120" value="10" />
-    <button class="break" onclick="addBreak()">🚬 Pause erfassen</button>
+      const json = await res.json();
+      alert(json.ok ? "Arbeitsbeginn erfasst" : "Fehler");
+    }
 
-    <button class="end" onclick="endWork()">🔴 Arbeitsende</button>
+    async function endWork() {
+      const id = document.getElementById("employeeId").value;
+      if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
 
-    <hr />
+      const sel = document.getElementById("activity");
+      let activity =
+        sel.value === "custom"
+          ? document.getElementById("customActivity").value
+          : sel.value;
 
-    <button class="pdf" onclick="printLastWeek()">📄 Stundenzettel letzte Woche</button>
-    <button class="pdf" onclick="printChooseWeek()">📄 Stundenzettel für KW wählen</button>
+      if (!activity) activity = "Arbeitszeit";
 
-    <div class="msg" id="statusMsg"></div>
-  </div>
-</div>
+      const res = await fetch("/api/time/end", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employee_id: id,
+          activity
+        })
+      });
 
-<script>
-let EMPLOYEE_ID = null;
-
-function login() {
-  const id = document.getElementById("employeeId").value.trim();
-  if (!id) return;
-  EMPLOYEE_ID = id;
-  document.getElementById("loginBox").style.display = "none";
-  document.getElementById("mainBox").style.display = "block";
-  setStatus("Angemeldet als " + id, true);
-}
-
-function setStatus(text, ok=true) {
-  const el = document.getElementById("statusMsg");
-  el.textContent = text;
-  el.className = "msg " + (ok ? "ok" : "err");
-}
-
-function setLive(text) {
-  document.getElementById("liveStatus").textContent = text;
-}
-
-async function startWork() {
-  const r = await fetch("/api/time/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ employee_id: EMPLOYEE_ID })
-  });
-  const j = await r.json();
-  if (j.ok) {
-    setLive("🕒 Arbeitszeit läuft");
-    setStatus(j.message, true);
-  } else {
-    setStatus("Fehler beim Arbeitsbeginn", false);
-  }
-}
-
-async function addBreak() {
-  const minutes = Number(document.getElementById("breakMinutes").value || 0);
-  if (minutes <= 0) return;
-
-  const r = await fetch("/api/time/break", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ employee_id: EMPLOYEE_ID, minutes })
-  });
-  const j = await r.json();
-  if (j.ok) {
-    setLive("🚬 Pause erfasst (" + minutes + " Min)");
-    setStatus("Pause gespeichert", true);
-  } else {
-    setStatus("Fehler bei Pause", false);
-  }
-}
-
-async function endWork() {
-  const r = await fetch("/api/time/end", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ employee_id: EMPLOYEE_ID })
-  });
-  const j = await r.json();
-  if (j.ok) {
-    setLive("🔴 Arbeitsende – Heute: " + j.totalHours + " Std");
-    setStatus("Arbeitszeit abgeschlossen", true);
-  } else {
-    setStatus("Fehler beim Arbeitsende", false);
-  }
-}
-
-function printLastWeek() {
-  const kw = prompt("Kalenderwoche (z. B. CW49):");
-  if (!kw) return;
-  window.open(`/api/pdf/timesheet/${EMPLOYEE_ID}/${kw}/PO123`, "_blank");
-}
-
-function printChooseWeek() {
-  const kw = prompt("Kalenderwoche eingeben (z. B. CW49):");
-  if (!kw) return;
-  window.open(`/api/pdf/timesheet/${EMPLOYEE_ID}/${kw}/PO123`, "_blank");
-}
-</script>
+      const json = await res.json();
+      alert(json.ok ? "Arbeitsende erfasst" : "Fehler");
+    }
+  </script>
 
 </body>
 </html>
