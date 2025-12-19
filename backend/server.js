@@ -1,9 +1,6 @@
 // ======================================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (FINAL)
-// - Logo Upload & Anzeige
-// - Staffplan Excel Import (robuste Datumserkennung)
-// - Zeitbuchung
-// - PDF Stundennachweis (Kunde + interne PO im Kopf)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS
+// STAFFPLAN IMPORT (MAXIMAL TOLERANT) + LOGO + PDF
 // ======================================================================
 
 const express = require("express");
@@ -30,7 +27,6 @@ app.use(express.static(path.join(__dirname, "..", "frontend")));
 app.get("/admin", (_, res) =>
   res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"))
 );
-
 app.get("/employee", (_, res) =>
   res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"))
 );
@@ -52,11 +48,21 @@ const pool = new Pool({
 // ======================================================================
 async function migrate() {
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS staffplan (
+      id SERIAL PRIMARY KEY,
+      calendar_week TEXT,
+      employee_name TEXT,
+      work_date DATE,
+      customer_name TEXT,
+      customer_po TEXT,
+      internal_po TEXT
+    );
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       employee_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT,
-      language TEXT DEFAULT 'de'
+      name TEXT NOT NULL
     );
   `);
 
@@ -71,26 +77,14 @@ async function migrate() {
       activity TEXT DEFAULT 'Arbeitszeit'
     );
   `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS staffplan (
-      id SERIAL PRIMARY KEY,
-      calendar_week TEXT,
-      employee_name TEXT,
-      work_date DATE,
-      customer_name TEXT,
-      customer_po TEXT,
-      internal_po TEXT
-    );
-  `);
 }
 
 // ======================================================================
-// UPLOAD SETUP
+// UPLOAD
 // ======================================================================
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }
+  limits: { fileSize: 25 * 1024 * 1024 }
 });
 
 // ======================================================================
@@ -102,19 +96,13 @@ const LOGO_META = path.join(__dirname, "logo.json");
 app.post("/api/admin/logo", upload.single("logo"), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false });
 
-  if (!["image/png", "image/jpeg"].includes(req.file.mimetype)) {
-    return res.status(400).json({ ok: false, error: "Nur PNG oder JPG erlaubt" });
-  }
-
   fs.writeFileSync(LOGO_FILE, req.file.buffer);
   fs.writeFileSync(LOGO_META, JSON.stringify({ mimetype: req.file.mimetype }));
   res.json({ ok: true });
 });
 
 app.get("/api/logo", (_, res) => {
-  if (!fs.existsSync(LOGO_FILE) || !fs.existsSync(LOGO_META)) {
-    return res.sendStatus(404);
-  }
+  if (!fs.existsSync(LOGO_FILE)) return res.sendStatus(404);
   const meta = JSON.parse(fs.readFileSync(LOGO_META, "utf8"));
   res.setHeader("Content-Type", meta.mimetype);
   res.send(fs.readFileSync(LOGO_FILE));
@@ -126,68 +114,68 @@ app.get("/api/logo", (_, res) => {
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 // ======================================================================
-// HELPER: DATUM ROBUST PARSEN
+// HELPER: DATUM & STUNDEN ROBUST PARSEN
 // ======================================================================
-function parseExcelDate(value) {
-  if (!value) return null;
+function parseDateAny(v) {
+  if (!v) return null;
 
-  if (value instanceof Date && !isNaN(value)) {
-    return value.toISOString().slice(0, 10);
+  if (v instanceof Date && !isNaN(v)) {
+    return v.toISOString().slice(0, 10);
   }
 
-  if (typeof value === "number") {
-    const ms = Math.round((value - 25569) * 86400 * 1000);
-    const d = new Date(ms);
+  if (typeof v === "number") {
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
     if (!isNaN(d)) return d.toISOString().slice(0, 10);
   }
 
-  if (typeof value === "string") {
-    const m = value.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (typeof v === "string") {
+    const m = v.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
     if (m) {
       return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
     }
   }
+  return null;
+}
 
+function parseHoursAny(v) {
+  if (v === null || v === undefined) return null;
+
+  if (typeof v === "number" && isFinite(v)) return v;
+
+  if (typeof v === "string") {
+    const m = v.replace(",", ".").match(/(\d+(\.\d+)?)/);
+    if (m) return Number(m[1]);
+  }
   return null;
 }
 
 // ======================================================================
-// STAFFPLAN IMPORT (ROBUST)
+// STAFFPLAN IMPORT (MAXIMAL TOLERANT)
 // ======================================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ ok: false, error: "Keine Datei" });
-    }
-
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
     const calendarWeek = ws["L2"] ? String(ws["L2"].v).trim() : null;
 
-    // Datumszeile automatisch finden
+    // Datumsspalten finden (ab Spalte L)
     let dates = [];
-    let headerRow = null;
-
     for (let r = 1; r <= 15; r++) {
-      const found = [];
+      let found = [];
       for (let c = 11; c < 60; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r: r - 1, c })];
-        const iso = cell ? parseExcelDate(cell.v) : null;
+        const iso = cell ? parseDateAny(cell.v) : null;
         if (iso) found.push({ c, iso });
       }
       if (found.length >= 3) {
         dates = found;
-        headerRow = r;
         break;
       }
     }
 
     if (!dates.length) {
-      return res.status(400).json({
-        ok: false,
-        error: "Keine Datumszeile gefunden (Datum muss sichtbar sein)"
-      });
+      return res.json({ ok: true, calendarWeek, imported: 0 });
     }
 
     if (calendarWeek) {
@@ -198,35 +186,26 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
     let imported = 0;
 
-    for (let row = 6; row < 5000; row++) {
-      const customerName = ws[`A${row}`]?.v?.toString().trim() || "";
-      const internalPo = ws[`B${row}`]?.v?.toString().trim() || "";
-      const customerPo = ws[`E${row}`]?.v?.toString().trim() || "";
-      const employeeName = ws[`I${row}`]?.v?.toString().trim() || "";
+    for (let row = 6; row < 6000; row++) {
+      const customer_name = ws[`A${row}`]?.v?.toString().trim() || "";
+      const internal_po = ws[`B${row}`]?.v?.toString().trim() || "";
+      const customer_po = ws[`E${row}`]?.v?.toString().trim() || "";
+      const employee_name = ws[`I${row}`]?.v?.toString().trim() || "";
 
-      if (!employeeName) continue;
+      if (!employee_name) continue;
 
       for (const d of dates) {
-        const hoursCell =
-          ws[XLSX.utils.encode_cell({ r: row - 1, c: d.c })];
-        const hours = Number(hoursCell?.v);
+        const cell = ws[XLSX.utils.encode_cell({ r: row - 1, c: d.c })];
+        const hours = parseHoursAny(cell?.v);
 
-        if (!isFinite(hours) || hours <= 0) continue;
+        if (!hours || hours <= 0) continue;
 
         await pool.query(
           `INSERT INTO staffplan
            (calendar_week, employee_name, work_date, customer_name, customer_po, internal_po)
            VALUES ($1,$2,$3,$4,$5,$6)`,
-          [
-            calendarWeek,
-            employeeName,
-            d.iso,
-            customerName,
-            customerPo,
-            internalPo
-          ]
+          [calendarWeek, employee_name, d.iso, customer_name, customer_po, internal_po]
         );
-
         imported++;
       }
     }
@@ -239,50 +218,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 });
 
 // ======================================================================
-// ZEITBUCHUNG
-// ======================================================================
-app.post("/api/time/start", async (req, res) => {
-  const { employee_id } = req.body;
-  const today = new Date().toISOString().slice(0, 10);
-
-  await pool.query(
-    `INSERT INTO time_entries (employee_id, work_date, start_time)
-     VALUES ($1,$2,NOW())`,
-    [employee_id, today]
-  );
-
-  res.json({ ok: true });
-});
-
-app.post("/api/time/end", async (req, res) => {
-  const { employee_id, activity } = req.body;
-  const today = new Date().toISOString().slice(0, 10);
-
-  const r = await pool.query(
-    `SELECT * FROM time_entries
-     WHERE employee_id=$1 AND work_date=$2
-     ORDER BY start_time DESC LIMIT 1`,
-    [employee_id, today]
-  );
-
-  if (!r.rows.length) return res.status(400).json({ ok: false });
-
-  const start = new Date(r.rows[0].start_time);
-  const end = new Date();
-  const hours = (end - start) / 3600000;
-
-  await pool.query(
-    `UPDATE time_entries
-     SET end_time=NOW(), total_hours=$1, activity=$2
-     WHERE id=$3`,
-    [hours, activity || "Arbeitszeit", r.rows[0].id]
-  );
-
-  res.json({ ok: true });
-});
-
-// ======================================================================
-// PDF STUNDENNACHWEIS
+// PDF STUNDENNACHWEIS (KOPFDATEN AUS STAFFPLAN)
 // ======================================================================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
   const { employeeId, kw, customerPo } = req.params;
@@ -292,26 +228,18 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     [employeeId]
   );
   if (!emp.rows.length) return res.sendStatus(404);
-  const name = emp.rows[0].name;
+  const employeeName = emp.rows[0].name;
 
   const head = await pool.query(
     `SELECT customer_name, internal_po
      FROM staffplan
      WHERE calendar_week=$1 AND customer_po=$2 AND employee_name=$3
      LIMIT 1`,
-    [kw, customerPo, name]
+    [kw, customerPo, employeeName]
   );
 
   const customerName = head.rows[0]?.customer_name || "-";
   const internalPo = head.rows[0]?.internal_po || "-";
-
-  const entries = await pool.query(
-    `SELECT work_date, total_hours, activity
-     FROM time_entries
-     WHERE employee_id=$1
-     ORDER BY work_date`,
-    [employeeId]
-  );
 
   const doc = new PDFDocument({ size: "A4", margin: 40 });
   res.setHeader("Content-Type", "application/pdf");
@@ -325,39 +253,13 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     });
   }
 
-  doc.fontSize(16).font("Helvetica-Bold").text("STUNDENNACHWEIS", 0, 110, {
-    align: "center"
-  });
-
-  doc.fontSize(9).font("Helvetica");
-  doc.text(`Mitarbeiter: ${name}`, 40, 140);
+  doc.font("Helvetica-Bold").fontSize(16).text("STUNDENNACHWEIS", 0, 110, { align: "center" });
+  doc.font("Helvetica").fontSize(9);
+  doc.text(`Mitarbeiter: ${employeeName}`, 40, 140);
   doc.text(`Kunde: ${customerName}`, 40, 155);
   doc.text(`Kalenderwoche: ${kw}`, 40, 170);
   doc.text(`Kunden-PO: ${customerPo}`, 300, 140);
   doc.text(`Interne PO: ${internalPo}`, 300, 155);
-
-  let y = 200;
-  doc.font("Helvetica-Bold");
-  doc.text("Datum", 40, y);
-  doc.text("Tätigkeit", 200, y);
-  doc.text("Std.", 520, y, { align: "right" });
-  y += 15;
-
-  doc.font("Helvetica");
-  let sum = 0;
-
-  for (const r of entries.rows) {
-    const h = Number(r.total_hours || 0);
-    sum += h;
-    doc.text(new Date(r.work_date).toLocaleDateString("de-DE"), 40, y);
-    doc.text(r.activity || "Arbeitszeit", 200, y);
-    doc.text(h.toFixed(2), 520, y, { align: "right" });
-    y += 14;
-  }
-
-  doc.font("Helvetica-Bold");
-  doc.text("Gesamt:", 380, y + 10);
-  doc.text(sum.toFixed(2), 520, y + 10, { align: "right" });
 
   doc.end();
 });
