@@ -5,65 +5,107 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Admin – Industreer Zeiterfassung</title>
   <style>
-    body { font-family: Arial, sans-serif; background:#f4f6f8; padding:20px; }
-    .box { background:#fff; padding:20px; border-radius:10px; max-width:700px; margin:auto; box-shadow:0 2px 8px rgba(0,0,0,0.1); }
-    h1 { margin-top:0; }
-    .section { border:1px solid #ddd; border-radius:10px; padding:15px; margin-top:15px; }
-    button { padding:10px 14px; font-size:16px; border:0; border-radius:8px; cursor:pointer; }
-    .btn { background:#1565c0; color:#fff; }
-    input { width:100%; margin-top:10px; padding:10px; }
-    .msg { margin-top:10px; white-space:pre-wrap; }
-    img { max-width:220px; display:block; margin: 10px auto; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f6f8;
+      padding: 20px;
+    }
+    .box {
+      background: #fff;
+      padding: 20px;
+      border-radius: 10px;
+      max-width: 720px;
+      margin: auto;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 { margin-top: 0; }
+    .section {
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 15px;
+      margin-top: 20px;
+    }
+    button {
+      padding: 10px 14px;
+      font-size: 16px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      background: #1565c0;
+      color: #fff;
+      margin-top: 10px;
+    }
+    input {
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px;
+    }
+    .msg {
+      margin-top: 10px;
+      white-space: pre-wrap;
+      font-size: 14px;
+    }
+    img {
+      max-width: 220px;
+      display: block;
+      margin: 10px auto;
+    }
   </style>
 </head>
 <body>
+
   <div class="box">
     <h1>Admin</h1>
 
+    <!-- ================= LOGO ================= -->
     <div class="section">
       <h3>1) Firmenlogo</h3>
       <img src="/api/logo" onerror="this.style.display='none'" />
       <input type="file" id="logoFile" accept="image/png,image/jpeg" />
-      <button class="btn" onclick="uploadLogo()">Logo hochladen</button>
+      <button onclick="uploadLogo()">Logo hochladen</button>
       <div class="msg" id="logoMsg"></div>
     </div>
 
+    <!-- ================= STAFFPLAN ================= -->
     <div class="section">
       <h3>2) Staffplan importieren (Excel)</h3>
-      <p>Erwartung: Datum ab L4, KW in L2, Kunde Spalte A ab Zeile 6, interne PO Spalte B ab Zeile 6, PO Spalte E, Name Spalte I.</p>
+      <p>
+        Erwartet: Datum ab L4, KW in L2, Kunde Spalte A ab Zeile 6,
+        interne PO Spalte B, Kunden-PO Spalte E, Mitarbeiter Spalte I.
+      </p>
       <input type="file" id="staffFile" accept=".xlsx,.xls" />
-      <button class="btn" onclick="importStaffplan()">Staffplan importieren</button>
+      <button onclick="importStaffplan()">Staffplan importieren</button>
       <div class="msg" id="staffMsg"></div>
     </div>
+
   </div>
 
-  <script>
-    async function uploadLogo() {
-      const f = document.getElementById("logoFile").files[0];
-      if (!f) return alert("Bitte Logo auswählen");
+<script>
+async function uploadLogo() {
+  const f = document.getElementById("logoFile").files[0];
+  if (!f) return alert("Bitte Logo auswählen");
 
-      const fd = new FormData();
-      fd.append("logo", f);
+  const fd = new FormData();
+  fd.append("logo", f);
 
-      const r = await fetch("/api/admin/logo", { method: "POST", body: fd });
-      const t = await r.text();
+  const r = await fetch("/api/admin/logo", { method: "POST", body: fd });
+  const t = await r.text();
+  document.getElementById("logoMsg").textContent = t;
+  if (r.ok) setTimeout(() => location.reload(), 500);
+}
 
-      document.getElementById("logoMsg").textContent = t;
-      if (r.ok) setTimeout(() => location.reload(), 600);
-    }
+async function importStaffplan() {
+  const f = document.getElementById("staffFile").files[0];
+  if (!f) return alert("Bitte Staffplan auswählen");
 
-    async function importStaffplan() {
-      const f = document.getElementById("staffFile").files[0];
-      if (!f) return alert("Bitte Staffplan Excel auswählen");
+  const fd = new FormData();
+  fd.append("file", f);
 
-      const fd = new FormData();
-      fd.append("file", f);
+  const r = await fetch("/api/import/staffplan", { method: "POST", body: fd });
+  const t = await r.text();
+  document.getElementById("staffMsg").textContent = t;
+}
+</script>
 
-      const r = await fetch("/api/import/staffplan", { method: "POST", body: fd });
-      const txt = await r.text();
-
-      document.getElementById("staffMsg").textContent = txt;
-    }
-  </script>
 </body>
 </html>
