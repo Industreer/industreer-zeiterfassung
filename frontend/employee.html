@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <title>Mitarbeiter – Zeiterfassung</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -10,107 +12,206 @@
       margin: auto;
       padding: 20px;
       text-align: center;
+      background: #f4f6f8;
+    }
+
+    .box {
+      background: #fff;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
 
     img.logo {
       max-width: 200px;
-      margin-bottom: 20px;
+      margin-bottom: 15px;
     }
 
-    select, input, button {
+    input, select, button {
       width: 100%;
-      padding: 10px;
+      padding: 12px;
       margin-top: 10px;
       font-size: 16px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
     }
 
     button {
+      background: #1565c0;
+      color: #fff;
+      border: none;
       cursor: pointer;
+    }
+
+    button.secondary {
+      background: #455a64;
+    }
+
+    .status {
+      margin-top: 15px;
+      font-size: 14px;
+      color: #333;
+    }
+
+    .timer {
+      font-size: 18px;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+
+    hr {
+      margin: 20px 0;
     }
   </style>
 </head>
 <body>
 
+<div class="box">
+
   <!-- LOGO -->
   <img src="/api/logo" class="logo" onerror="this.style.display='none'" />
 
-  <h2>Mitarbeiter Zeiterfassung</h2>
+  <h2 id="welcome">Willkommen</h2>
 
-  <!-- MITARBEITER-ID -->
+  <!-- MITARBEITER ID -->
   <input id="employeeId" placeholder="Mitarbeiter-ID" />
 
   <!-- ARBEITSBEGINN -->
   <button onclick="startWork()">Arbeitsbeginn</button>
 
-  <hr />
+  <!-- TIMER -->
+  <div class="timer" id="timer" style="display:none;">
+    Arbeitszeit läuft seit <span id="startTimeText"></span><br/>
+    Dauer: <span id="elapsed">00:00:00</span>
+  </div>
+
+  <hr/>
 
   <!-- TÄTIGKEIT -->
-  <label for="activity">Tätigkeit</label>
-  <select id="activity" onchange="toggleCustomActivity()">
+  <select id="activity">
     <option value="Arbeitszeit">Arbeitszeit</option>
     <option value="Montage">Montage</option>
     <option value="Inbetriebnahme">Inbetriebnahme</option>
     <option value="Reisezeit">Reisezeit</option>
     <option value="E-Installation">E-Installation</option>
-    <option value="custom">Sonstiges (Text eingeben)</option>
   </select>
-
-  <!-- FREITEXT -->
-  <input
-    id="customActivity"
-    placeholder="Tätigkeit eingeben"
-    style="display:none"
-  />
 
   <!-- ARBEITSENDE -->
   <button onclick="endWork()">Arbeitsende</button>
 
-  <script>
-    function toggleCustomActivity() {
-      const sel = document.getElementById("activity");
-      const custom = document.getElementById("customActivity");
-      custom.style.display = sel.value === "custom" ? "block" : "none";
-    }
+  <hr/>
 
-    async function startWork() {
-      const id = document.getElementById("employeeId").value;
-      if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
+  <!-- PDF BUTTONS -->
+  <button class="secondary" onclick="printLastWeek()">
+    Stundenzettel letzte Woche drucken
+  </button>
 
-      const res = await fetch("/api/time/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employee_id: id })
-      });
+  <button class="secondary" onclick="printSelectWeek()">
+    Stundenzettel für KW wählen
+  </button>
 
-      const json = await res.json();
-      alert(json.ok ? "Arbeitsbeginn erfasst" : "Fehler");
-    }
+  <div class="status" id="status"></div>
 
-    async function endWork() {
-      const id = document.getElementById("employeeId").value;
-      if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
+</div>
 
-      const sel = document.getElementById("activity");
-      let activity =
-        sel.value === "custom"
-          ? document.getElementById("customActivity").value
-          : sel.value;
+<script>
+let startTimestamp = null;
+let timerInterval = null;
 
-      if (!activity) activity = "Arbeitszeit";
+function setStatus(msg) {
+  document.getElementById("status").innerText = msg;
+}
 
-      const res = await fetch("/api/time/end", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          employee_id: id,
-          activity
-        })
-      });
+async function startWork() {
+  const id = document.getElementById("employeeId").value;
+  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
 
-      const json = await res.json();
-      alert(json.ok ? "Arbeitsende erfasst" : "Fehler");
-    }
-  </script>
+  const r = await fetch("/api/time/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ employee_id: id })
+  });
+
+  const j = await r.json();
+  if (!j.ok) return setStatus("Fehler beim Arbeitsbeginn");
+
+  const now = new Date();
+  startTimestamp = now;
+  document.getElementById("startTimeText").innerText =
+    now.toLocaleTimeString("de-DE");
+
+  document.getElementById("timer").style.display = "block";
+  document.getElementById("welcome").innerText = "Willkommen";
+
+  timerInterval = setInterval(updateTimer, 1000);
+  setStatus("Arbeitsbeginn erfasst");
+}
+
+function updateTimer() {
+  if (!startTimestamp) return;
+  const diff = Math.floor((Date.now() - startTimestamp.getTime()) / 1000);
+
+  const h = String(Math.floor(diff / 3600)).padStart(2, "0");
+  const m = String(Math.floor((diff % 3600) / 60)).padStart(2, "0");
+  const s = String(diff % 60).padStart(2, "0");
+
+  document.getElementById("elapsed").innerText = `${h}:${m}:${s}`;
+}
+
+async function endWork() {
+  const id = document.getElementById("employeeId").value;
+  const activity = document.getElementById("activity").value;
+
+  const r = await fetch("/api/time/end", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ employee_id: id, activity })
+  });
+
+  const j = await r.json();
+  if (!j.ok) return setStatus("Fehler beim Arbeitsende");
+
+  clearInterval(timerInterval);
+  document.getElementById("timer").style.display = "none";
+  startTimestamp = null;
+
+  setStatus("Arbeitsende erfasst");
+}
+
+function getCalendarWeek(d) {
+  d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1)/7);
+}
+
+function printLastWeek() {
+  const id = document.getElementById("employeeId").value;
+  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
+
+  const d = new Date();
+  d.setDate(d.getDate() - 7);
+  const kw = "CW" + getCalendarWeek(d);
+
+  const po = prompt("Bitte Kunden-PO eingeben:");
+  if (!po) return;
+
+  window.open(`/api/pdf/timesheet/${id}/${kw}/${po}`, "_blank");
+}
+
+function printSelectWeek() {
+  const id = document.getElementById("employeeId").value;
+  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
+
+  const kw = prompt("Kalenderwoche eingeben (z. B. CW49):");
+  const po = prompt("Bitte Kunden-PO eingeben:");
+
+  if (!kw || !po) return;
+
+  window.open(`/api/pdf/timesheet/${id}/${kw}/${po}`, "_blank");
+}
+</script>
 
 </body>
 </html>
