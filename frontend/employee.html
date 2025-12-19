@@ -1,247 +1,272 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-<meta charset="UTF-8" />
-<title>INDUSTREER – Mitarbeiter Zeiterfassung</title>
+  <meta charset="UTF-8" />
+  <title>INDUSTREER – Mitarbeiter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-<style>
-  body {
-    font-family: Arial, sans-serif;
-    background: #f4f6f8;
-    padding: 20px;
-  }
-  .box {
-    background: #fff;
-    padding: 20px;
-    max-width: 600px;
-    margin: auto;
-    border-radius: 6px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-  }
-  h2 {
-    margin-top: 0;
-  }
-  .logo {
-    max-width: 200px;
-    display: block;
-    margin: 0 auto 15px auto;
-  }
-  label {
-    display: block;
-    margin-top: 10px;
-  }
-  input, select, textarea, button {
-    width: 100%;
-    margin-top: 5px;
-    padding: 8px;
-    font-size: 14px;
-  }
-  button {
-    margin-top: 10px;
-    cursor: pointer;
-  }
-  .status {
-    margin-top: 15px;
-    font-weight: bold;
-  }
-  .timer {
-    background: #eef3f8;
-    padding: 10px;
-    margin-top: 15px;
-    border-radius: 4px;
-  }
-</style>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f4f6f8; margin:0; padding:20px; }
+    .box { max-width:520px; margin:0 auto; background:#fff; padding:18px; border-radius:10px; box-shadow:0 2px 10px rgba(0,0,0,.08); }
+    .logo { max-width:220px; display:block; margin:0 auto 12px auto; }
+    h2 { margin:0 0 10px 0; text-align:center; }
+    input, select, textarea, button { width:100%; padding:12px; margin-top:10px; border-radius:8px; border:1px solid #cfd8dc; font-size:16px; box-sizing:border-box; }
+    textarea { min-height:70px; resize:vertical; }
+    button { border:none; background:#1565c0; color:#fff; cursor:pointer; }
+    button.secondary { background:#455a64; }
+    button.pause { background:#f57c00; }
+    .row { margin-top:10px; }
+    .timer { margin-top:12px; padding:12px; background:#eef3f8; border-radius:8px; }
+    .status { margin-top:12px; white-space:pre-wrap; font-size:14px; font-weight:bold; }
+    hr { margin:18px 0; border:none; border-top:1px solid #e0e0e0; }
+  </style>
 </head>
 
 <body>
+  <div class="box">
+    <img src="/api/logo" class="logo" onerror="this.style.display='none'"/>
 
-<div class="box">
+    <h2 id="welcomeTitle">Mitarbeiter Zeiterfassung</h2>
 
-  <!-- LOGO -->
-  <img src="/api/logo" class="logo" onerror="this.style.display='none'" />
+    <div id="loginBox">
+      <input id="employeeId" placeholder="Mitarbeiter-ID (z.B. 1001)" />
+      <button onclick="login()">Anmelden</button>
+    </div>
 
-  <h2>Mitarbeiter Zeiterfassung</h2>
+    <div id="mainBox" style="display:none;">
+      <div class="row"><b>Willkommen:</b> <span id="employeeName">-</span></div>
 
-  <!-- LOGIN -->
-  <label>Mitarbeiter-ID</label>
-  <input id="employeeId" placeholder="z. B. 1001" />
-  <button onclick="login()">Anmelden</button>
+      <div id="timerBox" class="timer" style="display:none;">
+        <div>Arbeitsbeginn: <span id="startTimeText"></span></div>
+        <div>Laufzeit: <span id="elapsed">00:00:00</span></div>
+      </div>
 
-  <!-- WELCOME -->
-  <div id="welcome" style="display:none;">
-    <p><strong>Willkommen <span id="employeeName"></span></strong></p>
+      <hr/>
+
+      <button onclick="startWork()">Arbeitsbeginn</button>
+
+      <select id="activitySelect">
+        <option value="Arbeitszeit">Arbeitszeit</option>
+        <option value="Montage">Montage</option>
+        <option value="Inbetriebnahme">Inbetriebnahme</option>
+        <option value="E-Installation">E-Installation</option>
+        <option value="Reisezeit">Reisezeit</option>
+        <option value="__custom__">Eigener Text …</option>
+      </select>
+
+      <textarea id="customActivity" placeholder="Eigene Tätigkeit eingeben (optional)" style="display:none;"></textarea>
+
+      <button class="pause" onclick="startBreak()">Raucherpause starten</button>
+      <button class="pause" onclick="endBreak()">Raucherpause beenden</button>
+
+      <button onclick="endWork()">Arbeitsende</button>
+
+      <hr/>
+
+      <button class="secondary" onclick="printLastWeekAllPOs()">Stundenzettel letzte KW drucken (alle POs)</button>
+
+      <input id="kwInput" placeholder="Kalenderwoche (z. B. CW49)" />
+      <button class="secondary" onclick="printSelectedWeekAllPOs()">Stundenzettel für KW drucken (alle POs)</button>
+
+      <div id="status" class="status"></div>
+    </div>
   </div>
-
-  <!-- TIMER -->
-  <div id="timerBox" class="timer" style="display:none;">
-    <div>Arbeitsbeginn: <span id="startTimeText"></span></div>
-    <div>Laufzeit: <span id="elapsed">00:00:00</span></div>
-  </div>
-
-  <!-- ACTIONS -->
-  <div id="actions" style="display:none;">
-
-    <button onclick="startWork()">Arbeitsbeginn</button>
-    <button onclick="endWork()">Arbeitsende</button>
-
-    <button onclick="startBreak()">Raucherpause starten</button>
-    <button onclick="endBreak()">Raucherpause beenden</button>
-
-    <label>Tätigkeit</label>
-    <select id="activity">
-      <option value="">– bitte wählen –</option>
-      <option>Montage</option>
-      <option>Inbetriebnahme</option>
-      <option>E-Installation</option>
-      <option>Reisezeit</option>
-      <option value="__custom__">Eigener Text …</option>
-    </select>
-
-    <textarea id="customActivity" placeholder="Eigene Tätigkeit eingeben"
-              style="display:none;"></textarea>
-
-    <button onclick="printLastWeek()">Stundenzettel letzte KW drucken</button>
-
-    <label>Kalenderwoche</label>
-    <input id="kwInput" placeholder="z. B. CW49" />
-    <button onclick="printSelectedWeek()">Stundenzettel für KW drucken</button>
-
-  </div>
-
-  <div id="status" class="status"></div>
-
-</div>
 
 <script>
-let currentEmployee = null;
-let timerInterval = null;
+  let currentEmployee = null;
+  let timerInterval = null;
 
-// ---------------- LOGIN ----------------
-async function login() {
-  const id = employeeId.value.trim();
-  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
+  const el = (id) => document.getElementById(id);
 
-  const r = await fetch(`/api/employee/${encodeURIComponent(id)}`);
-  const j = await r.json();
-  if (!j.ok) return alert("Mitarbeiter nicht gefunden");
+  function setStatus(msg) { el("status").innerText = msg || ""; }
 
-  currentEmployee = j.employee;
-  employeeName.innerText = currentEmployee.name;
-  welcome.style.display = "block";
-  actions.style.display = "block";
+  // ---------- Timer ----------
+  function startTimer(startISO) {
+    const start = new Date(startISO);
+    el("timerBox").style.display = "block";
+    el("startTimeText").innerText = start.toLocaleTimeString("de-DE", { hour:"2-digit", minute:"2-digit" });
 
-  checkRunningTimer();
-}
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+      const diff = Math.floor((Date.now() - start.getTime()) / 1000);
+      const h = String(Math.floor(diff / 3600)).padStart(2,"0");
+      const m = String(Math.floor((diff % 3600) / 60)).padStart(2,"0");
+      const s = String(diff % 60).padStart(2,"0");
+      el("elapsed").innerText = `${h}:${m}:${s}`;
+    }, 1000);
+  }
 
-// ---------------- TIMER CHECK ----------------
-async function checkRunningTimer() {
-  const r = await fetch(`/api/time/current/${currentEmployee.employee_id}`);
-  const j = await r.json();
-  if (j.ok) {
+  function stopTimer() {
+    if (timerInterval) clearInterval(timerInterval);
+    el("timerBox").style.display = "none";
+  }
+
+  async function refreshRunningTimer() {
+    if (!currentEmployee) return;
+    const r = await fetch(`/api/time/current/${encodeURIComponent(currentEmployee.employee_id)}`);
+    const j = await r.json();
+    if (j.ok) startTimer(j.start_time);
+  }
+
+  // ---------- Login ----------
+  async function login() {
+    const id = el("employeeId").value.trim();
+    if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
+
+    const r = await fetch(`/api/employee/${encodeURIComponent(id)}`);
+    const j = await r.json();
+    if (!j.ok) return alert(j.error || "Mitarbeiter nicht gefunden");
+
+    currentEmployee = j.employee;
+    localStorage.setItem("lastEmployeeId", currentEmployee.employee_id);
+
+    el("employeeName").innerText = currentEmployee.name;
+    el("loginBox").style.display = "none";
+    el("mainBox").style.display = "block";
+    el("welcomeTitle").innerText = "Mitarbeiterbereich";
+
+    await refreshRunningTimer();
+    setStatus("Angemeldet");
+  }
+
+  // Auto-Login (optional)
+  window.addEventListener("load", () => {
+    const last = localStorage.getItem("lastEmployeeId");
+    if (last) el("employeeId").value = last;
+  });
+
+  // ---------- Activity UI ----------
+  el("activitySelect").addEventListener("change", () => {
+    el("customActivity").style.display = (el("activitySelect").value === "__custom__") ? "block" : "none";
+  });
+
+  function getActivityText() {
+    const sel = el("activitySelect").value;
+    if (sel === "__custom__") {
+      const t = el("customActivity").value.trim();
+      return t || "Arbeitszeit";
+    }
+    return sel || "Arbeitszeit";
+  }
+
+  // ---------- Work ----------
+  async function startWork() {
+    if (!currentEmployee) return alert("Bitte zuerst anmelden");
+
+    const r = await fetch("/api/time/start", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ employee_id: currentEmployee.employee_id })
+    });
+
+    const j = await r.json();
+    if (!j.ok) return setStatus(`Arbeitsbeginn fehlgeschlagen:\n${j.error || ""}`);
+
     startTimer(j.start_time);
+    setStatus("Arbeitsblock gestartet");
   }
-}
 
-// ---------------- TIMER ----------------
-function startTimer(startISO) {
-  const start = new Date(startISO);
-  timerBox.style.display = "block";
-  startTimeText.innerText = start.toLocaleTimeString("de-DE");
+  async function endWork() {
+    if (!currentEmployee) return alert("Bitte zuerst anmelden");
 
-  if (timerInterval) clearInterval(timerInterval);
-  timerInterval = setInterval(() => {
-    const diff = Math.floor((Date.now() - start) / 1000);
-    const h = String(Math.floor(diff / 3600)).padStart(2,"0");
-    const m = String(Math.floor((diff % 3600) / 60)).padStart(2,"0");
-    const s = String(diff % 60).padStart(2,"0");
-    elapsed.innerText = `${h}:${m}:${s}`;
-  }, 1000);
-}
+    const activity = getActivityText();
 
-// ---------------- WORK ----------------
-async function startWork() {
-  const r = await fetch("/api/time/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ employee_id: currentEmployee.employee_id })
-  });
-  const j = await r.json();
-  if (!j.ok) return alert(j.error || "Fehler");
+    const r = await fetch("/api/time/end", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ employee_id: currentEmployee.employee_id, activity })
+    });
 
-  startTimer(j.start_time);
-  status.innerText = "Arbeitsbeginn erfasst";
-}
+    const j = await r.json();
+    if (!j.ok) return setStatus(`Arbeitsende fehlgeschlagen:\n${j.error || ""}`);
 
-async function endWork() {
-  let act = activity.value;
-  if (act === "__custom__") {
-    act = customActivity.value.trim();
+    stopTimer();
+    setStatus(`Arbeitsblock beendet\nNetto: ${j.net_hours} Std\nPause: ${j.break_minutes} Min`);
   }
-  if (!act) act = "Arbeitszeit";
 
-  const r = await fetch("/api/time/end", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      employee_id: currentEmployee.employee_id,
-      activity: act
-    })
-  });
-  const j = await r.json();
-  if (!j.ok) return alert(j.error || "Fehler");
+  // ---------- Breaks ----------
+  async function startBreak() {
+    if (!currentEmployee) return alert("Bitte zuerst anmelden");
 
-  timerBox.style.display = "none";
-  clearInterval(timerInterval);
-  status.innerText =
-    `Arbeitsende erfasst (${j.net_hours} Std, Pause ${j.break_minutes} Min)`;
-}
+    const r = await fetch("/api/break/start", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ employee_id: currentEmployee.employee_id })
+    });
 
-// ---------------- BREAKS ----------------
-async function startBreak() {
-  await fetch("/api/break/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ employee_id: currentEmployee.employee_id })
-  });
-  status.innerText = "Raucherpause gestartet";
-}
+    const j = await r.json();
+    if (!j.ok) return setStatus(`Pause starten fehlgeschlagen:\n${j.error || ""}`);
 
-async function endBreak() {
-  await fetch("/api/break/end", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ employee_id: currentEmployee.employee_id })
-  });
-  status.innerText = "Raucherpause beendet";
-}
+    setStatus("Raucherpause gestartet");
+  }
 
-// ---------------- PDF ----------------
-function printLastWeek() {
-  const d = new Date();
-  d.setDate(d.getDate() - 7);
-  const kw = "CW" + getWeek(d);
-  window.open(`/api/pdf/timesheet/${currentEmployee.employee_id}/${kw}/`, "_blank");
-}
+  async function endBreak() {
+    if (!currentEmployee) return alert("Bitte zuerst anmelden");
 
-function printSelectedWeek() {
-  const kw = kwInput.value.trim();
-  if (!kw) return alert("KW eingeben");
-  window.open(`/api/pdf/timesheet/${currentEmployee.employee_id}/${kw}/`, "_blank");
-}
+    const r = await fetch("/api/break/end", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ employee_id: currentEmployee.employee_id })
+    });
 
-// ---------------- HELPERS ----------------
-activity.addEventListener("change", () => {
-  customActivity.style.display = activity.value === "__custom__" ? "block" : "none";
-});
+    const j = await r.json();
+    if (!j.ok) return setStatus(`Pause beenden fehlgeschlagen:\n${j.error || ""}`);
 
-function getWeek(d) {
-  d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
-  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-}
+    setStatus(`Raucherpause beendet (${j.minutes} Min)`);
+  }
+
+  // ---------- KW helpers ----------
+  function getWeek(d) {
+    d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+    return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  }
+
+  // ---------- Option B: Print ALL POs ----------
+  async function printLastWeekAllPOs() {
+    if (!currentEmployee) return alert("Bitte zuerst anmelden");
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    const kw = "CW" + getWeek(d);
+    await printAllPOsForKW(kw);
+  }
+
+  async function printSelectedWeekAllPOs() {
+    if (!currentEmployee) return alert("Bitte zuerst anmelden");
+    const kw = el("kwInput").value.trim();
+    if (!kw) return alert("Bitte KW eingeben (z. B. CW49)");
+    await printAllPOsForKW(kw);
+  }
+
+  async function printAllPOsForKW(kw) {
+    setStatus(`Suche POs für ${kw} ...`);
+
+    const r = await fetch(`/api/employee/${encodeURIComponent(currentEmployee.employee_id)}/pos/${encodeURIComponent(kw)}`);
+    const j = await r.json();
+
+    if (!j.ok) {
+      setStatus(`Fehler: ${j.error || "PO-Liste nicht verfügbar"}`);
+      return;
+    }
+
+    if (!j.pos || !j.pos.length) {
+      setStatus(`Keine POs im Staffplan für ${kw} gefunden.`);
+      return;
+    }
+
+    setStatus(`Öffne ${j.pos.length} Stundenzettel (je PO ein PDF) ...`);
+
+    // Open each PDF in a new tab (browser may block popups if not user-initiated)
+    for (const po of j.pos) {
+      const url = `/api/pdf/timesheet/${encodeURIComponent(currentEmployee.employee_id)}/${encodeURIComponent(kw)}/${encodeURIComponent(po)}`;
+      window.open(url, "_blank");
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    setStatus(`Fertig: ${j.pos.length} PDFs geöffnet.`);
+  }
 </script>
-
 </body>
 </html>
