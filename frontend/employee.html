@@ -2,8 +2,9 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
-  <title>Zeiterfassung</title>
+  <title>Zeiterfassung – Mitarbeiter</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -27,10 +28,10 @@
       margin-top: 0;
     }
     label {
-      display:block;
-      margin-top:10px;
-      font-weight:bold;
-      text-align:left;
+      display: block;
+      margin-top: 10px;
+      font-weight: bold;
+      text-align: left;
     }
     input, button {
       width: 100%;
@@ -64,20 +65,25 @@
     }
   </style>
 </head>
+
 <body>
 
 <div class="box">
 
   <!-- LOGO -->
-<img src="/api/logo" class="logo" onerror="this.style.display='none'">
-       onerror="this.style.display='none'">
+  <img
+    src="/api/logo"
+    class="logo"
+    alt="Firmenlogo"
+    onerror="this.style.display='none';"
+  />
 
   <h1>Zeiterfassung</h1>
 
   <!-- LOGIN -->
   <div id="loginBox">
     <label>Mitarbeiter-ID</label>
-    <input id="employeeId" placeholder="ID eingeben">
+    <input id="employeeId" placeholder="ID eingeben" />
     <button class="start" onclick="login()">Anmelden</button>
   </div>
 
@@ -88,12 +94,12 @@
     <button class="start" onclick="startWork()">🟢 Arbeitsbeginn</button>
 
     <label>Raucherpause (Minuten)</label>
-    <input id="breakMinutes" type="number" min="1" max="120" value="10">
+    <input id="breakMinutes" type="number" min="1" max="120" value="10" />
     <button class="break" onclick="addBreak()">🚬 Pause erfassen</button>
 
     <button class="end" onclick="endWork()">🔴 Arbeitsende</button>
 
-    <hr>
+    <hr />
 
     <button class="pdf" onclick="printLastWeek()">📄 Stundenzettel letzte Woche</button>
     <button class="pdf" onclick="printChooseWeek()">📄 Stundenzettel für KW wählen</button>
@@ -104,12 +110,10 @@
 
 <script>
 let EMPLOYEE_ID = null;
-let startTime = null;
 
 function login() {
   const id = document.getElementById("employeeId").value.trim();
   if (!id) return;
-
   EMPLOYEE_ID = id;
   document.getElementById("loginBox").style.display = "none";
   document.getElementById("mainBox").style.display = "block";
@@ -134,8 +138,7 @@ async function startWork() {
   });
   const j = await r.json();
   if (j.ok) {
-    startTime = new Date();
-    setLive("🕒 Arbeitszeit läuft seit " + startTime.toLocaleTimeString("de-DE"));
+    setLive("🕒 Arbeitszeit läuft");
     setStatus(j.message, true);
   } else {
     setStatus("Fehler beim Arbeitsbeginn", false);
@@ -154,7 +157,7 @@ async function addBreak() {
   const j = await r.json();
   if (j.ok) {
     setLive("🚬 Pause erfasst (" + minutes + " Min)");
-    setStatus(j.message, true);
+    setStatus("Pause gespeichert", true);
   } else {
     setStatus("Fehler bei Pause", false);
   }
@@ -171,7 +174,7 @@ async function endWork() {
     setLive("🔴 Arbeitsende – Heute: " + j.totalHours + " Std");
     setStatus("Arbeitszeit abgeschlossen", true);
   } else {
-    setStatus(j.error || "Fehler beim Arbeitsende", false);
+    setStatus("Fehler beim Arbeitsende", false);
   }
 }
 
