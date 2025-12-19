@@ -13,7 +13,6 @@
       padding: 20px;
       background: #f4f6f8;
     }
-
     .box {
       background: #fff;
       padding: 20px;
@@ -21,17 +20,11 @@
       box-shadow: 0 2px 8px rgba(0,0,0,0.1);
       text-align: center;
     }
-
     img.logo {
       max-width: 200px;
       margin-bottom: 10px;
     }
-
-    h2 {
-      margin-top: 5px;
-    }
-
-    input, select, button {
+    input, textarea, select, button {
       width: 100%;
       padding: 12px;
       margin-top: 10px;
@@ -39,33 +32,31 @@
       border-radius: 8px;
       border: 1px solid #ccc;
     }
-
+    textarea {
+      resize: vertical;
+      min-height: 60px;
+    }
     button {
       background: #1565c0;
       color: #fff;
       border: none;
       cursor: pointer;
     }
-
     button.secondary {
       background: #455a64;
     }
-
     button.pause {
       background: #f57c00;
     }
-
     .timer {
-      margin-top: 10px;
       font-size: 18px;
       font-weight: bold;
+      margin-top: 10px;
     }
-
     .status {
       margin-top: 10px;
       font-size: 14px;
     }
-
     hr {
       margin: 20px 0;
     }
@@ -78,7 +69,7 @@
   <!-- LOGO -->
   <img src="/api/logo" class="logo" onerror="this.style.display='none'">
 
-  <h2 id="welcome">Willkommen</h2>
+  <h2>Willkommen</h2>
 
   <!-- MITARBEITER -->
   <input id="employeeId" placeholder="Mitarbeiter-ID">
@@ -96,14 +87,19 @@
 
   <hr>
 
-  <!-- TÄTIGKEIT -->
-  <select id="activity">
+  <!-- TÄTIGKEIT AUSWAHL -->
+  <select id="activitySelect">
     <option value="Arbeitszeit">Arbeitszeit</option>
     <option value="Montage">Montage</option>
     <option value="Inbetriebnahme">Inbetriebnahme</option>
     <option value="Reisezeit">Reisezeit</option>
     <option value="E-Installation">E-Installation</option>
   </select>
+
+  <!-- FREITEXT -->
+  <textarea id="activityText"
+    placeholder="Freier Text zur Tätigkeit (optional)">
+  </textarea>
 
   <!-- RAUCHERPAUSE -->
   <button class="pause" onclick="startBreak()">Raucherpause starten</button>
@@ -124,7 +120,6 @@
   </button>
 
   <div class="status" id="status"></div>
-
 </div>
 
 <script>
@@ -152,8 +147,8 @@ async function startWork() {
   startTimestamp = new Date();
   startTimeText.innerText = startTimestamp.toLocaleTimeString("de-DE");
   timerBox.style.display = "block";
-
   timerInterval = setInterval(updateTimer, 1000);
+
   setStatus("Arbeitsbeginn erfasst");
 }
 
@@ -172,14 +167,18 @@ function startBreak() {
 
 function endBreak() {
   if (!pauseStart) return;
-  const diff = (Date.now() - pauseStart.getTime()) / 60000;
+  const min = (Date.now() - pauseStart.getTime()) / 60000;
   pauseStart = null;
-  setStatus(`Raucherpause beendet (${diff.toFixed(1)} Min)`);
+  setStatus(`Raucherpause beendet (${min.toFixed(1)} Min)`);
 }
 
 async function endWork() {
   const id = employeeId.value;
-  const activity = activitySelect.value;
+
+  let activity = activityText.value.trim();
+  if (!activity) {
+    activity = activitySelect.value;
+  }
 
   const r = await fetch("/api/time/end", {
     method: "POST",
