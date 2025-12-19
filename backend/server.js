@@ -1,13 +1,15 @@
 // ======================================================================
-// INDUSTREER ZEITERFASSUNG – server.js (FULL BASELINE + FIXES)
-// - Admin + Employee Pages
-// - Logo upload + /api/logo
-// - Staffplan import (Excel tolerant)
-// - Employee lookup
-// - Multi start/stop per day (work blocks)
-// - Smoking breaks per work block (subtract in net hours)
-// - Current running block endpoint for reliable timer
-// - PDF timesheet filtered by staffplan days (KW + Kunden-PO + Mitarbeiter)
+// INDUSTREER ZEITERFASSUNG – server.js (FULL)
+// - /admin + /employee
+// - Logo Upload + /api/logo
+// - Staffplan Import (Excel tolerant)
+// - Employee Lookup /api/employee/:id
+// - Current running work block /api/time/current/:employee_id (Timer-Fix)
+// - Multi Start/Stop per day (Work-Blocks)
+// - Smoking breaks per Work-Block (Nettozeit)
+// - Option B: POs pro Mitarbeiter/KW /api/employee/:employeeId/pos/:kw
+// - PDF Timesheet /api/pdf/timesheet/:employeeId/:kw/:customerPo
+//     -> Filtert ausschließlich Staffplan-Tage (KW+PO+Mitarbeiter)
 // ======================================================================
 
 const express = require("express");
@@ -21,12 +23,12 @@ const { Pool } = require("pg");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ===================== middleware =====================
+// -------------------- middleware --------------------
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
-// ===================== pages =====================
+// -------------------- pages --------------------
 app.get("/admin", (_, res) =>
   res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"))
 );
@@ -34,17 +36,17 @@ app.get("/employee", (_, res) =>
   res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"))
 );
 
-// ===================== database =====================
+// -------------------- database --------------------
 const pool = new Pool({
   host: process.env.PGHOST,
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
   database: process.env.PGDATABASE,
   port: process.env.PGPORT || 5432,
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: false },
 });
 
-// ===================== migrations =====================
+// -------------------- migrations --------------------
 async function migrate() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
@@ -91,7 +93,6 @@ async function migrate() {
     );
   `);
 
-  // Ensure columns exist for older DBs
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS calendar_week TEXT;`);
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS employee_name TEXT;`);
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS work_date DATE;`);
@@ -100,13 +101,13 @@ async function migrate() {
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS internal_po TEXT;`);
 }
 
-// ===================== upload =====================
+// -------------------- upload --------------------
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }
+  limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-// ===================== logo =====================
+// -------------------- logo --------------------
 const LOGO_FILE = path.join(__dirname, "logo.bin");
 const LOGO_META = path.join(__dirname, "logo.json");
 
@@ -129,10 +130,10 @@ app.get("/api/logo", (_, res) => {
   res.send(fs.readFileSync(LOGO_FILE));
 });
 
-// ===================== health =====================
+// -------------------- health --------------------
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
-// ===================== employee lookup =====================
+// -------------------- employee lookup --------------------
 app.get("/api/employee/:id", async (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
@@ -141,8 +142,8 @@ app.get("/api/employee/:id", async (req, res) => {
     "SELECT employee_id, name, email, language FROM employees WHERE employee_id=$1",
     [id]
   );
-
   if (!r.rows.length) return res.status(404).json({ ok: false, error: "Mitarbeiter nicht gefunden" });
+
   res.json({ ok: true, employee: r.rows[0] });
 });
 
@@ -166,6 +167,36 @@ app.get("/api/time/current/:employee_id", async (req, res) => {
 
   if (!r.rows.length) return res.json({ ok: false });
   res.json({ ok: true, time_entry_id: r.rows[0].id, start_time: r.rows[0].start_time });
+});
+
+// ======================================================================
+// OPTION B: Alle POs eines Mitarbeiters für eine KW (aus Staffplan)
+// ======================================================================
+app.get("/api/employee/:employeeId/pos/:kw", async (req, res) => {
+  try {
+    const { employeeId, kw } = req.params;
+
+    const emp = await pool.query("SELECT name FROM employees WHERE employee_id=$1", [employeeId]);
+    if (!emp.rows.length) return res.status(404).json({ ok: false, error: "Mitarbeiter nicht gefunden" });
+
+    const employeeName = emp.rows[0].name;
+
+    const r = await pool.query(
+      `SELECT DISTINCT customer_po
+       FROM staffplan
+       WHERE calendar_week=$1
+         AND employee_name=$2
+         AND customer_po IS NOT NULL
+         AND customer_po <> ''
+       ORDER BY customer_po`,
+      [kw, employeeName]
+    );
+
+    res.json({ ok: true, pos: r.rows.map(x => x.customer_po) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ===================== tolerant helpers =====================
@@ -251,7 +282,6 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
            VALUES ($1,$2,$3,$4,$5,$6)`,
           [calendarWeek, employee_name, d.iso, customer_name, customer_po, internal_po]
         );
-
         imported++;
       }
     }
@@ -264,7 +294,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 });
 
 // ======================================================================
-// Multi start/stop per day (work blocks)
+// Multi start/stop per day (work blocks) + breaks per block
 // ======================================================================
 app.post("/api/time/start", async (req, res) => {
   const employee_id = String(req.body.employee_id || "").trim();
@@ -272,7 +302,7 @@ app.post("/api/time/start", async (req, res) => {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  // prevent double-start (only one open block)
+  // prevent double-start
   const open = await pool.query(
     `SELECT id FROM time_entries
      WHERE employee_id=$1 AND work_date=$2 AND end_time IS NULL
@@ -291,7 +321,6 @@ app.post("/api/time/start", async (req, res) => {
   res.json({ ok: true, time_entry_id: ins.rows[0].id, start_time: ins.rows[0].start_time });
 });
 
-// Smoking break start (must be within current open block)
 app.post("/api/break/start", async (req, res) => {
   const employee_id = String(req.body.employee_id || "").trim();
   if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
@@ -343,7 +372,6 @@ app.post("/api/break/end", async (req, res) => {
   res.json({ ok: true, minutes: mins });
 });
 
-// End current open block (subtract breaks in that block)
 app.post("/api/time/end", async (req, res) => {
   const employee_id = String(req.body.employee_id || "").trim();
   if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
@@ -388,26 +416,24 @@ app.post("/api/time/end", async (req, res) => {
     ok: true,
     time_entry_id: entry.id,
     net_hours: Number(netHours).toFixed(2),
-    break_minutes: Math.round(breakMs / 60000)
+    break_minutes: Math.round(breakMs / 60000),
   });
 });
 
 // ======================================================================
-// FIX #2: PDF filtered by staffplan days (KW + Kunden-PO + Mitarbeiter)
+// PDF Timesheet (filter by staffplan days KW+PO+Mitarbeiter)
+// Route: /api/pdf/timesheet/:employeeId/:kw/:customerPo
 // ======================================================================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
   try {
     const { employeeId, kw, customerPo } = req.params;
 
-    // employee name (needed to match staffplan.employee_name)
-    const emp = await pool.query(
-      "SELECT name FROM employees WHERE employee_id=$1",
-      [employeeId]
-    );
+    // employee name (match staffplan.employee_name)
+    const emp = await pool.query("SELECT name FROM employees WHERE employee_id=$1", [employeeId]);
     if (!emp.rows.length) return res.sendStatus(404);
     const employeeName = emp.rows[0].name;
 
-    // staffplan days for that employee + kw + customer po
+    // staffplan days for this KW+PO+employee
     const sp = await pool.query(
       `SELECT DISTINCT work_date, customer_name, internal_po
        FROM staffplan
@@ -424,7 +450,7 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     const customerName = sp.rows[0].customer_name || "-";
     const internalPo = sp.rows[0].internal_po || "-";
 
-    // time entries only for those dates (completed blocks)
+    // time entries only on these staffplan dates (completed blocks)
     const te = await pool.query(
       `SELECT id, work_date, start_time, end_time, total_hours, activity
        FROM time_entries
@@ -435,14 +461,14 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
       [employeeId, workDates]
     );
 
-    // breaks for those entries
+    const entryIds = te.rows.map(x => x.id);
     const br = await pool.query(
       `SELECT time_entry_id, start_time, end_time
        FROM break_entries
        WHERE employee_id=$1
-         AND time_entry_id = ANY($2::int[])
-         AND end_time IS NOT NULL`,
-      [employeeId, te.rows.map(x => x.id).length ? te.rows.map(x => x.id) : [0]]
+         AND end_time IS NOT NULL
+         AND time_entry_id = ANY($2::int[])`,
+      [employeeId, entryIds.length ? entryIds : [0]]
     );
 
     const breakMinutesByEntry = new Map();
@@ -451,12 +477,12 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
       breakMinutesByEntry.set(b.time_entry_id, (breakMinutesByEntry.get(b.time_entry_id) || 0) + mins);
     }
 
-    // create PDF
+    // PDF
     const doc = new PDFDocument({ size: "A4", margin: 40 });
     res.setHeader("Content-Type", "application/pdf");
     doc.pipe(res);
 
-    // Logo (centered)
+    // Logo centered
     if (fs.existsSync(LOGO_FILE) && fs.existsSync(LOGO_META)) {
       const meta = JSON.parse(fs.readFileSync(LOGO_META, "utf8"));
       const format = meta.mimetype === "image/png" ? "PNG" : "JPEG";
@@ -474,7 +500,7 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     doc.text(`Kunden-PO: ${customerPo}`, 300, 140);
     doc.text(`Interne PO: ${internalPo}`, 300, 155);
 
-    // Table header (compact, one-page friendly)
+    // Table (compact)
     let y = 195;
     const rowH = 12;
 
@@ -485,6 +511,7 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     doc.text("Tätigkeit", 195, y);
     doc.text("Pause", 455, y, { width: 45, align: "right" });
     doc.text("Std.", 520, y, { align: "right" });
+
     y += rowH + 3;
     doc.moveTo(40, y).lineTo(550, y).stroke();
     y += 4;
@@ -536,10 +563,12 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
   }
 });
 
-// ===================== start =====================
-migrate().then(() => {
-  app.listen(PORT, () => console.log("🚀 Server läuft auf Port", PORT));
-}).catch((e) => {
-  console.error("DB migrate failed:", e);
-  process.exit(1);
-});
+// -------------------- start --------------------
+migrate()
+  .then(() => {
+    app.listen(PORT, () => console.log("🚀 Server läuft auf Port", PORT));
+  })
+  .catch((e) => {
+    console.error("DB migrate failed:", e);
+    process.exit(1);
+  });
