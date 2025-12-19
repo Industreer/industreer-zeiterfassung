@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (DYNAMIC ACTIVITY)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (INTERNE PO AUTOMATISCH)
 // ============================================================
 
 const express = require("express");
@@ -41,15 +41,23 @@ const pool = new Pool({
 });
 
 // ============================================================
-// MIGRATION (inkl. Tätigkeit)
+// MIGRATION (STAFFPLAN)
 // ============================================================
 async function migrate() {
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS staffplan (
+      id SERIAL PRIMARY KEY,
+      employee_name TEXT,
+      work_date DATE,
+      customer_po TEXT,
+      internal_po TEXT
+    );
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       employee_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT,
-      language TEXT DEFAULT 'de'
+      name TEXT NOT NULL
     );
   `);
 
@@ -63,12 +71,6 @@ async function migrate() {
       total_hours NUMERIC(6,2),
       activity TEXT DEFAULT 'Arbeitszeit'
     );
-  `);
-
-  // Falls Tabelle schon existiert → Tätigkeit ergänzen
-  await pool.query(`
-    ALTER TABLE time_entries
-    ADD COLUMN IF NOT EXISTS activity TEXT DEFAULT 'Arbeitszeit';
   `);
 }
 
@@ -94,142 +96,90 @@ app.get("/api/logo", (_, res) => {
 });
 
 // ============================================================
-// HEALTH
+// PDF – STUNDENNACHWEIS (INTERNE PO AUTOMATISCH)
 // ============================================================
-app.get("/api/health", (_, res) => res.json({ ok: true }));
+app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
+  const { employeeId, kw, customerPo } = req.params;
 
-// ============================================================
-// ZEITERFASSUNG
-// ============================================================
-app.post("/api/time/start", async (req, res) => {
-  const today = new Date().toISOString().slice(0, 10);
-  await pool.query(
-    `INSERT INTO time_entries (employee_id, work_date, start_time)
-     VALUES ($1,$2,NOW())`,
-    [req.body.employee_id, today]
+  const emp = await pool.query(
+    "SELECT name FROM employees WHERE employee_id=$1",
+    [employeeId]
   );
-  res.json({ ok: true });
-});
+  if (!emp.rows.length) return res.sendStatus(404);
 
-app.post("/api/time/end", async (req, res) => {
-  const { employee_id, activity } = req.body;
-  const today = new Date().toISOString().slice(0, 10);
-
-  const r = await pool.query(
-    `SELECT * FROM time_entries
-     WHERE employee_id=$1 AND work_date=$2
-     ORDER BY id DESC LIMIT 1`,
-    [employee_id, today]
+  const entries = await pool.query(
+    `SELECT work_date, total_hours, activity
+     FROM time_entries
+     WHERE employee_id=$1
+     ORDER BY work_date`,
+    [employeeId]
   );
 
-  if (!r.rows.length) return res.status(400).json({ ok: false });
+  const doc = new PDFDocument({ size: "A4", margin: 40 });
+  res.setHeader("Content-Type", "application/pdf");
+  doc.pipe(res);
 
-  const entry = r.rows[0];
-  const hours =
-    (new Date() - new Date(entry.start_time)) / 36e5;
-
-  await pool.query(
-    `UPDATE time_entries
-     SET end_time=NOW(),
-         total_hours=$1,
-         activity=$2
-     WHERE id=$3`,
-    [hours, activity || "Arbeitszeit", entry.id]
-  );
-
-  res.json({ ok: true, hours: hours.toFixed(2) });
-});
-
-// ============================================================
-// PDF – STUNDENNACHWEIS MIT TÄTIGKEIT
-// ============================================================
-app.get(
-  "/api/pdf/timesheet/:employeeId/:kw/:customerPo/:internalPo",
-  async (req, res) => {
-    const { employeeId, kw, customerPo, internalPo } = req.params;
-
-    const emp = await pool.query(
-      "SELECT name FROM employees WHERE employee_id=$1",
-      [employeeId]
-    );
-    if (!emp.rows.length) return res.sendStatus(404);
-
-    const entries = await pool.query(
-      `SELECT work_date, total_hours, activity
-       FROM time_entries
-       WHERE employee_id=$1
-       ORDER BY work_date`,
-      [employeeId]
-    );
-
-    const doc = new PDFDocument({ size: "A4", margin: 40 });
-    res.setHeader("Content-Type", "application/pdf");
-    doc.pipe(res);
-
-    // Logo
-    if (fs.existsSync(LOGO_FILE)) {
-      const buffer = fs.readFileSync(LOGO_FILE);
-      const meta = JSON.parse(fs.readFileSync(LOGO_META));
-      const format = meta.mimetype === "image/png" ? "PNG" : "JPEG";
-      const w = 200;
-      doc.image(buffer, (doc.page.width - w) / 2, 25, {
-        width: w,
-        format
-      });
-    }
-
-    // Header
-    doc.font("Helvetica-Bold").fontSize(16)
-       .text("STUNDENNACHWEIS", 0, 110, { align: "center" });
-
-    doc.font("Helvetica").fontSize(9);
-    doc.text(`Mitarbeiter: ${emp.rows[0].name}`, 40, 140);
-    doc.text(`KW: ${kw}`, 40, 155);
-    doc.text(`Kunden-PO: ${customerPo}`, 300, 140);
-    doc.text(`Interne PO: ${internalPo}`, 300, 155);
-
-    // Tabelle
-    let y = 185;
-    const rowH = 14;
-
-    doc.font("Helvetica-Bold");
-    doc.text("Datum", 40, y);
-    doc.text("Tätigkeit", 200, y);
-    doc.text("Std.", 500, y, { align: "right" });
-    y += rowH + 4;
-
-    doc.font("Helvetica");
-    let sum = 0;
-
-    entries.rows.forEach(r => {
-      const h = Number(r.total_hours || 0);
-      sum += h;
-
-      doc.text(
-        new Date(r.work_date).toLocaleDateString("de-DE"),
-        40,
-        y
-      );
-      doc.text(r.activity || "Arbeitszeit", 200, y);
-      doc.text(h.toFixed(2), 500, y, { align: "right" });
-      y += rowH;
-    });
-
-    y += 6;
-    doc.font("Helvetica-Bold");
-    doc.text("Gesamt:", 350, y);
-    doc.text(sum.toFixed(2), 500, y, { align: "right" });
-
-    y += 40;
-    doc.font("Helvetica");
-    doc.text("Unterschrift Mitarbeiter:", 40, y);
-    doc.text("__________________________", 40, y + 12);
-    doc.text("Unterschrift Kunde:", 300, y);
-    doc.text("__________________________", 300, y + 12);
-
-    doc.end();
+  // Logo
+  if (fs.existsSync(LOGO_FILE)) {
+    const buffer = fs.readFileSync(LOGO_FILE);
+    const meta = JSON.parse(fs.readFileSync(LOGO_META));
+    const format = meta.mimetype === "image/png" ? "PNG" : "JPEG";
+    const w = 200;
+    doc.image(buffer, (doc.page.width - w) / 2, 25, { width: w, format });
   }
-);
+
+  // Header
+  doc.font("Helvetica-Bold").fontSize(16)
+     .text("STUNDENNACHWEIS", 0, 110, { align: "center" });
+
+  doc.font("Helvetica").fontSize(9);
+  doc.text(`Mitarbeiter: ${emp.rows[0].name}`, 40, 140);
+  doc.text(`Kalenderwoche: ${kw}`, 40, 155);
+  doc.text(`Kunden-PO: ${customerPo}`, 300, 140);
+
+  // Tabelle
+  let y = 185;
+  const rowH = 14;
+
+  doc.font("Helvetica-Bold");
+  doc.text("Datum", 40, y);
+  doc.text("Tätigkeit", 170, y);
+  doc.text("Interne PO", 300, y);
+  doc.text("Std.", 500, y, { align: "right" });
+  y += rowH + 4;
+
+  doc.font("Helvetica");
+  let sum = 0;
+
+  for (const r of entries.rows) {
+    const hours = Number(r.total_hours || 0);
+    sum += hours;
+
+    const sp = await pool.query(
+      `SELECT internal_po
+       FROM staffplan
+       WHERE employee_name=$1 AND work_date=$2
+       LIMIT 1`,
+      [emp.rows[0].name, r.work_date]
+    );
+
+    const internalPo = sp.rows[0]?.internal_po || "-";
+
+    doc.text(new Date(r.work_date).toLocaleDateString("de-DE"), 40, y);
+    doc.text(r.activity || "Arbeitszeit", 170, y);
+    doc.text(internalPo, 300, y);
+    doc.text(hours.toFixed(2), 500, y, { align: "right" });
+
+    y += rowH;
+  }
+
+  y += 6;
+  doc.font("Helvetica-Bold");
+  doc.text("Gesamt:", 350, y);
+  doc.text(sum.toFixed(2), 500, y, { align: "right" });
+
+  doc.end();
+});
 
 // ============================================================
 // START
