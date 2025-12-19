@@ -1,5 +1,5 @@
 // ============================================================
-// INDUSTREER ZEITERFASSUNG – SERVER.JS (FINAL)
+// INDUSTREER ZEITERFASSUNG – SERVER.JS (PDF LOGO FINAL FIX)
 // ============================================================
 
 const express = require("express");
@@ -22,13 +22,13 @@ app.use(express.static(path.join(__dirname, "..", "frontend")));
 // ============================================================
 // PAGE ROUTES
 // ============================================================
-app.get("/employee", (req, res) => {
-  res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"));
-});
+app.get("/employee", (_, res) =>
+  res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"))
+);
 
-app.get("/admin", (req, res) => {
-  res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"));
-});
+app.get("/admin", (_, res) =>
+  res.sendFile(path.join(__dirname, "..", "frontend", "admin.html"))
+);
 
 // ============================================================
 // DATABASE
@@ -74,16 +74,16 @@ async function migrate() {
 }
 
 // ============================================================
-// LOGO STORAGE (RENDER FREE SAFE)
+// LOGO STORAGE (PNG, PDF-KOMPATIBEL)
 // ============================================================
-const LOGO_PATH = path.join(__dirname, "logo.bin");
+const LOGO_PATH = path.join(__dirname, "logo.png");
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_, file, cb) => {
     if (!file.mimetype.startsWith("image/")) {
-      return cb(new Error("Only images allowed"));
+      return cb(new Error("Only image files allowed"));
     }
     cb(null, true);
   }
@@ -100,20 +100,15 @@ app.post("/api/admin/logo", upload.single("logo"), (req, res) => {
 });
 
 // Serve logo
-app.get("/api/logo", (req, res) => {
-  if (!fs.existsSync(LOGO_PATH)) {
-    return res.sendStatus(404);
-  }
-  res.setHeader("Content-Type", "image/png");
-  res.send(fs.readFileSync(LOGO_PATH));
+app.get("/api/logo", (_, res) => {
+  if (!fs.existsSync(LOGO_PATH)) return res.sendStatus(404);
+  res.sendFile(LOGO_PATH);
 });
 
 // ============================================================
 // HEALTH
 // ============================================================
-app.get("/api/health", (req, res) => {
-  res.json({ ok: true });
-});
+app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 // ============================================================
 // TIME TRACKING
@@ -147,13 +142,8 @@ app.post("/api/time/break", async (req, res) => {
 });
 
 app.post("/api/time/end", async (req, res) => {
-  const { employee_id, testMinutes } = req.body;
-
-  const realNow = new Date();
-  const now = testMinutes
-    ? new Date(realNow.getTime() + testMinutes * 60000)
-    : realNow;
-
+  const { employee_id } = req.body;
+  const now = new Date();
   const today = now.toISOString().slice(0, 10);
 
   const r = await pool.query(
@@ -163,19 +153,12 @@ app.post("/api/time/end", async (req, res) => {
     [employee_id, today]
   );
 
-  if (!r.rows.length) {
-    return res.status(400).json({ ok: false });
-  }
+  if (!r.rows.length) return res.status(400).json({ ok: false });
 
   const entry = r.rows[0];
-  const worked =
-    (now - new Date(entry.start_time)) / 1000 / 60 / 60;
-
+  const worked = (now - new Date(entry.start_time)) / 36e5;
   const autoBreak = worked >= 6 ? 30 : 0;
-  const total = Math.max(
-    0,
-    worked - (entry.break_minutes + autoBreak) / 60
-  );
+  const total = Math.max(0, worked - (entry.break_minutes + autoBreak) / 60);
 
   const emp = await pool.query(
     "SELECT daily_hours FROM employees WHERE employee_id=$1",
@@ -195,15 +178,11 @@ app.post("/api/time/end", async (req, res) => {
     [now, autoBreak, total, overtime, entry.id]
   );
 
-  res.json({
-    ok: true,
-    totalHours: total.toFixed(2),
-    overtimeHours: overtime.toFixed(2)
-  });
+  res.json({ ok: true, totalHours: total.toFixed(2) });
 });
 
 // ============================================================
-// PDF TIMESHEET
+// PDF TIMESHEET (MIT LOGO)
 // ============================================================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   const { employeeId, kw, po } = req.params;
@@ -234,6 +213,7 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
 
   doc.fontSize(16).text("STUNDENNACHWEIS", { align: "center" });
   doc.moveDown();
+
   doc.fontSize(10);
   doc.text(`Mitarbeiter: ${emp.rows[0].name}`);
   doc.text(`KW: ${kw}`);
@@ -244,33 +224,15 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:po", async (req, res) => {
   doc.text("Datum", 40);
   doc.text("Arbeitszeit", 200);
   doc.text("Überstunden", 330);
-  doc.moveDown(0.3);
-  doc.moveTo(40, doc.y).lineTo(550, doc.y).stroke();
+  doc.moveDown(0.5);
   doc.font("Helvetica");
 
-  let sum = 0;
-  let ot = 0;
-
   entries.rows.forEach(e => {
-    sum += Number(e.total_hours || 0);
-    ot += Number(e.overtime_hours || 0);
     doc.text(new Date(e.work_date).toLocaleDateString("de-DE"), 40);
     doc.text((e.total_hours || 0) + " Std", 200);
     doc.text((e.overtime_hours || 0) + " Std", 330);
     doc.moveDown();
   });
-
-  doc.moveDown();
-  doc.font("Helvetica-Bold");
-  doc.text("Gesamt:", 200);
-  doc.text(sum.toFixed(2) + " Std", 330);
-  doc.text("Überstunden:", 200);
-  doc.text(ot.toFixed(2) + " Std", 330);
-
-  doc.moveDown(3);
-  doc.text("Unterschrift Mitarbeiter: ____________________________");
-  doc.moveDown(2);
-  doc.text("Unterschrift Kunde: _________________________________");
 
   doc.end();
 });
