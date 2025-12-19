@@ -15,7 +15,7 @@
     button.secondary { background: #455a64; }
     button.pause { background: #f57c00; }
     .timer { font-size: 18px; font-weight: bold; margin-top: 10px; }
-    .status { margin-top: 10px; font-size: 14px; }
+    .status { margin-top: 10px; font-size: 14px; white-space: pre-wrap; }
     hr { margin: 20px 0; }
   </style>
 </head>
@@ -64,30 +64,19 @@
 
 <script>
 let timerInterval = null;
-let pauseStart = null;
 
 function setStatus(t){ document.getElementById("status").innerText = t; }
-
 function lsKey(id){ return `workStart_${id}`; }
 
 async function loadEmployeeName() {
   const id = employeeId.value.trim();
   if (!id) return;
-
   try {
     const r = await fetch(`/api/employee/${encodeURIComponent(id)}`);
-    if (!r.ok) {
-      welcome.innerText = "Willkommen";
-      return;
-    }
+    if (!r.ok) { welcome.innerText = "Willkommen"; return; }
     const j = await r.json();
-    if (j.ok && j.employee?.name) {
-      welcome.innerText = `Willkommen, ${j.employee.name}`;
-      restoreTimerIfRunning(); // falls schon gestartet
-    }
-  } catch {
-    welcome.innerText = "Willkommen";
-  }
+    if (j.ok && j.employee?.name) welcome.innerText = `Willkommen, ${j.employee.name}`;
+  } catch { welcome.innerText = "Willkommen"; }
 }
 
 function startTimer(startISO) {
@@ -105,17 +94,15 @@ function startTimer(startISO) {
   }, 1000);
 }
 
-function restoreTimerIfRunning() {
-  const id = employeeId.value.trim();
-  if (!id) return;
-  const stored = localStorage.getItem(lsKey(id));
-  if (stored) startTimer(stored);
+function stopTimer(id) {
+  localStorage.removeItem(lsKey(id));
+  if (timerInterval) clearInterval(timerInterval);
+  timerBox.style.display = "none";
 }
 
 async function startWork() {
   const id = employeeId.value.trim();
   if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
-
   await loadEmployeeName();
 
   const r = await fetch("/api/time/start", {
@@ -125,25 +112,41 @@ async function startWork() {
   });
 
   const j = await r.json();
-  if (!j.ok) return setStatus("Fehler beim Arbeitsbeginn");
+  if (!j.ok) return setStatus(`Arbeitsbeginn fehlgeschlagen:\n${j.error || ""}`);
 
-  // Startzeit speichern (damit Timer nach Reload bleibt)
   localStorage.setItem(lsKey(id), j.start_time);
   startTimer(j.start_time);
-
-  setStatus("Arbeitsbeginn erfasst");
+  setStatus("Arbeitsblock gestartet");
 }
 
-function startBreak() {
-  pauseStart = new Date();
+async function startBreak() {
+  const id = employeeId.value.trim();
+  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
+
+  const r = await fetch("/api/break/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ employee_id: id })
+  });
+
+  const j = await r.json();
+  if (!j.ok) return setStatus(`Pause starten fehlgeschlagen:\n${j.error || ""}`);
   setStatus("Raucherpause gestartet");
 }
 
-function endBreak() {
-  if (!pauseStart) return setStatus("Keine Raucherpause aktiv");
-  const min = (Date.now() - pauseStart.getTime()) / 60000;
-  pauseStart = null;
-  setStatus(`Raucherpause beendet (${min.toFixed(1)} Min)`);
+async function endBreak() {
+  const id = employeeId.value.trim();
+  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
+
+  const r = await fetch("/api/break/end", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ employee_id: id })
+  });
+
+  const j = await r.json();
+  if (!j.ok) return setStatus(`Pause beenden fehlgeschlagen:\n${j.error || ""}`);
+  setStatus(`Raucherpause beendet (${j.minutes} Min)`);
 }
 
 async function endWork() {
@@ -160,14 +163,10 @@ async function endWork() {
   });
 
   const j = await r.json();
-  if (!j.ok) return setStatus("Fehler beim Arbeitsende");
+  if (!j.ok) return setStatus(`Arbeitsende fehlgeschlagen:\n${j.error || ""}`);
 
-  // Timer stoppen & löschen
-  localStorage.removeItem(lsKey(id));
-  if (timerInterval) clearInterval(timerInterval);
-  timerBox.style.display = "none";
-
-  setStatus(`Arbeitsende erfasst (${j.hours || "?"} Std)`);
+  stopTimer(id);
+  setStatus(`Arbeitsblock beendet\nNetto: ${j.net_hours} Std\nPause: ${j.break_minutes} Min`);
 }
 
 function getKW(d){
@@ -198,12 +197,13 @@ function printSelectWeek() {
   window.open(`/api/pdf/timesheet/${encodeURIComponent(id)}/${encodeURIComponent(kw)}/${encodeURIComponent(po)}`, "_blank");
 }
 
-// beim Laden: wenn ID schon drin ist, Timer wiederherstellen
+// Restore timer after reload (if a block is running)
 window.addEventListener("load", () => {
   const id = employeeId.value.trim();
   if (id) {
     loadEmployeeName();
-    restoreTimerIfRunning();
+    const stored = localStorage.getItem(lsKey(id));
+    if (stored) startTimer(stored);
   }
 });
 </script>
