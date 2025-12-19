@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>Mitarbeiter – Zeiterfassung</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <style>
     body {
@@ -11,7 +11,6 @@
       max-width: 420px;
       margin: auto;
       padding: 20px;
-      text-align: center;
       background: #f4f6f8;
     }
 
@@ -20,11 +19,16 @@
       padding: 20px;
       border-radius: 12px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      text-align: center;
     }
 
     img.logo {
       max-width: 200px;
-      margin-bottom: 15px;
+      margin-bottom: 10px;
+    }
+
+    h2 {
+      margin-top: 5px;
     }
 
     input, select, button {
@@ -47,16 +51,19 @@
       background: #455a64;
     }
 
-    .status {
-      margin-top: 15px;
-      font-size: 14px;
-      color: #333;
+    button.pause {
+      background: #f57c00;
     }
 
     .timer {
+      margin-top: 10px;
       font-size: 18px;
       font-weight: bold;
+    }
+
+    .status {
       margin-top: 10px;
+      font-size: 14px;
     }
 
     hr {
@@ -69,23 +76,25 @@
 <div class="box">
 
   <!-- LOGO -->
-  <img src="/api/logo" class="logo" onerror="this.style.display='none'" />
+  <img src="/api/logo" class="logo" onerror="this.style.display='none'">
 
   <h2 id="welcome">Willkommen</h2>
 
-  <!-- MITARBEITER ID -->
-  <input id="employeeId" placeholder="Mitarbeiter-ID" />
+  <!-- MITARBEITER -->
+  <input id="employeeId" placeholder="Mitarbeiter-ID">
 
   <!-- ARBEITSBEGINN -->
   <button onclick="startWork()">Arbeitsbeginn</button>
 
   <!-- TIMER -->
-  <div class="timer" id="timer" style="display:none;">
-    Arbeitszeit läuft seit <span id="startTimeText"></span><br/>
-    Dauer: <span id="elapsed">00:00:00</span>
+  <div id="timerBox" style="display:none;">
+    <div class="timer">
+      Start: <span id="startTimeText"></span><br>
+      Dauer: <span id="elapsed">00:00:00</span>
+    </div>
   </div>
 
-  <hr/>
+  <hr>
 
   <!-- TÄTIGKEIT -->
   <select id="activity">
@@ -96,12 +105,16 @@
     <option value="E-Installation">E-Installation</option>
   </select>
 
+  <!-- RAUCHERPAUSE -->
+  <button class="pause" onclick="startBreak()">Raucherpause starten</button>
+  <button class="pause" onclick="endBreak()">Raucherpause beenden</button>
+
   <!-- ARBEITSENDE -->
   <button onclick="endWork()">Arbeitsende</button>
 
-  <hr/>
+  <hr>
 
-  <!-- PDF BUTTONS -->
+  <!-- PDF -->
   <button class="secondary" onclick="printLastWeek()">
     Stundenzettel letzte Woche drucken
   </button>
@@ -117,13 +130,14 @@
 <script>
 let startTimestamp = null;
 let timerInterval = null;
+let pauseStart = null;
 
-function setStatus(msg) {
-  document.getElementById("status").innerText = msg;
+function setStatus(t) {
+  document.getElementById("status").innerText = t;
 }
 
 async function startWork() {
-  const id = document.getElementById("employeeId").value;
+  const id = employeeId.value;
   if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
 
   const r = await fetch("/api/time/start", {
@@ -135,32 +149,37 @@ async function startWork() {
   const j = await r.json();
   if (!j.ok) return setStatus("Fehler beim Arbeitsbeginn");
 
-  const now = new Date();
-  startTimestamp = now;
-  document.getElementById("startTimeText").innerText =
-    now.toLocaleTimeString("de-DE");
-
-  document.getElementById("timer").style.display = "block";
-  document.getElementById("welcome").innerText = "Willkommen";
+  startTimestamp = new Date();
+  startTimeText.innerText = startTimestamp.toLocaleTimeString("de-DE");
+  timerBox.style.display = "block";
 
   timerInterval = setInterval(updateTimer, 1000);
   setStatus("Arbeitsbeginn erfasst");
 }
 
 function updateTimer() {
-  if (!startTimestamp) return;
   const diff = Math.floor((Date.now() - startTimestamp.getTime()) / 1000);
-
   const h = String(Math.floor(diff / 3600)).padStart(2, "0");
   const m = String(Math.floor((diff % 3600) / 60)).padStart(2, "0");
   const s = String(diff % 60).padStart(2, "0");
+  elapsed.innerText = `${h}:${m}:${s}`;
+}
 
-  document.getElementById("elapsed").innerText = `${h}:${m}:${s}`;
+function startBreak() {
+  pauseStart = new Date();
+  setStatus("Raucherpause gestartet");
+}
+
+function endBreak() {
+  if (!pauseStart) return;
+  const diff = (Date.now() - pauseStart.getTime()) / 60000;
+  pauseStart = null;
+  setStatus(`Raucherpause beendet (${diff.toFixed(1)} Min)`);
 }
 
 async function endWork() {
-  const id = document.getElementById("employeeId").value;
-  const activity = document.getElementById("activity").value;
+  const id = employeeId.value;
+  const activity = activitySelect.value;
 
   const r = await fetch("/api/time/end", {
     method: "POST",
@@ -172,43 +191,30 @@ async function endWork() {
   if (!j.ok) return setStatus("Fehler beim Arbeitsende");
 
   clearInterval(timerInterval);
-  document.getElementById("timer").style.display = "none";
-  startTimestamp = null;
-
+  timerBox.style.display = "none";
   setStatus("Arbeitsende erfasst");
 }
 
-function getCalendarWeek(d) {
+function getKW(d) {
   d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
-  return Math.ceil((((d - yearStart) / 86400000) + 1)/7);
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay()||7));
+  const y = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  return Math.ceil((((d - y)/86400000)+1)/7);
 }
 
 function printLastWeek() {
-  const id = document.getElementById("employeeId").value;
-  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
-
-  const d = new Date();
-  d.setDate(d.getDate() - 7);
-  const kw = "CW" + getCalendarWeek(d);
-
-  const po = prompt("Bitte Kunden-PO eingeben:");
-  if (!po) return;
-
-  window.open(`/api/pdf/timesheet/${id}/${kw}/${po}`, "_blank");
+  const id = employeeId.value;
+  const po = prompt("Kunden-PO:");
+  if (!id || !po) return;
+  const d = new Date(); d.setDate(d.getDate() - 7);
+  window.open(`/api/pdf/timesheet/${id}/CW${getKW(d)}/${po}`, "_blank");
 }
 
 function printSelectWeek() {
-  const id = document.getElementById("employeeId").value;
-  if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
-
-  const kw = prompt("Kalenderwoche eingeben (z. B. CW49):");
-  const po = prompt("Bitte Kunden-PO eingeben:");
-
-  if (!kw || !po) return;
-
+  const id = employeeId.value;
+  const kw = prompt("Kalenderwoche (z. B. CW49):");
+  const po = prompt("Kunden-PO:");
+  if (!id || !kw || !po) return;
   window.open(`/api/pdf/timesheet/${id}/${kw}/${po}`, "_blank");
 }
 </script>
