@@ -1,15 +1,14 @@
 // ======================================================================
-// INDUSTREER ZEITERFASSUNG – server.js (FULL)
+// INDUSTREER ZEITERFASSUNG – server.js (FULL, KW AUS DATUM - ISO WEEK)
 // - /admin + /employee
 // - Logo Upload + /api/logo
-// - Staffplan Import (Excel tolerant)
-// - Employee Lookup /api/employee/:id
-// - Current running work block /api/time/current/:employee_id (Timer-Fix)
+// - Staffplan Import (Excel tolerant) -> calendar_week wird IMMER aus work_date berechnet
+// - Employees: list + update + lookup
+// - Current running work block endpoint (Timer-Fix)
 // - Multi Start/Stop per day (Work-Blocks)
 // - Smoking breaks per Work-Block (Nettozeit)
-// - Option B: POs pro Mitarbeiter/KW /api/employee/:employeeId/pos/:kw
-// - PDF Timesheet /api/pdf/timesheet/:employeeId/:kw/:customerPo
-//     -> Filtert ausschließlich Staffplan-Tage (KW+PO+Mitarbeiter)
+// - Option B: POs pro Mitarbeiter/KW
+// - PDF Timesheet: Filtert ausschließlich Staffplan-Tage (KW+PO+Mitarbeiter) + Start/Ende + Pause + Netto
 // ======================================================================
 
 const express = require("express");
@@ -93,6 +92,7 @@ async function migrate() {
     );
   `);
 
+  // Ensure columns exist for older DBs
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS calendar_week TEXT;`);
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS employee_name TEXT;`);
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS work_date DATE;`);
@@ -113,11 +113,9 @@ const LOGO_META = path.join(__dirname, "logo.json");
 
 app.post("/api/admin/logo", upload.single("logo"), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
-
   if (!["image/png", "image/jpeg"].includes(req.file.mimetype)) {
     return res.status(400).json({ ok: false, error: "Nur PNG oder JPG erlaubt" });
   }
-
   fs.writeFileSync(LOGO_FILE, req.file.buffer);
   fs.writeFileSync(LOGO_META, JSON.stringify({ mimetype: req.file.mimetype }));
   res.json({ ok: true });
@@ -133,7 +131,71 @@ app.get("/api/logo", (_, res) => {
 // -------------------- health --------------------
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
-// -------------------- employee lookup --------------------
+// ======================================================================
+// Helpers: Date parsing + ISO week
+// ======================================================================
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function parseDateAny(v) {
+  if (!v) return null;
+
+  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
+
+  // Excel serial date
+  if (typeof v === "number") {
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    if (!isNaN(d)) return d.toISOString().slice(0, 10);
+  }
+
+  // German date string dd.mm.yyyy
+  if (typeof v === "string") {
+    const m = v.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+    if (m) return `${m[3]}-${pad2(m[2])}-${pad2(m[1])}`;
+  }
+
+  return null;
+}
+
+function parseHoursAny(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number" && isFinite(v)) return v;
+  if (typeof v === "string") {
+    const m = v.replace(",", ".").match(/(\d+(\.\d+)?)/);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
+function isoWeekYearAndNumber(dateObj) {
+  // ISO week based on UTC
+  const d = new Date(Date.UTC(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()));
+  // Thursday in current week decides the year
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return { year: d.getUTCFullYear(), week: weekNo };
+}
+
+function cwFromISODate(isoDateStr) {
+  // isoDateStr = YYYY-MM-DD
+  const [y, m, d] = isoDateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const { week } = isoWeekYearAndNumber(dt);
+  return `CW${week}`;
+}
+
+// ======================================================================
+// Employees API (Admin Übersicht + Update) + Lookup
+// ======================================================================
+app.get("/api/employees", async (_req, res) => {
+  const r = await pool.query(
+    "SELECT employee_id, name, email, language FROM employees ORDER BY name"
+  );
+  res.json(r.rows);
+});
+
 app.get("/api/employee/:id", async (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
@@ -145,6 +207,61 @@ app.get("/api/employee/:id", async (req, res) => {
   if (!r.rows.length) return res.status(404).json({ ok: false, error: "Mitarbeiter nicht gefunden" });
 
   res.json({ ok: true, employee: r.rows[0] });
+});
+
+// Update employee fields; supports later ID change via new_employee_id
+app.post("/api/employees/update", async (req, res) => {
+  const employee_id = String(req.body.employee_id || "").trim();
+  const new_employee_id = String(req.body.new_employee_id || "").trim() || null;
+  const email = (req.body.email === undefined) ? undefined : (String(req.body.email || "").trim() || null);
+  const language = (req.body.language === undefined) ? undefined : (String(req.body.language || "").trim() || null);
+
+  if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Update ID if requested
+    if (new_employee_id && new_employee_id !== employee_id) {
+      // Ensure target doesn't exist
+      const exists = await client.query("SELECT 1 FROM employees WHERE employee_id=$1", [new_employee_id]);
+      if (exists.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ ok: false, error: "Neue ID existiert bereits" });
+      }
+
+      await client.query(
+        "UPDATE employees SET employee_id=$1 WHERE employee_id=$2",
+        [new_employee_id, employee_id]
+      );
+
+      // Also update time/break tables to keep continuity
+      await client.query("UPDATE time_entries SET employee_id=$1 WHERE employee_id=$2", [new_employee_id, employee_id]);
+      await client.query("UPDATE break_entries SET employee_id=$1 WHERE employee_id=$2", [new_employee_id, employee_id]);
+
+      // Switch context for further updates
+      req.body.employee_id = new_employee_id;
+    }
+
+    const effectiveId = new_employee_id && new_employee_id !== employee_id ? new_employee_id : employee_id;
+
+    if (email !== undefined) {
+      await client.query("UPDATE employees SET email=$1 WHERE employee_id=$2", [email, effectiveId]);
+    }
+    if (language !== undefined) {
+      await client.query("UPDATE employees SET language=$1 WHERE employee_id=$2", [language, effectiveId]);
+    }
+
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
 });
 
 // ======================================================================
@@ -170,7 +287,100 @@ app.get("/api/time/current/:employee_id", async (req, res) => {
 });
 
 // ======================================================================
+// Staffplan Import (KW AUS DATUM!)
+// Erwartung: Datumszeile ab "irgendwo" ab Spalte L; Mitarbeitername Spalte I
+// Neu: calendar_week wird aus work_date berechnet (CWxx)
+// ======================================================================
+app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+
+    // Find date header row (starting at column L = index 11)
+    let dates = [];
+    for (let r = 1; r <= 25; r++) {
+      const found = [];
+      for (let c = 11; c < 90; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: r - 1, c })];
+        const iso = cell ? parseDateAny(cell.v) : null;
+        if (iso) found.push({ c, iso });
+      }
+      if (found.length >= 3) {
+        dates = found;
+        break;
+      }
+    }
+
+    if (!dates.length) {
+      return res.json({ ok: true, imported: 0, note: "Keine Datumszeile gefunden (ab Spalte L erwartet)." });
+    }
+
+    // "Replace" strategy:
+    // Wir löschen bestehende Staffplan-Einträge für diese Datumsrange (damit Re-Import sauber ist)
+    const allIso = dates.map(d => d.iso).sort();
+    const minDate = allIso[0];
+    const maxDate = allIso[allIso.length - 1];
+
+    await pool.query(
+      `DELETE FROM staffplan WHERE work_date BETWEEN $1::date AND $2::date`,
+      [minDate, maxDate]
+    );
+
+    let imported = 0;
+
+    for (let row = 6; row < 8000; row++) {
+      const customer_name = ws[`A${row}`]?.v?.toString().trim() || "";
+      const internal_po = ws[`B${row}`]?.v?.toString().trim() || "";
+      const customer_po = ws[`E${row}`]?.v?.toString().trim() || "";
+      const employee_name = ws[`I${row}`]?.v?.toString().trim() || "";
+
+      if (!employee_name) continue;
+
+      for (const d of dates) {
+        const cell = ws[XLSX.utils.encode_cell({ r: row - 1, c: d.c })];
+        const hours = parseHoursAny(cell?.v);
+        if (!hours || hours <= 0) continue;
+
+        const calendar_week = cwFromISODate(d.iso);
+
+        await pool.query(
+          `INSERT INTO staffplan (calendar_week, employee_name, work_date, customer_name, customer_po, internal_po)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [calendar_week, employee_name, d.iso, customer_name, customer_po, internal_po]
+        );
+
+        imported++;
+      }
+    }
+
+    // Optional: auto-create employees from staffplan names if not exist
+    // (IDs bleiben wie bisher manuell/extern; wenn ihr IDs schon habt, könnt ihr diese später pflegen)
+    // Wir legen hier NICHT automatisch IDs an, weil der Staffplan keine ID enthält.
+    // Falls ihr das vorher schon anders hattet, kann man das wieder ergänzen.
+
+    res.json({
+      ok: true,
+      imported,
+      dateRange: { from: minDate, to: maxDate },
+      weeksDetected: Array.from(new Set(dates.map(x => cwFromISODate(x.iso)))).sort(),
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Optional: Staffplan komplett löschen
+app.post("/api/admin/staffplan/clear", async (_req, res) => {
+  await pool.query("DELETE FROM staffplan");
+  res.json({ ok: true });
+});
+
+// ======================================================================
 // OPTION B: Alle POs eines Mitarbeiters für eine KW (aus Staffplan)
+// - Achtung: Staffplan nutzt employee_name, nicht employee_id
 // ======================================================================
 app.get("/api/employee/:employeeId/pos/:kw", async (req, res) => {
   try {
@@ -199,100 +409,6 @@ app.get("/api/employee/:employeeId/pos/:kw", async (req, res) => {
   }
 });
 
-// ===================== tolerant helpers =====================
-function parseDateAny(v) {
-  if (!v) return null;
-
-  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
-
-  if (typeof v === "number") {
-    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
-    if (!isNaN(d)) return d.toISOString().slice(0, 10);
-  }
-
-  if (typeof v === "string") {
-    const m = v.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
-    if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-  }
-
-  return null;
-}
-
-function parseHoursAny(v) {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "number" && isFinite(v)) return v;
-
-  if (typeof v === "string") {
-    const m = v.replace(",", ".").match(/(\d+(\.\d+)?)/);
-    if (m) return Number(m[1]);
-  }
-  return null;
-}
-
-// ===================== staffplan import (tolerant) =====================
-app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
-
-    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-
-    const calendarWeek = ws["L2"] ? String(ws["L2"].v).trim() : null;
-
-    // Find date header row (starting at column L = index 11)
-    let dates = [];
-    for (let r = 1; r <= 20; r++) {
-      const found = [];
-      for (let c = 11; c < 80; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r: r - 1, c })];
-        const iso = cell ? parseDateAny(cell.v) : null;
-        if (iso) found.push({ c, iso });
-      }
-      if (found.length >= 3) {
-        dates = found;
-        break;
-      }
-    }
-
-    if (!dates.length) {
-      return res.json({ ok: true, calendarWeek, imported: 0 });
-    }
-
-    if (calendarWeek) {
-      await pool.query("DELETE FROM staffplan WHERE calendar_week=$1", [calendarWeek]);
-    }
-
-    let imported = 0;
-
-    for (let row = 6; row < 7000; row++) {
-      const customer_name = ws[`A${row}`]?.v?.toString().trim() || "";
-      const internal_po = ws[`B${row}`]?.v?.toString().trim() || "";
-      const customer_po = ws[`E${row}`]?.v?.toString().trim() || "";
-      const employee_name = ws[`I${row}`]?.v?.toString().trim() || "";
-
-      if (!employee_name) continue;
-
-      for (const d of dates) {
-        const cell = ws[XLSX.utils.encode_cell({ r: row - 1, c: d.c })];
-        const hours = parseHoursAny(cell?.v);
-        if (!hours || hours <= 0) continue;
-
-        await pool.query(
-          `INSERT INTO staffplan (calendar_week, employee_name, work_date, customer_name, customer_po, internal_po)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
-          [calendarWeek, employee_name, d.iso, customer_name, customer_po, internal_po]
-        );
-        imported++;
-      }
-    }
-
-    res.json({ ok: true, calendarWeek, imported });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
 // ======================================================================
 // Multi start/stop per day (work blocks) + breaks per block
 // ======================================================================
@@ -302,7 +418,6 @@ app.post("/api/time/start", async (req, res) => {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  // prevent double-start
   const open = await pool.query(
     `SELECT id FROM time_entries
      WHERE employee_id=$1 AND work_date=$2 AND end_time IS NULL
@@ -421,19 +536,18 @@ app.post("/api/time/end", async (req, res) => {
 });
 
 // ======================================================================
-// PDF Timesheet (filter by staffplan days KW+PO+Mitarbeiter)
+// PDF Timesheet
 // Route: /api/pdf/timesheet/:employeeId/:kw/:customerPo
+// Filter: staffplan days only (KW + PO + employee_name mapped from employees.name)
 // ======================================================================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
   try {
     const { employeeId, kw, customerPo } = req.params;
 
-    // employee name (match staffplan.employee_name)
     const emp = await pool.query("SELECT name FROM employees WHERE employee_id=$1", [employeeId]);
     if (!emp.rows.length) return res.sendStatus(404);
     const employeeName = emp.rows[0].name;
 
-    // staffplan days for this KW+PO+employee
     const sp = await pool.query(
       `SELECT DISTINCT work_date, customer_name, internal_po
        FROM staffplan
@@ -450,7 +564,6 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     const customerName = sp.rows[0].customer_name || "-";
     const internalPo = sp.rows[0].internal_po || "-";
 
-    // time entries only on these staffplan dates (completed blocks)
     const te = await pool.query(
       `SELECT id, work_date, start_time, end_time, total_hours, activity
        FROM time_entries
@@ -477,7 +590,6 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
       breakMinutesByEntry.set(b.time_entry_id, (breakMinutesByEntry.get(b.time_entry_id) || 0) + mins);
     }
 
-    // PDF
     const doc = new PDFDocument({ size: "A4", margin: 40 });
     res.setHeader("Content-Type", "application/pdf");
     doc.pipe(res);
