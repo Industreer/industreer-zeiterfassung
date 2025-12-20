@@ -22,6 +22,11 @@ app.get("/employee", (_, res) =>
   res.sendFile(path.join(__dirname, "..", "frontend", "employee.html"))
 );
 
+// NEW: Debug page (upload Excel to diagnostic endpoint)
+app.get("/debug", (_, res) =>
+  res.sendFile(path.join(__dirname, "..", "frontend", "debug.html"))
+);
+
 // -------------------- database --------------------
 const pool = new Pool({
   host: process.env.PGHOST,
@@ -49,26 +54,46 @@ function pad2(n) {
   return String(n).padStart(2, "0");
 }
 
-// Parse dates from Excel cells (Date object / serial / "dd.mm.yyyy")
+// Parse dates from Excel cells (Date object / serial / "dd.mm.yyyy" / common text)
 function parseDateAny(v) {
   if (!v) return null;
 
   if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
 
+  // Excel serial
   if (typeof v === "number") {
     const d = new Date(Math.round((v - 25569) * 86400 * 1000));
     if (!isNaN(d)) return d.toISOString().slice(0, 10);
   }
 
   if (typeof v === "string") {
-    const m = v.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+    const s = v.trim();
+
+    // dd.mm.yyyy
+    let m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+    if (m) return `${m[3]}-${pad2(m[2])}-${pad2(m[1])}`;
+
+    // dd.mm.yy
+    m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2})$/);
+    if (m) {
+      const yy = Number(m[3]);
+      const yyyy = yy >= 70 ? 1900 + yy : 2000 + yy;
+      return `${yyyy}-${pad2(m[2])}-${pad2(m[1])}`;
+    }
+
+    // yyyy-mm-dd
+    m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+
+    // dd/mm/yyyy
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (m) return `${m[3]}-${pad2(m[2])}-${pad2(m[1])}`;
   }
 
   return null;
 }
 
-// Parse hours from Excel cell (number or "7,5" etc.)
+// Parse hours (number or "7,5" etc.)
 function parseHoursAny(v) {
   if (v === null || v === undefined) return null;
   if (typeof v === "number" && isFinite(v)) return v;
@@ -97,6 +122,18 @@ function cwFromISODate(isoDateStr) {
 function s(v) {
   if (v === null || v === undefined) return "";
   return String(v).trim();
+}
+
+// Convert column index -> Excel column letters (0=A)
+function colLetters(idx) {
+  let n = idx + 1;
+  let out = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    out = String.fromCharCode(65 + r) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
 }
 
 // ======================================================================
@@ -150,7 +187,6 @@ async function migrate() {
     );
   `);
 
-  // Ensure columns exist for older DBs
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS calendar_week TEXT;`);
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS employee_name TEXT;`);
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS work_date DATE;`);
@@ -185,7 +221,7 @@ app.get("/api/logo", (_, res) => {
 });
 
 // ======================================================================
-// Employees API (Admin view + update) + Lookup
+// Employees API
 // ======================================================================
 app.get("/api/employees", async (_req, res) => {
   const r = await pool.query(
@@ -207,7 +243,6 @@ app.get("/api/employee/:id", async (req, res) => {
   res.json({ ok: true, employee: r.rows[0] });
 });
 
-// Update employee fields; supports later ID change via new_employee_id
 app.post("/api/employees/update", async (req, res) => {
   const employee_id = s(req.body.employee_id);
   const new_employee_id = s(req.body.new_employee_id) || null;
@@ -253,7 +288,7 @@ app.post("/api/employees/update", async (req, res) => {
 });
 
 // ======================================================================
-// Auto-create employees from staffplan names (keeps your workflow working)
+// Auto-create employees by name (so login works after staffplan import)
 // ======================================================================
 async function getNextNumericEmployeeId(client) {
   const r = await client.query(
@@ -270,7 +305,6 @@ async function ensureEmployeeByName(client, name, idCache) {
   if (!n) return null;
   if (idCache.has(n)) return idCache.get(n);
 
-  // find by exact name
   const found = await client.query(
     "SELECT employee_id FROM employees WHERE name=$1 LIMIT 1",
     [n]
@@ -280,7 +314,6 @@ async function ensureEmployeeByName(client, name, idCache) {
     return found.rows[0].employee_id;
   }
 
-  // create new numeric ID
   const nextId = await getNextNumericEmployeeId(client);
   await client.query(
     "INSERT INTO employees (employee_id, name, email, language) VALUES ($1,$2,NULL,'de')",
@@ -291,7 +324,7 @@ async function ensureEmployeeByName(client, name, idCache) {
 }
 
 // ======================================================================
-// Timer support: running work block
+// Timer support
 // ======================================================================
 app.get("/api/time/current/:employee_id", async (req, res) => {
   const employee_id = s(req.params.employee_id);
@@ -313,13 +346,121 @@ app.get("/api/time/current/:employee_id", async (req, res) => {
 });
 
 // ======================================================================
-// STAFFPLAN IMPORT (ROBUST, OPTION A) + 2-row logic:
-// - employee_name in K or I
-// - per date column:
-//    row: project_code (text)  (O8 style)
-//    row+1: planned_hours (number) (O9 style)
-// - import row/day only if BOTH present: project_code != "" AND planned_hours > 0
-// - calendar_week ALWAYS from date (ISO)
+// DIAGNOSIS (A1): Scan date row and show raw cell values/types far right
+// - DOES NOT WRITE TO DB
+// - Use /debug page to upload file and see JSON
+// ======================================================================
+app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+
+    const startCol = 11; // L
+    const maxRightCols = 520; // much wider scan for diagnosis
+    const headerRowMax = 60;
+
+    let best = { row: null, found: [] };
+
+    for (let r = 1; r <= headerRowMax; r++) {
+      const found = [];
+      for (let c = startCol; c < startCol + maxRightCols; c++) {
+        const addr = XLSX.utils.encode_cell({ r: r - 1, c });
+        const cell = ws[addr];
+        if (!cell) continue;
+
+        const iso = parseDateAny(cell.v);
+        if (iso) {
+          found.push({
+            addr,
+            col: colLetters(c),
+            raw: cell.v,
+            type: cell.t,
+            w: cell.w || null,
+            iso,
+          });
+        }
+      }
+      if (found.length > best.found.length) {
+        best = { row: r, found };
+      }
+    }
+
+    const detected = best.found.sort((a, b) => a.col.localeCompare(b.col));
+    const isoList = detected.map(x => x.iso).sort();
+    const minDate = isoList[0] || null;
+    const maxDate = isoList[isoList.length - 1] || null;
+
+    // Also show a window of cells to the right of the LAST detected date column,
+    // because that's exactly where your staffplan "looks like it continues"
+    let rightWindow = [];
+    if (detected.length) {
+      const last = detected[detected.length - 1];
+      const lastColIdx = XLSX.utils.decode_cell(last.addr).c;
+
+      const r0 = (best.row || 1) - 1; // 0-based header row
+      for (let c = lastColIdx + 1; c <= lastColIdx + 40; c++) {
+        const addr = XLSX.utils.encode_cell({ r: r0, c });
+        const cell = ws[addr];
+        if (!cell) continue;
+
+        rightWindow.push({
+          addr,
+          col: colLetters(c),
+          raw: cell.v,
+          type: cell.t,
+          w: cell.w || null,
+          parsedIso: parseDateAny(cell.v),
+        });
+      }
+    }
+
+    res.json({
+      ok: true,
+      detectedHeaderRow: best.row,
+      detectedCount: detected.length,
+      minDate,
+      maxDate,
+      first10: detected.slice(0, 10),
+      last10: detected.slice(-10),
+      rightOfLastDetectedPreview: rightWindow,
+      note:
+        "Wenn maxDate vor 2026 endet, schau in rightOfLastDetectedPreview: raw/type/w zeigen, ob Excel dort Text/leer/Formel liefert.",
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Simple DB stats for staffplan already imported
+app.get("/api/debug/staffplan-stats", async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT
+         COUNT(*)::int AS rows,
+         MIN(work_date)::text AS min_date,
+         MAX(work_date)::text AS max_date
+       FROM staffplan`
+    );
+    const w = await pool.query(
+      `SELECT calendar_week, COUNT(*)::int AS n
+       FROM staffplan
+       GROUP BY calendar_week
+       ORDER BY (regexp_replace(calendar_week,'[^0-9]','','g'))::int ASC
+       LIMIT 30`
+    );
+    res.json({ ok: true, stats: r.rows[0], weeksSample: w.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================================
+// STAFFPLAN IMPORT (current working version)
+// - still writes to DB
 // ======================================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   const client = await pool.connect();
@@ -329,14 +470,11 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    // 1) Detect date header row by scanning first ~40 rows and many columns to the right
-    //    Start at column L (index 11), go far right (e.g. 260 columns)
-    let dateHeaderRow = null;
+    const startCol = 11; // L
+    const maxRightCols = 260; // your current scan
     let dates = [];
 
-    const maxRightCols = 260; // very wide sheets (supports years)
-    const startCol = 11; // L
-
+    // Find header row (heuristic)
     for (let r = 1; r <= 40; r++) {
       const found = [];
       for (let c = startCol; c < startCol + maxRightCols; c++) {
@@ -344,9 +482,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         const iso = cell ? parseDateAny(cell.v) : null;
         if (iso) found.push({ c, iso });
       }
-      // Heuristic: a date header row usually contains many dates; accept if >= 5
       if (found.length >= 5) {
-        dateHeaderRow = r;
         dates = found;
         break;
       }
@@ -360,7 +496,6 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       });
     }
 
-    // 2) Determine min/max date and delete staffplan rows in that range for clean reimport
     const isoList = dates.map(d => d.iso).sort();
     const minDate = isoList[0];
     const maxDate = isoList[isoList.length - 1];
@@ -368,30 +503,25 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     await client.query("BEGIN");
     await client.query(`DELETE FROM staffplan WHERE work_date BETWEEN $1::date AND $2::date`, [minDate, maxDate]);
 
-    // 3) Import all staff rows
     let imported = 0;
     const weeksDetected = new Set();
     const employeeIdCache = new Map();
 
-    // We'll scan many rows – your file can be huge. We stop after long empty streak of employees.
     let emptyEmployeeStreak = 0;
 
     for (let row = 6; row < 12000; row++) {
-      // Employee name can be in K or I (robust)
       const employee_name = s(ws[`K${row}`]?.v) || s(ws[`I${row}`]?.v);
       if (!employee_name) {
         emptyEmployeeStreak++;
-        if (emptyEmployeeStreak > 400) break; // stop if too many empty rows
+        if (emptyEmployeeStreak > 400) break;
         continue;
       }
       emptyEmployeeStreak = 0;
 
-      // Customer / PO fields on the employee row
       const customer_name = s(ws[`A${row}`]?.v);
       const internal_po = s(ws[`B${row}`]?.v);
       const customer_po = s(ws[`E${row}`]?.v);
 
-      // Optional: auto-create employee records so login works without separate import
       await ensureEmployeeByName(client, employee_name, employeeIdCache);
 
       for (const d of dates) {
@@ -399,15 +529,12 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         const calendar_week = cwFromISODate(iso);
         weeksDetected.add(calendar_week);
 
-        // project_code on row (e.g. O8)
         const codeCell = ws[XLSX.utils.encode_cell({ r: row - 1, c: d.c })];
         const project_code = s(codeCell?.v);
 
-        // planned_hours on next row (e.g. O9)
-        const plannedCell = ws[XLSX.utils.encode_cell({ r: row, c: d.c })]; // row+1 in 1-based => r=row (0-based index)
+        const plannedCell = ws[XLSX.utils.encode_cell({ r: row, c: d.c })];
         const planned_hours = parseHoursAny(plannedCell?.v);
 
-        // Only import if BOTH present (your rule: text + number)
         if (!project_code) continue;
         if (!planned_hours || planned_hours <= 0) continue;
 
@@ -442,14 +569,13 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   }
 });
 
-// Optional: clear staffplan
 app.post("/api/admin/staffplan/clear", async (_req, res) => {
   await pool.query("DELETE FROM staffplan");
   res.json({ ok: true });
 });
 
 // ======================================================================
-// OPTION B: All POs of an employee for a KW (uses employee_name mapped from employees.name)
+// OPTION B: list customer POs of employee for KW
 // ======================================================================
 app.get("/api/employee/:employeeId/pos/:kw", async (req, res) => {
   try {
@@ -480,7 +606,7 @@ app.get("/api/employee/:employeeId/pos/:kw", async (req, res) => {
 });
 
 // ======================================================================
-// Time tracking: multi blocks + breaks
+// Time tracking
 // ======================================================================
 app.post("/api/time/start", async (req, res) => {
   const employee_id = s(req.body.employee_id);
@@ -606,11 +732,7 @@ app.post("/api/time/end", async (req, res) => {
 });
 
 // ======================================================================
-// PDF Timesheet
-// - Shows ALL staffplan days for KW+PO+employee (even if no IST)
-// - project_code from staffplan shown in header over customer PO
-// - planned_hours shown per day
-// - IST aggregated per day: earliest start, latest end, sum net hours, sum breaks, activities joined
+// PDF (unchanged in this diagnostic build)
 // ======================================================================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
   try {
@@ -618,14 +740,10 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     const kw = s(req.params.kw);
     const customerPo = s(req.params.customerPo);
 
-    const emp = await pool.query(
-      "SELECT name FROM employees WHERE employee_id=$1",
-      [employeeId]
-    );
+    const emp = await pool.query("SELECT name FROM employees WHERE employee_id=$1", [employeeId]);
     if (!emp.rows.length) return res.sendStatus(404);
     const employeeName = emp.rows[0].name;
 
-    // Staffplan rows for this KW+PO+employee
     const sp = await pool.query(
       `SELECT work_date, customer_name, internal_po, project_code, planned_hours
        FROM staffplan
@@ -641,8 +759,6 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     const customerName = sp.rows[0].customer_name || "-";
     const internalPo = sp.rows[0].internal_po || "-";
 
-    // Choose a "best" project_code for the header:
-    // If multiple different codes across days, show the first + "..."
     const codes = Array.from(new Set(sp.rows.map(r => s(r.project_code)).filter(Boolean)));
     let headerProjectCode = "-";
     if (codes.length === 1) headerProjectCode = codes[0];
@@ -650,7 +766,6 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
 
     const staffDates = sp.rows.map(r => r.work_date);
 
-    // All completed time_entries on these dates
     const te = await pool.query(
       `SELECT id, work_date, start_time, end_time, total_hours, activity
        FROM time_entries
@@ -677,7 +792,6 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
       breakMinutesByEntry.set(b.time_entry_id, (breakMinutesByEntry.get(b.time_entry_id) || 0) + mins);
     }
 
-    // Aggregate IST per day
     const istByDate = new Map();
     for (const r of te.rows) {
       const key = new Date(r.work_date).toISOString().slice(0, 10);
@@ -704,12 +818,10 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
       agg.activities.add(s(r.activity) || "Arbeitszeit");
     }
 
-    // PDF
     const doc = new PDFDocument({ size: "A4", margin: 40 });
     res.setHeader("Content-Type", "application/pdf");
     doc.pipe(res);
 
-    // Logo centered
     if (fs.existsSync(LOGO_FILE) && fs.existsSync(LOGO_META)) {
       const meta = JSON.parse(fs.readFileSync(LOGO_META, "utf8"));
       const format = meta.mimetype === "image/png" ? "PNG" : "JPEG";
@@ -724,12 +836,10 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     doc.text(`Kunde: ${customerName}`, 40, 155);
     doc.text(`Kalenderwoche: ${kw}`, 40, 170);
 
-    // Project code ABOVE customer PO (as requested)
     doc.text(`Projekt (Kurzzeichen): ${headerProjectCode}`, 300, 140);
     doc.text(`Kunden-PO: ${customerPo}`, 300, 155);
     doc.text(`Interne PO: ${internalPo}`, 300, 170);
 
-    // Table
     let y = 200;
     const rowH = 12;
 
