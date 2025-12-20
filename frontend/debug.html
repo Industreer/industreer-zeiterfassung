@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Staffplan Debug</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 16px; max-width: 900px; margin: 0 auto; }
+    button { padding: 10px 14px; margin-top: 8px; }
+    pre { background: #111; color: #0f0; padding: 12px; overflow: auto; border-radius: 8px; }
+    .hint { color:#444; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h2>Staffplan Debug – Datumszeile prüfen</h2>
+  <p class="hint">
+    Diese Seite lädt keine Daten in die Datenbank. Sie zeigt nur, welche Datumswerte Excel wirklich liefert.
+  </p>
+
+  <input id="file" type="file" accept=".xlsx,.xls" />
+  <br/>
+  <button id="btn">Scan starten</button>
+
+  <h3>Ergebnis</h3>
+  <pre id="out">Noch kein Scan.</pre>
+
+  <script>
+    const out = document.getElementById('out');
+    document.getElementById('btn').onclick = async () => {
+      const f = document.getElementById('file').files[0];
+      if (!f) { out.textContent = "Bitte zuerst eine Excel-Datei auswählen."; return; }
+
+      const fd = new FormData();
+      fd.append("file", f);
+
+      out.textContent = "Upload & Scan läuft ...";
+
+      const r = await fetch("/api/debug/scan-dates", { method: "POST", body: fd });
+      const txt = await r.text();
+      try {
+        out.textContent = JSON.stringify(JSON.parse(txt), null, 2);
+      } catch {
+        out.textContent = "Server-Antwort ist kein JSON:\n\n" + txt;
+      }
+    };
+  </script>
+</body>
+</html>
