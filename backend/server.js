@@ -1,16 +1,3 @@
-// ======================================================================
-// INDUSTREER ZEITERFASSUNG – server.js (FULL, KW AUS DATUM - ISO WEEK)
-// - /admin + /employee
-// - Logo Upload + /api/logo
-// - Staffplan Import (Excel tolerant) -> calendar_week wird IMMER aus work_date berechnet
-// - Employees: list + update + lookup
-// - Current running work block endpoint (Timer-Fix)
-// - Multi Start/Stop per day (Work-Blocks)
-// - Smoking breaks per Work-Block (Nettozeit)
-// - Option B: POs pro Mitarbeiter/KW
-// - PDF Timesheet: Filtert ausschließlich Staffplan-Tage (KW+PO+Mitarbeiter) + Start/Ende + Pause + Netto
-// ======================================================================
-
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
@@ -45,7 +32,76 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// -------------------- migrations --------------------
+// -------------------- upload --------------------
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
+
+// -------------------- logo store --------------------
+const LOGO_FILE = path.join(__dirname, "logo.bin");
+const LOGO_META = path.join(__dirname, "logo.json");
+
+// ======================================================================
+// Helpers
+// ======================================================================
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+// Parse dates from Excel cells (Date object / serial / "dd.mm.yyyy")
+function parseDateAny(v) {
+  if (!v) return null;
+
+  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
+
+  if (typeof v === "number") {
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    if (!isNaN(d)) return d.toISOString().slice(0, 10);
+  }
+
+  if (typeof v === "string") {
+    const m = v.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+    if (m) return `${m[3]}-${pad2(m[2])}-${pad2(m[1])}`;
+  }
+
+  return null;
+}
+
+// Parse hours from Excel cell (number or "7,5" etc.)
+function parseHoursAny(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number" && isFinite(v)) return v;
+  if (typeof v === "string") {
+    const m = v.replace(",", ".").match(/(\d+(\.\d+)?)/);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
+// ISO week (Mon-Sun), formatted CWxx
+function isoWeekNumber(dateObj) {
+  const d = new Date(Date.UTC(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return weekNo;
+}
+function cwFromISODate(isoDateStr) {
+  const [y, m, d] = isoDateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return `CW${isoWeekNumber(dt)}`;
+}
+
+// Safe string
+function s(v) {
+  if (v === null || v === undefined) return "";
+  return String(v).trim();
+}
+
+// ======================================================================
+// Migrations
+// ======================================================================
 async function migrate() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
@@ -88,7 +144,9 @@ async function migrate() {
       work_date DATE,
       customer_name TEXT,
       customer_po TEXT,
-      internal_po TEXT
+      internal_po TEXT,
+      project_code TEXT,
+      planned_hours NUMERIC(10,2)
     );
   `);
 
@@ -99,18 +157,16 @@ async function migrate() {
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS customer_name TEXT;`);
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS customer_po TEXT;`);
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS internal_po TEXT;`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS project_code TEXT;`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS planned_hours NUMERIC(10,2);`);
 }
 
-// -------------------- upload --------------------
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
-});
+// ======================================================================
+// Basic endpoints
+// ======================================================================
+app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 // -------------------- logo --------------------
-const LOGO_FILE = path.join(__dirname, "logo.bin");
-const LOGO_META = path.join(__dirname, "logo.json");
-
 app.post("/api/admin/logo", upload.single("logo"), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
   if (!["image/png", "image/jpeg"].includes(req.file.mimetype)) {
@@ -128,66 +184,8 @@ app.get("/api/logo", (_, res) => {
   res.send(fs.readFileSync(LOGO_FILE));
 });
 
-// -------------------- health --------------------
-app.get("/api/health", (_, res) => res.json({ ok: true }));
-
 // ======================================================================
-// Helpers: Date parsing + ISO week
-// ======================================================================
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-function parseDateAny(v) {
-  if (!v) return null;
-
-  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
-
-  // Excel serial date
-  if (typeof v === "number") {
-    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
-    if (!isNaN(d)) return d.toISOString().slice(0, 10);
-  }
-
-  // German date string dd.mm.yyyy
-  if (typeof v === "string") {
-    const m = v.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
-    if (m) return `${m[3]}-${pad2(m[2])}-${pad2(m[1])}`;
-  }
-
-  return null;
-}
-
-function parseHoursAny(v) {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "number" && isFinite(v)) return v;
-  if (typeof v === "string") {
-    const m = v.replace(",", ".").match(/(\d+(\.\d+)?)/);
-    if (m) return Number(m[1]);
-  }
-  return null;
-}
-
-function isoWeekYearAndNumber(dateObj) {
-  // ISO week based on UTC
-  const d = new Date(Date.UTC(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()));
-  // Thursday in current week decides the year
-  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-  return { year: d.getUTCFullYear(), week: weekNo };
-}
-
-function cwFromISODate(isoDateStr) {
-  // isoDateStr = YYYY-MM-DD
-  const [y, m, d] = isoDateStr.split("-").map(Number);
-  const dt = new Date(y, m - 1, d);
-  const { week } = isoWeekYearAndNumber(dt);
-  return `CW${week}`;
-}
-
-// ======================================================================
-// Employees API (Admin Übersicht + Update) + Lookup
+// Employees API (Admin view + update) + Lookup
 // ======================================================================
 app.get("/api/employees", async (_req, res) => {
   const r = await pool.query(
@@ -197,7 +195,7 @@ app.get("/api/employees", async (_req, res) => {
 });
 
 app.get("/api/employee/:id", async (req, res) => {
-  const id = String(req.params.id || "").trim();
+  const id = s(req.params.id);
   if (!id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
   const r = await pool.query(
@@ -211,10 +209,10 @@ app.get("/api/employee/:id", async (req, res) => {
 
 // Update employee fields; supports later ID change via new_employee_id
 app.post("/api/employees/update", async (req, res) => {
-  const employee_id = String(req.body.employee_id || "").trim();
-  const new_employee_id = String(req.body.new_employee_id || "").trim() || null;
-  const email = (req.body.email === undefined) ? undefined : (String(req.body.email || "").trim() || null);
-  const language = (req.body.language === undefined) ? undefined : (String(req.body.language || "").trim() || null);
+  const employee_id = s(req.body.employee_id);
+  const new_employee_id = s(req.body.new_employee_id) || null;
+  const email = (req.body.email === undefined) ? undefined : (s(req.body.email) || null);
+  const language = (req.body.language === undefined) ? undefined : (s(req.body.language) || null);
 
   if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
@@ -222,29 +220,19 @@ app.post("/api/employees/update", async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // Update ID if requested
+    let effectiveId = employee_id;
+
     if (new_employee_id && new_employee_id !== employee_id) {
-      // Ensure target doesn't exist
       const exists = await client.query("SELECT 1 FROM employees WHERE employee_id=$1", [new_employee_id]);
       if (exists.rows.length) {
         await client.query("ROLLBACK");
         return res.status(400).json({ ok: false, error: "Neue ID existiert bereits" });
       }
-
-      await client.query(
-        "UPDATE employees SET employee_id=$1 WHERE employee_id=$2",
-        [new_employee_id, employee_id]
-      );
-
-      // Also update time/break tables to keep continuity
+      await client.query("UPDATE employees SET employee_id=$1 WHERE employee_id=$2", [new_employee_id, employee_id]);
       await client.query("UPDATE time_entries SET employee_id=$1 WHERE employee_id=$2", [new_employee_id, employee_id]);
       await client.query("UPDATE break_entries SET employee_id=$1 WHERE employee_id=$2", [new_employee_id, employee_id]);
-
-      // Switch context for further updates
-      req.body.employee_id = new_employee_id;
+      effectiveId = new_employee_id;
     }
-
-    const effectiveId = new_employee_id && new_employee_id !== employee_id ? new_employee_id : employee_id;
 
     if (email !== undefined) {
       await client.query("UPDATE employees SET email=$1 WHERE employee_id=$2", [email, effectiveId]);
@@ -265,10 +253,48 @@ app.post("/api/employees/update", async (req, res) => {
 });
 
 // ======================================================================
-// FIX #1: Current running work block (reliable timer after reload)
+// Auto-create employees from staffplan names (keeps your workflow working)
+// ======================================================================
+async function getNextNumericEmployeeId(client) {
+  const r = await client.query(
+    `SELECT MAX(employee_id::int) AS max_id
+     FROM employees
+     WHERE employee_id ~ '^[0-9]+$'`
+  );
+  const maxId = r.rows[0]?.max_id;
+  return (maxId ? Number(maxId) + 1 : 1000);
+}
+
+async function ensureEmployeeByName(client, name, idCache) {
+  const n = s(name);
+  if (!n) return null;
+  if (idCache.has(n)) return idCache.get(n);
+
+  // find by exact name
+  const found = await client.query(
+    "SELECT employee_id FROM employees WHERE name=$1 LIMIT 1",
+    [n]
+  );
+  if (found.rows.length) {
+    idCache.set(n, found.rows[0].employee_id);
+    return found.rows[0].employee_id;
+  }
+
+  // create new numeric ID
+  const nextId = await getNextNumericEmployeeId(client);
+  await client.query(
+    "INSERT INTO employees (employee_id, name, email, language) VALUES ($1,$2,NULL,'de')",
+    [String(nextId), n]
+  );
+  idCache.set(n, String(nextId));
+  return String(nextId);
+}
+
+// ======================================================================
+// Timer support: running work block
 // ======================================================================
 app.get("/api/time/current/:employee_id", async (req, res) => {
-  const employee_id = String(req.params.employee_id || "").trim();
+  const employee_id = s(req.params.employee_id);
   if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
   const today = new Date().toISOString().slice(0, 10);
@@ -287,104 +313,148 @@ app.get("/api/time/current/:employee_id", async (req, res) => {
 });
 
 // ======================================================================
-// Staffplan Import (KW AUS DATUM!)
-// Erwartung: Datumszeile ab "irgendwo" ab Spalte L; Mitarbeitername Spalte I
-// Neu: calendar_week wird aus work_date berechnet (CWxx)
+// STAFFPLAN IMPORT (ROBUST, OPTION A) + 2-row logic:
+// - employee_name in K or I
+// - per date column:
+//    row: project_code (text)  (O8 style)
+//    row+1: planned_hours (number) (O9 style)
+// - import row/day only if BOTH present: project_code != "" AND planned_hours > 0
+// - calendar_week ALWAYS from date (ISO)
 // ======================================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
+  const client = await pool.connect();
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
 
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    // Find date header row (starting at column L = index 11)
+    // 1) Detect date header row by scanning first ~40 rows and many columns to the right
+    //    Start at column L (index 11), go far right (e.g. 260 columns)
+    let dateHeaderRow = null;
     let dates = [];
-    for (let r = 1; r <= 25; r++) {
+
+    const maxRightCols = 260; // very wide sheets (supports years)
+    const startCol = 11; // L
+
+    for (let r = 1; r <= 40; r++) {
       const found = [];
-      for (let c = 11; c < 90; c++) {
+      for (let c = startCol; c < startCol + maxRightCols; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r: r - 1, c })];
         const iso = cell ? parseDateAny(cell.v) : null;
         if (iso) found.push({ c, iso });
       }
-      if (found.length >= 3) {
+      // Heuristic: a date header row usually contains many dates; accept if >= 5
+      if (found.length >= 5) {
+        dateHeaderRow = r;
         dates = found;
         break;
       }
     }
 
     if (!dates.length) {
-      return res.json({ ok: true, imported: 0, note: "Keine Datumszeile gefunden (ab Spalte L erwartet)." });
+      return res.json({
+        ok: true,
+        imported: 0,
+        note: "Keine Datumszeile gefunden (erwartet Datumswerte ab Spalte L).",
+      });
     }
 
-    // "Replace" strategy:
-    // Wir löschen bestehende Staffplan-Einträge für diese Datumsrange (damit Re-Import sauber ist)
-    const allIso = dates.map(d => d.iso).sort();
-    const minDate = allIso[0];
-    const maxDate = allIso[allIso.length - 1];
+    // 2) Determine min/max date and delete staffplan rows in that range for clean reimport
+    const isoList = dates.map(d => d.iso).sort();
+    const minDate = isoList[0];
+    const maxDate = isoList[isoList.length - 1];
 
-    await pool.query(
-      `DELETE FROM staffplan WHERE work_date BETWEEN $1::date AND $2::date`,
-      [minDate, maxDate]
-    );
+    await client.query("BEGIN");
+    await client.query(`DELETE FROM staffplan WHERE work_date BETWEEN $1::date AND $2::date`, [minDate, maxDate]);
 
+    // 3) Import all staff rows
     let imported = 0;
+    const weeksDetected = new Set();
+    const employeeIdCache = new Map();
 
-    for (let row = 6; row < 8000; row++) {
-      const customer_name = ws[`A${row}`]?.v?.toString().trim() || "";
-      const internal_po = ws[`B${row}`]?.v?.toString().trim() || "";
-      const customer_po = ws[`E${row}`]?.v?.toString().trim() || "";
-      const employee_name = ws[`I${row}`]?.v?.toString().trim() || "";
+    // We'll scan many rows – your file can be huge. We stop after long empty streak of employees.
+    let emptyEmployeeStreak = 0;
 
-      if (!employee_name) continue;
+    for (let row = 6; row < 12000; row++) {
+      // Employee name can be in K or I (robust)
+      const employee_name = s(ws[`K${row}`]?.v) || s(ws[`I${row}`]?.v);
+      if (!employee_name) {
+        emptyEmployeeStreak++;
+        if (emptyEmployeeStreak > 400) break; // stop if too many empty rows
+        continue;
+      }
+      emptyEmployeeStreak = 0;
+
+      // Customer / PO fields on the employee row
+      const customer_name = s(ws[`A${row}`]?.v);
+      const internal_po = s(ws[`B${row}`]?.v);
+      const customer_po = s(ws[`E${row}`]?.v);
+
+      // Optional: auto-create employee records so login works without separate import
+      await ensureEmployeeByName(client, employee_name, employeeIdCache);
 
       for (const d of dates) {
-        const cell = ws[XLSX.utils.encode_cell({ r: row - 1, c: d.c })];
-        const hours = parseHoursAny(cell?.v);
-        if (!hours || hours <= 0) continue;
+        const iso = d.iso;
+        const calendar_week = cwFromISODate(iso);
+        weeksDetected.add(calendar_week);
 
-        const calendar_week = cwFromISODate(d.iso);
+        // project_code on row (e.g. O8)
+        const codeCell = ws[XLSX.utils.encode_cell({ r: row - 1, c: d.c })];
+        const project_code = s(codeCell?.v);
 
-        await pool.query(
-          `INSERT INTO staffplan (calendar_week, employee_name, work_date, customer_name, customer_po, internal_po)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
-          [calendar_week, employee_name, d.iso, customer_name, customer_po, internal_po]
+        // planned_hours on next row (e.g. O9)
+        const plannedCell = ws[XLSX.utils.encode_cell({ r: row, c: d.c })]; // row+1 in 1-based => r=row (0-based index)
+        const planned_hours = parseHoursAny(plannedCell?.v);
+
+        // Only import if BOTH present (your rule: text + number)
+        if (!project_code) continue;
+        if (!planned_hours || planned_hours <= 0) continue;
+
+        await client.query(
+          `INSERT INTO staffplan
+           (calendar_week, employee_name, work_date, customer_name, customer_po, internal_po, project_code, planned_hours)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [calendar_week, employee_name, iso, customer_name, customer_po, internal_po, project_code, planned_hours]
         );
-
         imported++;
       }
     }
 
-    // Optional: auto-create employees from staffplan names if not exist
-    // (IDs bleiben wie bisher manuell/extern; wenn ihr IDs schon habt, könnt ihr diese später pflegen)
-    // Wir legen hier NICHT automatisch IDs an, weil der Staffplan keine ID enthält.
-    // Falls ihr das vorher schon anders hattet, kann man das wieder ergänzen.
+    await client.query("COMMIT");
 
     res.json({
       ok: true,
       imported,
       dateRange: { from: minDate, to: maxDate },
-      weeksDetected: Array.from(new Set(dates.map(x => cwFromISODate(x.iso)))).sort(),
+      weeksDetected: Array.from(weeksDetected).sort((a, b) => {
+        const na = Number(a.replace("CW", "")) || 0;
+        const nb = Number(b.replace("CW", "")) || 0;
+        return na - nb;
+      }),
     });
   } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
     console.error(e);
     res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
   }
 });
 
-// Optional: Staffplan komplett löschen
+// Optional: clear staffplan
 app.post("/api/admin/staffplan/clear", async (_req, res) => {
   await pool.query("DELETE FROM staffplan");
   res.json({ ok: true });
 });
 
 // ======================================================================
-// OPTION B: Alle POs eines Mitarbeiters für eine KW (aus Staffplan)
-// - Achtung: Staffplan nutzt employee_name, nicht employee_id
+// OPTION B: All POs of an employee for a KW (uses employee_name mapped from employees.name)
 // ======================================================================
 app.get("/api/employee/:employeeId/pos/:kw", async (req, res) => {
   try {
-    const { employeeId, kw } = req.params;
+    const employeeId = s(req.params.employeeId);
+    const kw = s(req.params.kw);
 
     const emp = await pool.query("SELECT name FROM employees WHERE employee_id=$1", [employeeId]);
     if (!emp.rows.length) return res.status(404).json({ ok: false, error: "Mitarbeiter nicht gefunden" });
@@ -410,10 +480,10 @@ app.get("/api/employee/:employeeId/pos/:kw", async (req, res) => {
 });
 
 // ======================================================================
-// Multi start/stop per day (work blocks) + breaks per block
+// Time tracking: multi blocks + breaks
 // ======================================================================
 app.post("/api/time/start", async (req, res) => {
-  const employee_id = String(req.body.employee_id || "").trim();
+  const employee_id = s(req.body.employee_id);
   if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
   const today = new Date().toISOString().slice(0, 10);
@@ -437,7 +507,7 @@ app.post("/api/time/start", async (req, res) => {
 });
 
 app.post("/api/break/start", async (req, res) => {
-  const employee_id = String(req.body.employee_id || "").trim();
+  const employee_id = s(req.body.employee_id);
   if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
   const today = new Date().toISOString().slice(0, 10);
@@ -468,7 +538,7 @@ app.post("/api/break/start", async (req, res) => {
 });
 
 app.post("/api/break/end", async (req, res) => {
-  const employee_id = String(req.body.employee_id || "").trim();
+  const employee_id = s(req.body.employee_id);
   if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
   const today = new Date().toISOString().slice(0, 10);
@@ -488,10 +558,10 @@ app.post("/api/break/end", async (req, res) => {
 });
 
 app.post("/api/time/end", async (req, res) => {
-  const employee_id = String(req.body.employee_id || "").trim();
+  const employee_id = s(req.body.employee_id);
   if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
-  const activity = String(req.body.activity || "Arbeitszeit").trim();
+  const activity = s(req.body.activity) || "Arbeitszeit";
   const today = new Date().toISOString().slice(0, 10);
 
   const r = await pool.query(
@@ -537,19 +607,27 @@ app.post("/api/time/end", async (req, res) => {
 
 // ======================================================================
 // PDF Timesheet
-// Route: /api/pdf/timesheet/:employeeId/:kw/:customerPo
-// Filter: staffplan days only (KW + PO + employee_name mapped from employees.name)
+// - Shows ALL staffplan days for KW+PO+employee (even if no IST)
+// - project_code from staffplan shown in header over customer PO
+// - planned_hours shown per day
+// - IST aggregated per day: earliest start, latest end, sum net hours, sum breaks, activities joined
 // ======================================================================
 app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
   try {
-    const { employeeId, kw, customerPo } = req.params;
+    const employeeId = s(req.params.employeeId);
+    const kw = s(req.params.kw);
+    const customerPo = s(req.params.customerPo);
 
-    const emp = await pool.query("SELECT name FROM employees WHERE employee_id=$1", [employeeId]);
+    const emp = await pool.query(
+      "SELECT name FROM employees WHERE employee_id=$1",
+      [employeeId]
+    );
     if (!emp.rows.length) return res.sendStatus(404);
     const employeeName = emp.rows[0].name;
 
+    // Staffplan rows for this KW+PO+employee
     const sp = await pool.query(
-      `SELECT DISTINCT work_date, customer_name, internal_po
+      `SELECT work_date, customer_name, internal_po, project_code, planned_hours
        FROM staffplan
        WHERE calendar_week=$1 AND customer_po=$2 AND employee_name=$3
        ORDER BY work_date`,
@@ -560,10 +638,19 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
       return res.status(404).send("Keine Staffplan-Daten für diese KW/PO/Mitarbeiter gefunden.");
     }
 
-    const workDates = sp.rows.map(r => r.work_date);
     const customerName = sp.rows[0].customer_name || "-";
     const internalPo = sp.rows[0].internal_po || "-";
 
+    // Choose a "best" project_code for the header:
+    // If multiple different codes across days, show the first + "..."
+    const codes = Array.from(new Set(sp.rows.map(r => s(r.project_code)).filter(Boolean)));
+    let headerProjectCode = "-";
+    if (codes.length === 1) headerProjectCode = codes[0];
+    else if (codes.length > 1) headerProjectCode = `${codes[0]} …`;
+
+    const staffDates = sp.rows.map(r => r.work_date);
+
+    // All completed time_entries on these dates
     const te = await pool.query(
       `SELECT id, work_date, start_time, end_time, total_hours, activity
        FROM time_entries
@@ -571,7 +658,7 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
          AND work_date = ANY($2::date[])
          AND end_time IS NOT NULL
        ORDER BY work_date, start_time`,
-      [employeeId, workDates]
+      [employeeId, staffDates]
     );
 
     const entryIds = te.rows.map(x => x.id);
@@ -590,6 +677,34 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
       breakMinutesByEntry.set(b.time_entry_id, (breakMinutesByEntry.get(b.time_entry_id) || 0) + mins);
     }
 
+    // Aggregate IST per day
+    const istByDate = new Map();
+    for (const r of te.rows) {
+      const key = new Date(r.work_date).toISOString().slice(0, 10);
+      const h = Number(r.total_hours || 0);
+      const bm = breakMinutesByEntry.get(r.id) || 0;
+
+      if (!istByDate.has(key)) {
+        istByDate.set(key, {
+          earliestStart: new Date(r.start_time),
+          latestEnd: new Date(r.end_time),
+          hours: 0,
+          breakMins: 0,
+          activities: new Set(),
+        });
+      }
+      const agg = istByDate.get(key);
+      const st = new Date(r.start_time);
+      const et = new Date(r.end_time);
+
+      if (st < agg.earliestStart) agg.earliestStart = st;
+      if (et > agg.latestEnd) agg.latestEnd = et;
+      agg.hours += h;
+      agg.breakMins += bm;
+      agg.activities.add(s(r.activity) || "Arbeitszeit");
+    }
+
+    // PDF
     const doc = new PDFDocument({ size: "A4", margin: 40 });
     res.setHeader("Content-Type", "application/pdf");
     doc.pipe(res);
@@ -609,48 +724,58 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     doc.text(`Kunde: ${customerName}`, 40, 155);
     doc.text(`Kalenderwoche: ${kw}`, 40, 170);
 
-    doc.text(`Kunden-PO: ${customerPo}`, 300, 140);
-    doc.text(`Interne PO: ${internalPo}`, 300, 155);
+    // Project code ABOVE customer PO (as requested)
+    doc.text(`Projekt (Kurzzeichen): ${headerProjectCode}`, 300, 140);
+    doc.text(`Kunden-PO: ${customerPo}`, 300, 155);
+    doc.text(`Interne PO: ${internalPo}`, 300, 170);
 
-    // Table (compact)
-    let y = 195;
+    // Table
+    let y = 200;
     const rowH = 12;
 
     doc.font("Helvetica-Bold");
     doc.text("Datum", 40, y);
-    doc.text("Start", 98, y);
-    doc.text("Ende", 145, y);
-    doc.text("Tätigkeit", 195, y);
-    doc.text("Pause", 455, y, { width: 45, align: "right" });
-    doc.text("Std.", 520, y, { align: "right" });
+    doc.text("Tätigkeit", 95, y);
+    doc.text("Plan", 260, y, { width: 40, align: "right" });
+    doc.text("Start", 310, y);
+    doc.text("Ende", 355, y);
+    doc.text("Pause", 405, y, { width: 45, align: "right" });
+    doc.text("IST", 520, y, { align: "right" });
 
     y += rowH + 3;
     doc.moveTo(40, y).lineTo(550, y).stroke();
     y += 4;
-
     doc.font("Helvetica");
-    let sum = 0;
-    let sumBreakMins = 0;
 
-    for (const r of te.rows) {
-      const h = Number(r.total_hours || 0);
-      if (!h) continue;
+    let sumIst = 0;
+    let sumPlan = 0;
+    let sumBreak = 0;
 
-      const bm = breakMinutesByEntry.get(r.id) || 0;
-      sum += h;
-      sumBreakMins += bm;
+    for (const spRow of sp.rows) {
+      const iso = new Date(spRow.work_date).toISOString().slice(0, 10);
+      const dateLabel = new Date(spRow.work_date).toLocaleDateString("de-DE");
 
-      const d = new Date(r.work_date).toLocaleDateString("de-DE");
-      const st = new Date(r.start_time).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-      const et = new Date(r.end_time).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-      const act = (r.activity || "Arbeitszeit").toString().slice(0, 35);
+      const plan = Number(spRow.planned_hours || 0);
+      sumPlan += plan;
 
-      doc.text(d, 40, y);
-      doc.text(st, 98, y);
-      doc.text(et, 145, y);
-      doc.text(act, 195, y);
-      doc.text(`${bm}m`, 455, y, { width: 45, align: "right" });
-      doc.text(h.toFixed(2), 520, y, { align: "right" });
+      const ist = istByDate.get(iso);
+      const istHours = ist ? ist.hours : 0;
+      const breakMins = ist ? ist.breakMins : 0;
+      const act = ist ? Array.from(ist.activities).join(", ").slice(0, 24) : "";
+
+      sumIst += istHours;
+      sumBreak += breakMins;
+
+      const st = ist ? ist.earliestStart.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : "";
+      const et = ist ? ist.latestEnd.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : "";
+
+      doc.text(dateLabel, 40, y);
+      doc.text(act || "", 95, y);
+      doc.text(plan ? plan.toFixed(2) : "", 260, y, { width: 40, align: "right" });
+      doc.text(st, 310, y);
+      doc.text(et, 355, y);
+      doc.text(ist ? `${breakMins}m` : "", 405, y, { width: 45, align: "right" });
+      doc.text(ist ? istHours.toFixed(2) : "", 520, y, { align: "right" });
 
       y += rowH;
       if (y > 760) {
@@ -661,12 +786,14 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
 
     y += 10;
     doc.font("Helvetica-Bold");
-    doc.text("Gesamt (Netto):", 340, y);
-    doc.text(sum.toFixed(2), 520, y, { align: "right" });
+    doc.text("Summe Plan:", 320, y);
+    doc.text(sumPlan.toFixed(2), 420, y, { width: 60, align: "right" });
+    doc.text("Summe IST:", 460, y);
+    doc.text(sumIst.toFixed(2), 520, y, { align: "right" });
 
     y += 14;
     doc.font("Helvetica");
-    doc.text(`Summe Raucherpausen: ${sumBreakMins} Minuten`, 40, y);
+    doc.text(`Summe Pausen: ${sumBreak} Minuten`, 40, y);
 
     doc.end();
   } catch (e) {
@@ -675,7 +802,9 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
   }
 });
 
-// -------------------- start --------------------
+// ======================================================================
+// Start
+// ======================================================================
 migrate()
   .then(() => {
     app.listen(PORT, () => console.log("🚀 Server läuft auf Port", PORT));
