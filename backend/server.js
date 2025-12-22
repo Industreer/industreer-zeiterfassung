@@ -483,52 +483,47 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const maxScanRows = 10;
 
     // ------------------------------------------------------------
-    // 1) Monats-/Jahreskopf finden (z. B. "September 2025")
-    // ------------------------------------------------------------
-    function parseMonthYearHeader(value) {
-      if (!value) return null;
-      const text = String(value).trim();
+// 1) Erstes echtes Datum finden (Startdatum)
+// ------------------------------------------------------------
+function parseAnyDate(cell) {
+  if (!cell) return null;
 
-      const months = {
-        januar: 0, februar: 1, märz: 2, maerz: 2,
-        april: 3, mai: 4, juni: 5, juli: 6,
-        august: 7, september: 8, oktober: 9,
-        november: 10, dezember: 11
-      };
+  // Excel-Seriennummer
+  if (typeof cell.v === "number") {
+    const epoch = new Date(1899, 11, 30);
+    return new Date(epoch.getTime() + cell.v * 86400000);
+  }
 
-      const m = text.match(
-        /(januar|februar|märz|maerz|april|mai|juni|juli|august|september|oktober|november|dezember)\s+(\d{4})/i
-      );
-      if (!m) return null;
+  // Text- oder Formel-Ergebnis
+  const text = String(cell.w || cell.v || "").trim();
+  const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return new Date(+m[1], m[2] - 1, +m[3]);
 
-      return {
-        month: months[m[1].toLowerCase()],
-        year: parseInt(m[2], 10)
-      };
+  return null;
+}
+
+let baseDate = null;
+let headerColStart = null;
+
+for (let r = 0; r < maxScanRows; r++) {
+  for (let c = startCol; c < startCol + maxRightCols; c++) {
+    const cell = ws[XLSX.utils.encode_cell({ r, c })];
+    const d = parseAnyDate(cell);
+    if (d) {
+      baseDate = d;
+      headerColStart = c;
+      break;
     }
+  }
+  if (baseDate) break;
+}
 
-    let baseDate = null;
-    let headerColStart = null;
-
-    for (let r = 0; r < maxScanRows; r++) {
-      for (let c = startCol; c < startCol + maxRightCols; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r, c })];
-        const parsed = parseMonthYearHeader(cell?.w || cell?.v);
-        if (parsed) {
-          baseDate = new Date(parsed.year, parsed.month, 1);
-          headerColStart = c;
-          break;
-        }
-      }
-      if (baseDate) break;
-    }
-
-    if (!baseDate) {
-      return res.status(400).json({
-        ok: false,
-        error: "Kein Monats-/Jahreskopf gefunden (z. B. 'September 2025')"
-      });
-    }
+if (!baseDate) {
+  return res.status(400).json({
+    ok: false,
+    error: "Kein Startdatum gefunden"
+  });
+}
 
     // ------------------------------------------------------------
     // 2) Datums-Spalten berechnen (Offset-basiert)
