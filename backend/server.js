@@ -357,8 +357,8 @@ app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    const startCol = 11; // L
-    const maxRightCols = 520; // much wider scan for diagnosis
+const startCol = 11; // L
+const maxRightCols = 800; // EXTREM weit nach rechts (reicht bis 2027+)
     const headerRowMax = 60;
 
     let best = { row: null, found: [] };
@@ -382,7 +382,7 @@ app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
           });
         }
       }
-      if (found.length > best.found.length) {
+   if (found.length >= 3) {
         best = { row: r, found };
       }
     }
