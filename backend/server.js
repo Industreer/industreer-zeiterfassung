@@ -502,6 +502,14 @@ function getISOWeek(date) {
 // ======================================================================
 
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
+// ------------------------------------------------------------
+// DB MIGRATION – ensure required columns exist
+// ------------------------------------------------------------
+await pool.query(`
+  ALTER TABLE staffplan
+    ADD COLUMN IF NOT EXISTS customer TEXT,
+    ADD COLUMN IF NOT EXISTS internal_po TEXT
+`);
   try {
     if (!req.file) {
       return res.status(400).json({ ok: false, error: "Keine Datei hochgeladen" });
