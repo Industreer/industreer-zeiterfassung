@@ -141,11 +141,6 @@ function colLetters(idx) {
 // ------------------------------------------------------------
 // DB MIGRATION – ensure required columns exist (HARD GUARANTEE)
 // ------------------------------------------------------------
-await pool.query(`
-  ALTER TABLE staffplan
-    ADD COLUMN IF NOT EXISTS customer TEXT,
-    ADD COLUMN IF NOT EXISTS internal_po TEXT
-`);
 async function migrate() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
