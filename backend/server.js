@@ -460,123 +460,175 @@ app.get("/api/debug/staffplan-stats", async (_req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
 // ======================================================================
-// STAFFPLAN IMPORT (current working version)
+// STAFFPLAN IMPORT (Option 2 – Month Header Based, FINAL WORKING VERSION)
+// - robust for formulas like =AT4+1
+// - independent from Excel date cells
+// - works beyond 2026 (RG, ZZ, AAA…)
 // - still writes to DB
 // ======================================================================
+
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
-  const client = await pool.connect();
   try {
-    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
-
-    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-
-    const startCol = 11; // L
-    const maxRightCols = 260; // your current scan
-    let dates = [];
-
-    // Find header row (heuristic)
-    for (let r = 1; r <= 40; r++) {
-      const found = [];
-      for (let c = startCol; c < startCol + maxRightCols; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r: r - 1, c })];
-        const iso = cell ? parseDateAny(cell.v) : null;
-        if (iso) found.push({ c, iso });
-      }
-      if (found.length >= 5) {
-        dates = found;
-        break;
-      }
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "Keine Datei hochgeladen" });
     }
 
-    if (!dates.length) {
-      return res.json({
-        ok: true,
-        imported: 0,
-        note: "Keine Datumszeile gefunden (erwartet Datumswerte ab Spalte L).",
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const ws = workbook.Sheets[sheetName];
+
+    const startCol = 11; // Spalte L
+    const maxRightCols = 900; // sehr weit nach rechts (RG+)
+    const maxScanRows = 10;
+
+    // ------------------------------------------------------------
+    // 1) Monats-/Jahreskopf finden (z. B. "September 2025")
+    // ------------------------------------------------------------
+    function parseMonthYearHeader(value) {
+      if (!value) return null;
+      const text = String(value).trim();
+
+      const months = {
+        januar: 0, februar: 1, märz: 2, maerz: 2,
+        april: 3, mai: 4, juni: 5, juli: 6,
+        august: 7, september: 8, oktober: 9,
+        november: 10, dezember: 11
+      };
+
+      const m = text.match(
+        /(januar|februar|märz|maerz|april|mai|juni|juli|august|september|oktober|november|dezember)\s+(\d{4})/i
+      );
+      if (!m) return null;
+
+      return {
+        month: months[m[1].toLowerCase()],
+        year: parseInt(m[2], 10)
+      };
+    }
+
+    let baseDate = null;
+    let headerColStart = null;
+
+    for (let r = 0; r < maxScanRows; r++) {
+      for (let c = startCol; c < startCol + maxRightCols; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        const parsed = parseMonthYearHeader(cell?.w || cell?.v);
+        if (parsed) {
+          baseDate = new Date(parsed.year, parsed.month, 1);
+          headerColStart = c;
+          break;
+        }
+      }
+      if (baseDate) break;
+    }
+
+    if (!baseDate) {
+      return res.status(400).json({
+        ok: false,
+        error: "Kein Monats-/Jahreskopf gefunden (z. B. 'September 2025')"
       });
     }
 
-    const isoList = dates.map(d => d.iso).sort();
-    const minDate = isoList[0];
-    const maxDate = isoList[isoList.length - 1];
+    // ------------------------------------------------------------
+    // 2) Datums-Spalten berechnen (Offset-basiert)
+    // ------------------------------------------------------------
+    const computedDates = [];
+    for (let c = headerColStart; c < startCol + maxRightCols; c++) {
+      const d = new Date(baseDate);
+      d.setDate(baseDate.getDate() + (c - headerColStart));
+      computedDates.push({
+        col: c,
+        iso: d.toISOString().slice(0, 10),
+        cw: "CW" + getISOWeek(d)
+      });
+    }
 
-    await client.query("BEGIN");
-    await client.query(`DELETE FROM staffplan WHERE work_date BETWEEN $1::date AND $2::date`, [minDate, maxDate]);
+    // ------------------------------------------------------------
+    // 3) Alte Staffplan-Daten löschen
+    // ------------------------------------------------------------
+    await pool.query("DELETE FROM staffplan");
 
     let imported = 0;
-    const weeksDetected = new Set();
-    const employeeIdCache = new Map();
+    let minDate = null;
+    let maxDate = null;
+    const weeks = new Set();
 
-    let emptyEmployeeStreak = 0;
+    // ------------------------------------------------------------
+    // 4) Mitarbeiter-Zeilen durchgehen (ab Zeile 6)
+    // ------------------------------------------------------------
+    for (let row = 5; row < 15000; row++) {
+      const nameCell = ws[XLSX.utils.encode_cell({ r: row, c: 8 })]; // Spalte I
+      if (!nameCell?.v) continue;
 
-    for (let row = 6; row < 12000; row++) {
-      const employee_name = s(ws[`K${row}`]?.v) || s(ws[`I${row}`]?.v);
-      if (!employee_name) {
-        emptyEmployeeStreak++;
-        if (emptyEmployeeStreak > 400) break;
-        continue;
-      }
-      emptyEmployeeStreak = 0;
+      const employeeName = String(nameCell.v).trim();
+      const customerCell = ws[XLSX.utils.encode_cell({ r: row, c: 0 })]; // Spalte A
+      const internalPoCell = ws[XLSX.utils.encode_cell({ r: row, c: 1 })]; // Spalte B
 
-      const customer_name = s(ws[`A${row}`]?.v);
-      const internal_po = s(ws[`B${row}`]?.v);
-      const customer_po = s(ws[`E${row}`]?.v);
+      const customer = customerCell?.v ? String(customerCell.v).trim() : null;
+      const internalPo = internalPoCell?.v ? String(internalPoCell.v).trim() : null;
 
-      await ensureEmployeeByName(client, employee_name, employeeIdCache);
+      for (let i = 0; i < computedDates.length; i++) {
+        const d = computedDates[i];
+        const col = d.col;
 
-      for (const d of dates) {
-        const iso = d.iso;
-        const calendar_week = cwFromISODate(iso);
-        weeksDetected.add(calendar_week);
+        const projectShortCell = ws[XLSX.utils.encode_cell({ r: row, c: col })];
+        const planHoursCell = ws[XLSX.utils.encode_cell({ r: row + 1, c: col })];
 
-        const codeCell = ws[XLSX.utils.encode_cell({ r: row - 1, c: d.c })];
-        const project_code = s(codeCell?.v);
+        if (!projectShortCell?.v && !planHoursCell?.v) continue;
 
-        const plannedCell = ws[XLSX.utils.encode_cell({ r: row, c: d.c })];
-        const planned_hours = parseHoursAny(plannedCell?.v);
+        const projectShort = projectShortCell?.v
+          ? String(projectShortCell.v).trim()
+          : null;
 
-        if (!project_code) continue;
-        if (!planned_hours || planned_hours <= 0) continue;
+        const planHours = planHoursCell?.v
+          ? Number(planHoursCell.v)
+          : null;
 
-        await client.query(
-          `INSERT INTO staffplan
-           (calendar_week, employee_name, work_date, customer_name, customer_po, internal_po, project_code, planned_hours)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [calendar_week, employee_name, iso, customer_name, customer_po, internal_po, project_code, planned_hours]
+        await pool.query(
+          `
+          INSERT INTO staffplan
+          (employee_name, work_date, calendar_week, customer, internal_po, project_short, plan_hours)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)
+          `,
+          [
+            employeeName,
+            d.iso,
+            d.cw,
+            customer,
+            internalPo,
+            projectShort,
+            planHours
+          ]
         );
+
         imported++;
+        weeks.add(d.cw);
+
+        if (!minDate || d.iso < minDate) minDate = d.iso;
+        if (!maxDate || d.iso > maxDate) maxDate = d.iso;
       }
     }
 
-    await client.query("COMMIT");
-
-    res.json({
+    return res.json({
       ok: true,
       imported,
       dateRange: { from: minDate, to: maxDate },
-      weeksDetected: Array.from(weeksDetected).sort((a, b) => {
-        const na = Number(a.replace("CW", "")) || 0;
-        const nb = Number(b.replace("CW", "")) || 0;
-        return na - nb;
-      }),
+      weeksDetected: Array.from(weeks).sort()
     });
-  } catch (e) {
-    try { await client.query("ROLLBACK"); } catch {}
-    console.error(e);
-    res.status(500).json({ ok: false, error: e.message });
-  } finally {
-    client.release();
+
+  } catch (err) {
+    console.error("Staffplan Import Error:", err);
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
   }
 });
 
-app.post("/api/admin/staffplan/clear", async (_req, res) => {
-  await pool.query("DELETE FROM staffplan");
-  res.json({ ok: true });
-});
-
+// ======================================================================
+// END STAFFPLAN IMPORT
+// ======================================================================
 // ======================================================================
 // OPTION B: list customer POs of employee for KW
 // ======================================================================
