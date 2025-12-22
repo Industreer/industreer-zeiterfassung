@@ -5,6 +5,9 @@ const multer = require("multer");
 const XLSX = require("xlsx");
 const PDFDocument = require("pdfkit");
 const { Pool } = require("pg");
+const SERVER_VERSION = "2024-STAFFPLAN-SCAN-BN-800";
+console.log("🚀 Server-Version:", SERVER_VERSION);
+
 
 const app = express();
 const PORT = process.env.PORT || 10000;
