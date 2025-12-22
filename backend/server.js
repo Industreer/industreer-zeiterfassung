@@ -459,7 +459,35 @@ app.get("/api/debug/staffplan-stats", async (_req, res) => {
     console.error(e);
     res.status(500).json({ ok: false, error: e.message });
   }
-});
+});// ======================================================================
+// ISO WEEK CALCULATION (required for staffplan import)
+// ======================================================================
+function getISOWeek(date) {
+  const d = new Date(Date.UTC(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  ));
+
+  // ISO week date weeks start on Monday
+  // so correct the day number
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+
+  // Year of the ISO week
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+
+  // Calculate full weeks to nearest Thursday
+  const weekNo = Math.ceil(
+    (((d - yearStart) / 86400000) + 1) / 7
+  );
+
+  return weekNo;
+}
+// ======================================================================
+// END ISO WEEK CALCULATION
+// ======================================================================
+
 // ======================================================================
 // STAFFPLAN IMPORT (Option 2 – Month Header Based, FINAL WORKING VERSION)
 // - robust for formulas like =AT4+1
