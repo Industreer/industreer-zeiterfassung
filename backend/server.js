@@ -459,7 +459,7 @@ app.get("/api/debug/staffplan-stats", async (_req, res) => {
     console.error(e);
     res.status(500).json({ ok: false, error: e.message });
   }
-});// ======================================================================
+// ======================================================================
 // ISO WEEK CALCULATION (required for staffplan import)
 // ======================================================================
 function getISOWeek(date) {
@@ -484,6 +484,7 @@ function getISOWeek(date) {
 
   return weekNo;
 }
+
 // ======================================================================
 // END ISO WEEK CALCULATION
 // ======================================================================
