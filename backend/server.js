@@ -87,24 +87,16 @@ function parseAnyDateFromXlsxCell(cell) {
 
 async function migrate() {
   // Create tables (minimal, extendable)
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS employees (
-      employee_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT,
-      language TEXT DEFAULT 'de'
-        await pool.query(`
-    CREATE TABLE IF NOT EXISTS time_breaks (
-      id BIGSERIAL PRIMARY KEY,
-      employee_id TEXT NOT NULL REFERENCES employees(employee_id),
-      work_date DATE NOT NULL,
-      kind TEXT NOT NULL DEFAULT 'smoke', -- 'smoke' for now
-      start_ts TIMESTAMPTZ NOT NULL,
-      end_ts TIMESTAMPTZ,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
+ await pool.query(`
+  CREATE TABLE IF NOT EXISTS time_breaks (
+    id BIGSERIAL PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    work_date DATE NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'smoke',
+    start_ts TIMESTAMPTZ NOT NULL,
+    end_ts TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
   await pool.query(`
     CREATE INDEX IF NOT EXISTS time_breaks_idx
     ON time_breaks (employee_id, work_date);
