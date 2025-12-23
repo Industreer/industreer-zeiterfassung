@@ -497,6 +497,12 @@ function getISOWeek(date) {
 // ======================================================================
 
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
+  // Ensure staffplan table has required columns
+  await pool.query(`
+    ALTER TABLE staffplan
+      ADD COLUMN IF NOT EXISTS customer TEXT,
+      ADD COLUMN IF NOT EXISTS internal_po TEXT
+  `);
 // ------------------------------------------------------------
 // DB MIGRATION – ensure required columns exist
 // ------------------------------------------------------------
