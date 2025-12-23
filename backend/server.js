@@ -1,4 +1,4 @@
-const express = require("express");
+7const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
@@ -998,13 +998,11 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
   }
 });
 // ======================================================================
-// Start
+// SERVER START (CLEAN)
 // ======================================================================
-migrate()
-  .then(() => {
-    app.listen(PORT, () => console.log("🚀 Server läuft auf Port", PORT));
-  })
-  .catch((e) => {
-    console.error("DB migrate failed:", e);
-    process.exit(1);
-  });
+
+const PORT = process.env.PORT || 10000;
+
+app.listen(PORT, () => {
+  console.log("🚀 Server läuft auf Port", PORT);
+});
