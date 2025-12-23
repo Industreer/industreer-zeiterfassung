@@ -93,6 +93,23 @@ async function migrate() {
       name TEXT NOT NULL,
       email TEXT,
       language TEXT DEFAULT 'de'
+        await pool.query(`
+    CREATE TABLE IF NOT EXISTS time_breaks (
+      id BIGSERIAL PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(employee_id),
+      work_date DATE NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'smoke', -- 'smoke' for now
+      start_ts TIMESTAMPTZ NOT NULL,
+      end_ts TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS time_breaks_idx
+    ON time_breaks (employee_id, work_date);
+  `);
+
     );
   `);
 
@@ -477,7 +494,225 @@ app.get("/api/timesheet/:employeeName/:kw/:customerPo", async (req, res) => {
     res.status(500).send("PDF Fehler: " + e.message);
   }
 });
+// --------------------
+// EMPLOYEE LOGIN
+// --------------------
+app.post("/api/employee/login", async (req, res) => {
+  try {
+    const { employee_id } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
+    const r = await pool.query(
+      `SELECT employee_id, name, email, language FROM employees WHERE employee_id=$1`,
+      [String(employee_id)]
+    );
+    if (r.rowCount === 0) {
+      return res.status(404).json({ ok: false, error: "Mitarbeiter-ID nicht gefunden" });
+    }
+    res.json({ ok: true, employee: r.rows[0] });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// TODAY STAFFPLAN (by employee name)
+// - used to show PO list on employee page
+// --------------------
+app.get("/api/employee/today", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const er = await pool.query(`SELECT name FROM employees WHERE employee_id=$1`, [employee_id]);
+    if (er.rowCount === 0) return res.status(404).json({ ok: false, error: "Mitarbeiter nicht gefunden" });
+
+    const employee_name = er.rows[0].name;
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const sp = await pool.query(
+      `SELECT employee_name, work_date, calendar_week, customer, internal_po, customer_po, project_short, planned_hours
+       FROM staffplan
+       WHERE employee_name=$1 AND work_date=$2
+       ORDER BY customer_po ASC`,
+      [employee_name, todayIso]
+    );
+
+    res.json({ ok: true, rows: sp.rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// TIME STATUS (open entry + break state)
+// --------------------
+app.get("/api/time/status", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const open = await pool.query(
+      `SELECT id, employee_id, work_date, start_ts, end_ts, customer_po, activity
+       FROM time_entries
+       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
+       ORDER BY id DESC
+       LIMIT 1`,
+      [employee_id, todayIso]
+    );
+
+    const openBreak = await pool.query(
+      `SELECT id, start_ts FROM time_breaks
+       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
+       ORDER BY id DESC
+       LIMIT 1`,
+      [employee_id, todayIso]
+    );
+
+    const sumBreak = await pool.query(
+      `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(end_ts, NOW()) - start_ts)))/60,0) AS mins
+       FROM time_breaks
+       WHERE employee_id=$1 AND work_date=$2`,
+      [employee_id, todayIso]
+    );
+
+    res.json({
+      ok: true,
+      open: open.rowCount ? open.rows[0] : null,
+      break: {
+        is_on_break: openBreak.rowCount > 0,
+        started_at: openBreak.rowCount ? openBreak.rows[0].start_ts : null,
+        total_break_minutes: Math.round(Number(sumBreak.rows[0].mins || 0)),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// TIME START
+// --------------------
+app.post("/api/time/start", async (req, res) => {
+  try {
+    const { employee_id, customer_po } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    if (!customer_po) return res.status(400).json({ ok: false, error: "customer_po fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    // prevent multiple open entries
+    const existing = await pool.query(
+      `SELECT id, start_ts FROM time_entries
+       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
+       ORDER BY id DESC LIMIT 1`,
+      [String(employee_id), todayIso]
+    );
+
+    if (existing.rowCount) {
+      return res.json({ ok: true, start_ts: existing.rows[0].start_ts, note: "already_started" });
+    }
+
+    const ins = await pool.query(
+      `INSERT INTO time_entries (employee_id, work_date, start_ts, customer_po)
+       VALUES ($1,$2,NOW(),$3)
+       RETURNING start_ts`,
+      [String(employee_id), todayIso, String(customer_po)]
+    );
+
+    res.json({ ok: true, start_ts: ins.rows[0].start_ts });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// SMOKE BREAK START / END
+// --------------------
+app.post("/api/time/smoke/start", async (req, res) => {
+  try {
+    const { employee_id } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    // do not start if already on break
+    const openBreak = await pool.query(
+      `SELECT id FROM time_breaks WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL LIMIT 1`,
+      [String(employee_id), todayIso]
+    );
+    if (openBreak.rowCount) return res.json({ ok: true, note: "already_on_break" });
+
+    await pool.query(
+      `INSERT INTO time_breaks (employee_id, work_date, kind, start_ts)
+       VALUES ($1,$2,'smoke',NOW())`,
+      [String(employee_id), todayIso]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/time/smoke/end", async (req, res) => {
+  try {
+    const { employee_id } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const openBreak = await pool.query(
+      `SELECT id FROM time_breaks WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL ORDER BY id DESC LIMIT 1`,
+      [String(employee_id), todayIso]
+    );
+    if (!openBreak.rowCount) return res.status(400).json({ ok: false, error: "Keine aktive Raucherpause" });
+
+    await pool.query(
+      `UPDATE time_breaks SET end_ts=NOW() WHERE id=$1`,
+      [openBreak.rows[0].id]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// TIME STOP (store end + activity)
+// --------------------
+app.post("/api/time/stop", async (req, res) => {
+  try {
+    const { employee_id, customer_po, activity } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const open = await pool.query(
+      `SELECT id FROM time_entries
+       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
+       ORDER BY id DESC LIMIT 1`,
+      [String(employee_id), todayIso]
+    );
+    if (!open.rowCount) return res.status(400).json({ ok: false, error: "Kein aktiver Arbeitstag" });
+
+    await pool.query(
+      `UPDATE time_entries
+       SET end_ts=NOW(),
+           customer_po=COALESCE($3, customer_po),
+           activity=$4
+       WHERE id=$1`,
+      [open.rows[0].id, todayIso, customer_po ? String(customer_po) : null, activity ? String(activity) : null]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 // ======================================================================
 // SERVER START (SAFE)
 // ======================================================================
