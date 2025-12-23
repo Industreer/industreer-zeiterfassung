@@ -88,7 +88,10 @@ async function uploadLogo() {
   const fd = new FormData();
   fd.append("logo", f);
 
-  const r = await fetch("/api/admin/logo", { method: "POST", body: fd });
+  const r = await fetch("/api/logo", {
+  method: "POST",
+  body: formData
+});
   const t = await r.text();
   document.getElementById("logoMsg").textContent = t;
   if (r.ok) setTimeout(() => location.reload(), 500);
