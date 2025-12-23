@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Admin – Industreer Zeiterfassung</title>
+
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -52,66 +53,67 @@
     }
   </style>
 </head>
-<body>
 
+<body>
   <div class="box">
     <h1>Admin</h1>
 
-    <!-- ================= LOGO ================= -->
+    <!-- LOGO -->
     <div class="section">
       <h3>1) Firmenlogo</h3>
       <img src="/api/logo" onerror="this.style.display='none'" />
       <input type="file" id="logoFile" accept="image/png,image/jpeg" />
-      <button onclick="uploadLogo()">Logo hochladen</button>
+      <button id="uploadLogoBtn">Logo hochladen</button>
       <div class="msg" id="logoMsg"></div>
     </div>
 
-    <!-- ================= STAFFPLAN ================= -->
+    <!-- STAFFPLAN -->
     <div class="section">
       <h3>2) Staffplan importieren (Excel)</h3>
-      <p>
-        Erwartet: Datum ab L4, KW in L2, Kunde Spalte A ab Zeile 6,
-        interne PO Spalte B, Kunden-PO Spalte E, Mitarbeiter Spalte I.
-      </p>
       <input type="file" id="staffFile" accept=".xlsx,.xls" />
-      <button onclick="importStaffplan()">Staffplan importieren</button>
+      <button id="importStaffBtn">Staffplan importieren</button>
       <div class="msg" id="staffMsg"></div>
     </div>
-
   </div>
 
-<script>
-<script>
-async function uploadLogo() {
-  const f = document.getElementById("logoFile").files[0];
-  if (!f) return alert("Bitte Logo auswählen");
+  <!-- SCRIPT MUSS AM ENDE IM BODY STEHEN -->
+  <script>
+    async function uploadLogo() {
+      const f = document.getElementById("logoFile").files[0];
+      if (!f) return alert("Bitte Logo auswählen");
 
-  const fd = new FormData();
-  fd.append("file", f); // <-- wichtig: Name "file" passt zu multer.single("file")
+      const fd = new FormData();
+      fd.append("file", f);
 
-  const r = await fetch("/api/logo", {
-    method: "POST",
-    body: fd
-  });
+      const r = await fetch("/api/logo", {
+        method: "POST",
+        body: fd
+      });
 
-  const t = await r.text();
-  document.getElementById("logoMsg").textContent = t;
+      const t = await r.text();
+      document.getElementById("logoMsg").textContent = t;
 
-  if (r.ok) setTimeout(() => location.reload(), 500);
-}
-</script>
-async function importStaffplan() {
-  const f = document.getElementById("staffFile").files[0];
-  if (!f) return alert("Bitte Staffplan auswählen");
+      if (r.ok) setTimeout(() => location.reload(), 500);
+    }
 
-  const fd = new FormData();
-  fd.append("file", f);
+    async function importStaffplan() {
+      const f = document.getElementById("staffFile").files[0];
+      if (!f) return alert("Bitte Staffplan auswählen");
 
-  const r = await fetch("/api/import/staffplan", { method: "POST", body: fd });
-  const t = await r.text();
-  document.getElementById("staffMsg").textContent = t;
-}
-</script>
+      const fd = new FormData();
+      fd.append("file", f);
 
+      const r = await fetch("/api/import/staffplan", {
+        method: "POST",
+        body: fd
+      });
+
+      const t = await r.text();
+      document.getElementById("staffMsg").textContent = t;
+    }
+
+    document.getElementById("uploadLogoBtn").onclick = uploadLogo;
+    document.getElementById("importStaffBtn").onclick = importStaffplan;
+  </script>
 </body>
 </html>
