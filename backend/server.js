@@ -997,7 +997,7 @@ app.get("/api/pdf/timesheet/:employeeId/:kw/:customerPo", async (req, res) => {
     res.status(500).send("PDF Fehler: " + e.message);
   }
 });
-
+}
 // ======================================================================
 // Start
 // ======================================================================
