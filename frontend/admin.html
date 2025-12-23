@@ -81,22 +81,25 @@
   </div>
 
 <script>
+<script>
 async function uploadLogo() {
   const f = document.getElementById("logoFile").files[0];
   if (!f) return alert("Bitte Logo auswählen");
 
   const fd = new FormData();
-  fd.append("logo", f);
+  fd.append("file", f); // <-- wichtig: Name "file" passt zu multer.single("file")
 
   const r = await fetch("/api/logo", {
-  method: "POST",
-  body: formData
-});
+    method: "POST",
+    body: fd
+  });
+
   const t = await r.text();
   document.getElementById("logoMsg").textContent = t;
+
   if (r.ok) setTimeout(() => location.reload(), 500);
 }
-
+</script>
 async function importStaffplan() {
   const f = document.getElementById("staffFile").files[0];
   if (!f) return alert("Bitte Staffplan auswählen");
