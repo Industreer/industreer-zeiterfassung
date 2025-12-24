@@ -6,7 +6,7 @@ async function importStaffplan() {
     return;
   }
 
-  const fd = new FormData();
+  const fd = new fd();
   fd.append("file", f);
 
   document.getElementById("staffMsg").textContent = "⏳ Import läuft … bitte warten";
