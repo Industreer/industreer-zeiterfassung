@@ -1,4 +1,126 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin – Industreer Zeiterfassung</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f6f8;
+      padding: 20px;
+    }
+    .box {
+      background: #fff;
+      padding: 20px;
+      border-radius: 10px;
+      max-width: 720px;
+      margin: auto;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      margin-top: 0;
+      text-align: center;
+    }
+    .section {
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 15px;
+      margin-top: 20px;
+    }
+    button {
+      padding: 10px 14px;
+      font-size: 16px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      background: #1565c0;
+      color: #fff;
+      margin-top: 10px;
+    }
+    input {
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px;
+    }
+    .msg {
+      margin-top: 10px;
+      white-space: pre-wrap;
+      font-size: 14px;
+    }
+    img {
+      max-width: 220px;
+      display: block;
+      margin: 10px auto;
+    }
+  </style>
+</head>
+<body>
+
+<div class="box">
+  <h1>Admin</h1>
+
+  <!-- ================= LOGO ================= -->
+  <div class="section">
+    <h3>1) Firmenlogo</h3>
+    <img src="/api/logo" onerror="this.style.display='none'" />
+    <input type="file" id="logoFile" accept="image/png,image/jpeg" />
+    <button onclick="uploadLogo()">Logo hochladen</button>
+    <div class="msg" id="logoMsg"></div>
+  </div>
+
+  <!-- ================= STAFFPLAN ================= -->
+  <div class="section">
+    <h3>2) Staffplan importieren (Excel)</h3>
+    <p>
+      Erwartet Original-Kundendatei<br>
+      (Datum ab L4, Mitarbeiter Spalte I, Kunde Spalte A,
+      interne PO Spalte B, Kunden-PO Spalte E)
+    </p>
+    <input type="file" id="staffFile" accept=".xlsx,.xls" />
+    <button onclick="importStaffplan()">Staffplan importieren</button>
+    <div class="msg" id="staffMsg"></div>
+  </div>
+</div>
+
 <script>
+async function uploadLogo() {
+  const f = document.getElementById("logoFile").files[0];
+  if (!f) {
+    alert("Bitte Logo auswählen");
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append("file", f);
+
+  document.getElementById("logoMsg").textContent = "⏳ Logo wird hochgeladen …";
+
+  try {
+    const r = await fetch("/api/logo", {
+      method: "POST",
+      body: fd
+    });
+
+    const data = await r.json();
+
+    if (!data.ok) {
+      document.getElementById("logoMsg").textContent =
+        "❌ Fehler beim Hochladen";
+      return;
+    }
+
+    document.getElementById("logoMsg").textContent =
+      "✅ Logo erfolgreich gespeichert";
+    setTimeout(() => location.reload(), 800);
+
+  } catch (e) {
+    document.getElementById("logoMsg").textContent =
+      "❌ Netzwerkfehler: " + e.message;
+  }
+}
+
 async function importStaffplan() {
   const f = document.getElementById("staffFile").files[0];
   if (!f) {
@@ -6,10 +128,11 @@ async function importStaffplan() {
     return;
   }
 
-  const fd = new fd();
+  const fd = new FormData();
   fd.append("file", f);
 
-  document.getElementById("staffMsg").textContent = "⏳ Import läuft … bitte warten";
+  document.getElementById("staffMsg").textContent =
+    "⏳ Staffplan wird importiert … bitte warten";
 
   try {
     const r = await fetch("/api/import/staffplan", {
@@ -30,7 +153,10 @@ async function importStaffplan() {
 
   } catch (e) {
     document.getElementById("staffMsg").textContent =
-      "❌ Netzwerk-/Serverfehler: " + e.message;
+      "❌ Netzwerkfehler: " + e.message;
   }
 }
 </script>
+
+</body>
+</html>
