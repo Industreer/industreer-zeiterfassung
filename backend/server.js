@@ -156,6 +156,78 @@ app.get("/api/employee/:id", async (req, res) => {
   if (!r.rowCount) return res.status(404).json({ ok: false });
   res.json({ ok: true, employee: r.rows[0] });
 });
+// ======================================================================
+// EMPLOYEE – HEUTIGE PROJEKTE / POs
+// ======================================================================
+
+app.get("/api/employee/today", async (req, res) => {
+  try {
+    const employeeId = req.query.employee_id;
+    if (!employeeId) {
+      return res.status(400).json({
+        ok: false,
+        error: "employee_id fehlt"
+      });
+    }
+
+    // Heute (lokales Datum, ohne Uhrzeit)
+    const today = new Date();
+    const isoToday = today.toISOString().slice(0, 10); // YYYY-MM-DD
+
+    // Debug (hilft enorm bei Tests)
+    console.log("[TODAY] employee_id =", employeeId, "date =", isoToday);
+
+    const q = `
+      SELECT
+        work_date,
+        calendar_week,
+        customer,
+        internal_po,
+        customer_po,
+        project_short,
+        planned_hours
+      FROM staffplan
+      WHERE employee_id = $1
+        AND work_date = $2
+      ORDER BY customer_po, internal_po
+    `;
+
+    const { rows } = await pool.query(q, [employeeId, isoToday]);
+
+    if (!rows || rows.length === 0) {
+      return res.json({
+        ok: true,
+        date: isoToday,
+        projects: [],
+        message: "Keine Projekte für heute gefunden"
+      });
+    }
+
+    // Gruppieren nach PO (falls mehrfach gleiche PO vorkommt)
+    const projects = rows.map(r => ({
+      date: r.work_date,
+      calendarWeek: r.calendar_week,
+      customer: r.customer || "",
+      customerPo: r.customer_po || "",
+      internalPo: r.internal_po || "",
+      projectShort: r.project_short || "",
+      plannedHours: Number(r.planned_hours || 0)
+    }));
+
+    return res.json({
+      ok: true,
+      date: isoToday,
+      projects
+    });
+
+  } catch (e) {
+    console.error("TODAY ERROR:", e);
+    res.status(500).json({
+      ok: false,
+      error: e.message
+    });
+  }
+});
 
 // ======================================================
 // STAFFPLAN IMPORT
