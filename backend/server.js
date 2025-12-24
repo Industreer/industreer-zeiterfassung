@@ -1,17 +1,10 @@
 /**
- * backend/server.js
- * Stable full server.js (no syntax traps)
- * - Express + PostgreSQL (pg)
- * - /health
- * - Admin + Employee pages (static frontend)
- * - Staffplan Import (first-date-based offset) + DB migration inside import
- * - Employees list/update
- * - Logo upload + /api/logo
- * - PDF Timesheet endpoint (basic, extendable)
+ * backend/server.js (stable)
  */
 
 const path = require("path");
 const fs = require("fs");
+
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -24,8 +17,10 @@ app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+const PORT = process.env.PORT || 10000;
+
 // --------------------
-// Paths / Files
+// Paths
 // --------------------
 const ROOT = path.join(__dirname, "..");
 const FRONTEND_DIR = path.join(ROOT, "frontend");
@@ -35,7 +30,7 @@ const LOGO_FILE = path.join(DATA_DIR, "logo.png");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // --------------------
-// PostgreSQL
+// DB
 // --------------------
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -45,7 +40,7 @@ const pool = new Pool({
 });
 
 // --------------------
-// Upload (multer memory)
+// Upload
 // --------------------
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -67,44 +62,38 @@ function getISOWeek(date) {
 function parseAnyDateFromXlsxCell(cell) {
   if (!cell) return null;
 
-  // Excel number date (serial)
+  // Excel serial number
   if (typeof cell.v === "number") {
     const epoch = new Date(1899, 11, 30);
     return new Date(epoch.getTime() + cell.v * 86400000);
   }
 
-  // text like 2025-01-23
+  // text
   const text = String(cell.w || cell.v || "").trim();
-  const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  // yyyy-mm-dd
+  let m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
 
-  // text like 23.01.2025 or 23/01/2025 (best-effort)
-  const m2 = text.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (m2) return new Date(+m2[3], +m2[2] - 1, +m2[1]);
+  // dd.mm.yyyy
+  m = text.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
 
   return null;
 }
 
 async function migrate() {
-  // Create tables (minimal, extendable)
- await pool.query(`
-  CREATE TABLE IF NOT EXISTS time_breaks (
-    id BIGSERIAL PRIMARY KEY,
-    employee_id TEXT NOT NULL,
-    work_date DATE NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'smoke',
-    start_ts TIMESTAMPTZ NOT NULL,
-    end_ts TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-  );
+  // employees
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS time_breaks_idx
-    ON time_breaks (employee_id, work_date);
-  `);
-
+    CREATE TABLE IF NOT EXISTS employees (
+      employee_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT,
+      language TEXT DEFAULT 'de'
     );
   `);
 
+  // staffplan
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staffplan (
       id BIGSERIAL PRIMARY KEY,
@@ -124,14 +113,15 @@ async function migrate() {
     ON staffplan (calendar_week, employee_name);
   `);
 
+  // time entries (work sessions)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS time_entries (
       id BIGSERIAL PRIMARY KEY,
       employee_id TEXT NOT NULL REFERENCES employees(employee_id),
       work_date DATE NOT NULL,
-      start_ts TIMESTAMPTZ,
+      customer_po TEXT,
+      start_ts TIMESTAMPTZ NOT NULL,
       end_ts TIMESTAMPTZ,
-      break_minutes INT DEFAULT 0,
       activity TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -141,39 +131,45 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS time_entries_idx
     ON time_entries (employee_id, work_date);
   `);
+
+  // breaks
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS time_breaks (
+      id BIGSERIAL PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(employee_id),
+      work_date DATE NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'smoke',
+      start_ts TIMESTAMPTZ NOT NULL,
+      end_ts TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS time_breaks_idx
+    ON time_breaks (employee_id, work_date);
+  `);
 }
 
 // --------------------
-// Static pages
+// Static
 // --------------------
 app.use(express.static(FRONTEND_DIR));
 
-app.get("/", (req, res) => {
-  res.redirect("/admin");
-});
-
-app.get("/admin", (req, res) => {
-  res.sendFile(path.join(FRONTEND_DIR, "admin.html"));
-});
-
-app.get("/employee", (req, res) => {
-  res.sendFile(path.join(FRONTEND_DIR, "employee.html"));
-});
+app.get("/", (req, res) => res.redirect("/admin"));
+app.get("/admin", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "admin.html")));
+app.get("/employee", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "employee.html")));
 
 // --------------------
 // Health
 // --------------------
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
-});
+app.get("/health", (req, res) => res.json({ ok: true }));
 
 // --------------------
 // Logo API
 // --------------------
 app.get("/api/logo", (req, res) => {
-  if (!fs.existsSync(LOGO_FILE)) {
-    return res.status(404).json({ ok: false, error: "Kein Logo vorhanden" });
-  }
+  if (!fs.existsSync(LOGO_FILE)) return res.status(404).json({ ok: false, error: "Kein Logo vorhanden" });
   res.setHeader("Content-Type", "image/png");
   fs.createReadStream(LOGO_FILE).pipe(res);
 });
@@ -193,9 +189,7 @@ app.post("/api/logo", upload.single("file"), async (req, res) => {
 // --------------------
 app.get("/api/employees", async (req, res) => {
   try {
-    const r = await pool.query(
-      `SELECT employee_id, name, email, language FROM employees ORDER BY name ASC`
-    );
+    const r = await pool.query(`SELECT employee_id, name, email, language FROM employees ORDER BY name ASC`);
     res.json(r.rows);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -204,10 +198,8 @@ app.get("/api/employees", async (req, res) => {
 
 app.post("/api/employees/upsert", async (req, res) => {
   try {
-    const { employee_id, name, email, language } = req.body;
-    if (!employee_id || !name) {
-      return res.status(400).json({ ok: false, error: "employee_id und name erforderlich" });
-    }
+    const { employee_id, name, email, language } = req.body || {};
+    if (!employee_id || !name) return res.status(400).json({ ok: false, error: "employee_id und name erforderlich" });
 
     await pool.query(
       `
@@ -228,35 +220,227 @@ app.post("/api/employees/upsert", async (req, res) => {
 });
 
 // --------------------
-// STAFFPLAN IMPORT (first-date-based offset)
-// - finds first date cell within rows 0..9 starting from col L
-// - then calculates date by offset for all further cols
-// - reads: customer (col A), internal_po (col B), employee name (col I)
-// - per day: project_short (same row), planned_hours (next row)
+// Employee Login
+// --------------------
+app.post("/api/employee/login", async (req, res) => {
+  try {
+    const { employee_id } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const r = await pool.query(
+      `SELECT employee_id, name, email, language FROM employees WHERE employee_id=$1`,
+      [String(employee_id)]
+    );
+
+    if (r.rowCount === 0) return res.status(404).json({ ok: false, error: "Mitarbeiter-ID nicht gefunden" });
+    res.json({ ok: true, employee: r.rows[0] });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// Today staffplan for employee
+// --------------------
+app.get("/api/employee/today", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const er = await pool.query(`SELECT name FROM employees WHERE employee_id=$1`, [employee_id]);
+    if (er.rowCount === 0) return res.status(404).json({ ok: false, error: "Mitarbeiter nicht gefunden" });
+
+    const employee_name = er.rows[0].name;
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const sp = await pool.query(
+      `SELECT employee_name, work_date, calendar_week, customer, internal_po, customer_po, project_short, planned_hours
+       FROM staffplan
+       WHERE employee_name=$1 AND work_date=$2
+       ORDER BY customer_po ASC`,
+      [employee_name, todayIso]
+    );
+
+    res.json({ ok: true, rows: sp.rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// Time status
+// --------------------
+app.get("/api/time/status", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const open = await pool.query(
+      `SELECT id, start_ts, end_ts FROM time_entries
+       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
+       ORDER BY id DESC LIMIT 1`,
+      [employee_id, todayIso]
+    );
+
+    const openBreak = await pool.query(
+      `SELECT id, start_ts FROM time_breaks
+       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
+       ORDER BY id DESC LIMIT 1`,
+      [employee_id, todayIso]
+    );
+
+    const sumBreak = await pool.query(
+      `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(end_ts, NOW()) - start_ts)))/60,0) AS mins
+       FROM time_breaks
+       WHERE employee_id=$1 AND work_date=$2`,
+      [employee_id, todayIso]
+    );
+
+    res.json({
+      ok: true,
+      open: open.rowCount ? open.rows[0] : null,
+      break: {
+        is_on_break: openBreak.rowCount > 0,
+        started_at: openBreak.rowCount ? openBreak.rows[0].start_ts : null,
+        total_break_minutes: Math.round(Number(sumBreak.rows[0].mins || 0)),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// Time start
+// --------------------
+app.post("/api/time/start", async (req, res) => {
+  try {
+    const { employee_id, customer_po } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    if (!customer_po) return res.status(400).json({ ok: false, error: "customer_po fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const existing = await pool.query(
+      `SELECT start_ts FROM time_entries
+       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
+       ORDER BY id DESC LIMIT 1`,
+      [String(employee_id), todayIso]
+    );
+    if (existing.rowCount) return res.json({ ok: true, start_ts: existing.rows[0].start_ts, note: "already_started" });
+
+    const ins = await pool.query(
+      `INSERT INTO time_entries (employee_id, work_date, customer_po, start_ts)
+       VALUES ($1,$2,$3,NOW())
+       RETURNING start_ts`,
+      [String(employee_id), todayIso, String(customer_po)]
+    );
+
+    res.json({ ok: true, start_ts: ins.rows[0].start_ts });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// Smoke break start/end
+// --------------------
+app.post("/api/time/smoke/start", async (req, res) => {
+  try {
+    const { employee_id } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const openBreak = await pool.query(
+      `SELECT id FROM time_breaks WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL LIMIT 1`,
+      [String(employee_id), todayIso]
+    );
+    if (openBreak.rowCount) return res.json({ ok: true, note: "already_on_break" });
+
+    await pool.query(
+      `INSERT INTO time_breaks (employee_id, work_date, kind, start_ts)
+       VALUES ($1,$2,'smoke',NOW())`,
+      [String(employee_id), todayIso]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/time/smoke/end", async (req, res) => {
+  try {
+    const { employee_id } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const openBreak = await pool.query(
+      `SELECT id FROM time_breaks WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL ORDER BY id DESC LIMIT 1`,
+      [String(employee_id), todayIso]
+    );
+    if (!openBreak.rowCount) return res.status(400).json({ ok: false, error: "Keine aktive Raucherpause" });
+
+    await pool.query(`UPDATE time_breaks SET end_ts=NOW() WHERE id=$1`, [openBreak.rows[0].id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// Time stop
+// --------------------
+app.post("/api/time/stop", async (req, res) => {
+  try {
+    const { employee_id, customer_po, activity } = req.body || {};
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const open = await pool.query(
+      `SELECT id FROM time_entries
+       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
+       ORDER BY id DESC LIMIT 1`,
+      [String(employee_id), todayIso]
+    );
+    if (!open.rowCount) return res.status(400).json({ ok: false, error: "Kein aktiver Arbeitstag" });
+
+    await pool.query(
+      `UPDATE time_entries
+       SET end_ts=NOW(),
+           customer_po=COALESCE($2, customer_po),
+           activity=$3
+       WHERE id=$1`,
+      [open.rows[0].id, customer_po ? String(customer_po) : null, activity ? String(activity) : null]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------
+// Staffplan import
 // --------------------
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei hochgeladen" });
-
-    // Ensure schema (THIS fixes your customer/internal_po error)
-    await pool.query(`
-      ALTER TABLE staffplan
-        ADD COLUMN IF NOT EXISTS customer TEXT,
-        ADD COLUMN IF NOT EXISTS internal_po TEXT,
-        ADD COLUMN IF NOT EXISTS customer_po TEXT,
-        ADD COLUMN IF NOT EXISTS project_short TEXT,
-        ADD COLUMN IF NOT EXISTS planned_hours NUMERIC
-    `);
 
     const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
     const sheetName = workbook.SheetNames[0];
     const ws = workbook.Sheets[sheetName];
 
     const startCol = 11; // L
-    const maxRightCols = 1200; // far right (RG+)
-    const maxScanRows = 10;
+    const maxRightCols = 1200;
+    const maxScanRows = 15;
 
-    // Find first actual date cell
+    // find first date cell
     let baseDate = null;
     let headerColStart = null;
 
@@ -274,25 +458,17 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     }
 
     if (!baseDate) {
-      return res.status(400).json({
-        ok: false,
-        error: "Kein Startdatum gefunden (erwartet Datum in Datumszeile ab Zelle L4 o.ä.)",
-      });
+      return res.status(400).json({ ok: false, error: "Kein Startdatum gefunden (Datumszeile ab L4 o.ä.)" });
     }
 
-    // Compute dates
+    // compute dates
     const computedDates = [];
     for (let c = headerColStart; c < startCol + maxRightCols; c++) {
       const d = new Date(baseDate);
       d.setDate(baseDate.getDate() + (c - headerColStart));
-      computedDates.push({
-        col: c,
-        iso: toIsoDate(d),
-        cw: "CW" + getISOWeek(d),
-      });
+      computedDates.push({ col: c, iso: toIsoDate(d), cw: "CW" + getISOWeek(d) });
     }
 
-    // Clean old staffplan
     await pool.query("DELETE FROM staffplan");
 
     let imported = 0;
@@ -300,7 +476,6 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     let maxDate = null;
     const weeks = new Set();
 
-    // Employee rows start around row 6 (index 5)
     for (let row = 5; row < 20000; row++) {
       const nameCell = ws[XLSX.utils.encode_cell({ r: row, c: 8 })]; // I
       if (!nameCell?.v) continue;
@@ -310,40 +485,35 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
       const customerCell = ws[XLSX.utils.encode_cell({ r: row, c: 0 })]; // A
       const internalPoCell = ws[XLSX.utils.encode_cell({ r: row, c: 1 })]; // B
-      const customerPoCell = ws[XLSX.utils.encode_cell({ r: row, c: 4 })]; // E (Kunden-PO)
+      const customerPoCell = ws[XLSX.utils.encode_cell({ r: row, c: 4 })]; // E
 
       const customer = customerCell?.v ? String(customerCell.v).trim() : null;
       const internalPo = internalPoCell?.v ? String(internalPoCell.v).trim() : null;
       const customerPo = customerPoCell?.v ? String(customerPoCell.v).trim() : null;
 
-      // Auto create employee if not exists (optional)
-      // Here we generate an ID only if it doesn't exist already and the name is new.
-      // NOTE: You may already have your own employee IDs. This is a simple fallback.
-      // We do NOT override existing employees.
-      {
-        const exists = await pool.query(`SELECT 1 FROM employees WHERE name=$1 LIMIT 1`, [employeeName]);
-        if (exists.rowCount === 0) {
-          // create a pseudo ID from row number (stable enough for now)
-          const newId = "AUTO" + String(row);
-          await pool.query(
-            `INSERT INTO employees (employee_id, name) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-            [newId, employeeName]
-          );
-        }
+      // auto-add employee if missing (name-based)
+      const exists = await pool.query(`SELECT 1 FROM employees WHERE name=$1 LIMIT 1`, [employeeName]);
+      if (exists.rowCount === 0) {
+        const newId = "AUTO" + String(row);
+        await pool.query(
+          `INSERT INTO employees (employee_id, name) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+          [newId, employeeName]
+        );
       }
 
       for (const d of computedDates) {
         const projectShortCell = ws[XLSX.utils.encode_cell({ r: row, c: d.col })];
         const planHoursCell = ws[XLSX.utils.encode_cell({ r: row + 1, c: d.col })];
 
-        // if both empty -> nothing planned
         if (!projectShortCell?.v && !planHoursCell?.v) continue;
 
         const projectShort = projectShortCell?.v ? String(projectShortCell.v).trim() : null;
-        const plannedHours =
-          planHoursCell?.v !== undefined && planHoursCell?.v !== null && planHoursCell?.v !== ""
-            ? Number(planHoursCell.v)
-            : null;
+
+        let plannedHours = null;
+        if (planHoursCell?.v !== undefined && planHoursCell?.v !== null && planHoursCell?.v !== "") {
+          plannedHours = Number(planHoursCell.v);
+          if (Number.isNaN(plannedHours)) plannedHours = null;
+        }
 
         await pool.query(
           `
@@ -375,7 +545,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 });
 
 // --------------------
-// STAFFPLAN SAMPLE (debug helper)
+// staffplan sample
 // --------------------
 app.get("/api/staffplan/sample", async (req, res) => {
   try {
@@ -392,13 +562,12 @@ app.get("/api/staffplan/sample", async (req, res) => {
 });
 
 // --------------------
-// PDF Timesheet (basic)
-// /api/timesheet/:employeeName/:kw/:customerPo
+// PDF timesheet (basic)
 // --------------------
 app.get("/api/timesheet/:employeeName/:kw/:customerPo", async (req, res) => {
   try {
     const employeeName = decodeURIComponent(req.params.employeeName);
-    const kw = req.params.kw;
+    const kw = String(req.params.kw || "");
     const customerPo = decodeURIComponent(req.params.customerPo);
 
     const sp = await pool.query(
@@ -408,11 +577,8 @@ app.get("/api/timesheet/:employeeName/:kw/:customerPo", async (req, res) => {
       [employeeName, kw, customerPo]
     );
 
-    if (sp.rowCount === 0) {
-      return res.status(404).send("Keine Staffplan-Daten für diese KW/PO/Mitarbeiter gefunden.");
-    }
+    if (sp.rowCount === 0) return res.status(404).send("Keine Staffplan-Daten gefunden.");
 
-    // take header info from first row
     const first = sp.rows[0];
     const customerName = first.customer || "";
     const internalPo = first.internal_po || "";
@@ -424,14 +590,11 @@ app.get("/api/timesheet/:employeeName/:kw/:customerPo", async (req, res) => {
     const doc = new PDFDocument({ size: "A4", margin: 40 });
     doc.pipe(res);
 
-    // Logo
     if (fs.existsSync(LOGO_FILE)) {
       try {
-        const w = 220;
+        const w = 240;
         doc.image(LOGO_FILE, (doc.page.width - w) / 2, 20, { width: w });
-      } catch (_) {
-        // ignore image errors
-      }
+      } catch (_) {}
     }
 
     doc.font("Helvetica-Bold").fontSize(16).text("STUNDENNACHWEIS", 0, 110, { align: "center" });
@@ -467,7 +630,8 @@ app.get("/api/timesheet/:employeeName/:kw/:customerPo", async (req, res) => {
 
       doc.text(dateLabel, 40, y);
       doc.text(plan ? plan.toFixed(2) : "", 260, y, { width: 40, align: "right" });
-      doc.text("", 520, y, { align: "right" }); // IST comes later from time_entries
+      doc.text("", 520, y, { align: "right" });
+
       y += rowH;
       if (y > 760) {
         doc.addPage();
@@ -486,230 +650,10 @@ app.get("/api/timesheet/:employeeName/:kw/:customerPo", async (req, res) => {
     res.status(500).send("PDF Fehler: " + e.message);
   }
 });
-// --------------------
-// EMPLOYEE LOGIN
-// --------------------
-app.post("/api/employee/login", async (req, res) => {
-  try {
-    const { employee_id } = req.body || {};
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-
-    const r = await pool.query(
-      `SELECT employee_id, name, email, language FROM employees WHERE employee_id=$1`,
-      [String(employee_id)]
-    );
-    if (r.rowCount === 0) {
-      return res.status(404).json({ ok: false, error: "Mitarbeiter-ID nicht gefunden" });
-    }
-    res.json({ ok: true, employee: r.rows[0] });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
 
 // --------------------
-// TODAY STAFFPLAN (by employee name)
-// - used to show PO list on employee page
+// Start
 // --------------------
-app.get("/api/employee/today", async (req, res) => {
-  try {
-    const employee_id = String(req.query.employee_id || "").trim();
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-
-    const er = await pool.query(`SELECT name FROM employees WHERE employee_id=$1`, [employee_id]);
-    if (er.rowCount === 0) return res.status(404).json({ ok: false, error: "Mitarbeiter nicht gefunden" });
-
-    const employee_name = er.rows[0].name;
-    const todayIso = new Date().toISOString().slice(0, 10);
-
-    const sp = await pool.query(
-      `SELECT employee_name, work_date, calendar_week, customer, internal_po, customer_po, project_short, planned_hours
-       FROM staffplan
-       WHERE employee_name=$1 AND work_date=$2
-       ORDER BY customer_po ASC`,
-      [employee_name, todayIso]
-    );
-
-    res.json({ ok: true, rows: sp.rows });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// --------------------
-// TIME STATUS (open entry + break state)
-// --------------------
-app.get("/api/time/status", async (req, res) => {
-  try {
-    const employee_id = String(req.query.employee_id || "").trim();
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-
-    const todayIso = new Date().toISOString().slice(0, 10);
-
-    const open = await pool.query(
-      `SELECT id, employee_id, work_date, start_ts, end_ts, customer_po, activity
-       FROM time_entries
-       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
-       ORDER BY id DESC
-       LIMIT 1`,
-      [employee_id, todayIso]
-    );
-
-    const openBreak = await pool.query(
-      `SELECT id, start_ts FROM time_breaks
-       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
-       ORDER BY id DESC
-       LIMIT 1`,
-      [employee_id, todayIso]
-    );
-
-    const sumBreak = await pool.query(
-      `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(end_ts, NOW()) - start_ts)))/60,0) AS mins
-       FROM time_breaks
-       WHERE employee_id=$1 AND work_date=$2`,
-      [employee_id, todayIso]
-    );
-
-    res.json({
-      ok: true,
-      open: open.rowCount ? open.rows[0] : null,
-      break: {
-        is_on_break: openBreak.rowCount > 0,
-        started_at: openBreak.rowCount ? openBreak.rows[0].start_ts : null,
-        total_break_minutes: Math.round(Number(sumBreak.rows[0].mins || 0)),
-      },
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// --------------------
-// TIME START
-// --------------------
-app.post("/api/time/start", async (req, res) => {
-  try {
-    const { employee_id, customer_po } = req.body || {};
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-    if (!customer_po) return res.status(400).json({ ok: false, error: "customer_po fehlt" });
-
-    const todayIso = new Date().toISOString().slice(0, 10);
-
-    // prevent multiple open entries
-    const existing = await pool.query(
-      `SELECT id, start_ts FROM time_entries
-       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
-       ORDER BY id DESC LIMIT 1`,
-      [String(employee_id), todayIso]
-    );
-
-    if (existing.rowCount) {
-      return res.json({ ok: true, start_ts: existing.rows[0].start_ts, note: "already_started" });
-    }
-
-    const ins = await pool.query(
-      `INSERT INTO time_entries (employee_id, work_date, start_ts, customer_po)
-       VALUES ($1,$2,NOW(),$3)
-       RETURNING start_ts`,
-      [String(employee_id), todayIso, String(customer_po)]
-    );
-
-    res.json({ ok: true, start_ts: ins.rows[0].start_ts });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// --------------------
-// SMOKE BREAK START / END
-// --------------------
-app.post("/api/time/smoke/start", async (req, res) => {
-  try {
-    const { employee_id } = req.body || {};
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-
-    const todayIso = new Date().toISOString().slice(0, 10);
-
-    // do not start if already on break
-    const openBreak = await pool.query(
-      `SELECT id FROM time_breaks WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL LIMIT 1`,
-      [String(employee_id), todayIso]
-    );
-    if (openBreak.rowCount) return res.json({ ok: true, note: "already_on_break" });
-
-    await pool.query(
-      `INSERT INTO time_breaks (employee_id, work_date, kind, start_ts)
-       VALUES ($1,$2,'smoke',NOW())`,
-      [String(employee_id), todayIso]
-    );
-
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/api/time/smoke/end", async (req, res) => {
-  try {
-    const { employee_id } = req.body || {};
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-
-    const todayIso = new Date().toISOString().slice(0, 10);
-
-    const openBreak = await pool.query(
-      `SELECT id FROM time_breaks WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL ORDER BY id DESC LIMIT 1`,
-      [String(employee_id), todayIso]
-    );
-    if (!openBreak.rowCount) return res.status(400).json({ ok: false, error: "Keine aktive Raucherpause" });
-
-    await pool.query(
-      `UPDATE time_breaks SET end_ts=NOW() WHERE id=$1`,
-      [openBreak.rows[0].id]
-    );
-
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// --------------------
-// TIME STOP (store end + activity)
-// --------------------
-app.post("/api/time/stop", async (req, res) => {
-  try {
-    const { employee_id, customer_po, activity } = req.body || {};
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-
-    const todayIso = new Date().toISOString().slice(0, 10);
-
-    const open = await pool.query(
-      `SELECT id FROM time_entries
-       WHERE employee_id=$1 AND work_date=$2 AND end_ts IS NULL
-       ORDER BY id DESC LIMIT 1`,
-      [String(employee_id), todayIso]
-    );
-    if (!open.rowCount) return res.status(400).json({ ok: false, error: "Kein aktiver Arbeitstag" });
-
-    await pool.query(
-      `UPDATE time_entries
-       SET end_ts=NOW(),
-           customer_po=COALESCE($3, customer_po),
-           activity=$4
-       WHERE id=$1`,
-      [open.rows[0].id, todayIso, customer_po ? String(customer_po) : null, activity ? String(activity) : null]
-    );
-
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// ======================================================================
-// SERVER START (SAFE)
-// ======================================================================
-const PORT = process.env.PORT || 10000;
-
 (async function start() {
   try {
     await migrate();
