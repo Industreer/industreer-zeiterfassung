@@ -41,18 +41,12 @@ const pool = new Pool({
 async function migrate() {
   console.log("🔧 DB migrate start");
 
+async function migrate() {
+  console.log("🔧 DB migrate start");
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staffplan (
-      id SERIAL PRIMARY KEY,
-      employee_id TEXT,
-      employee_name TEXT,
-      work_date DATE,
-      calendar_week TEXT,
-      customer_name TEXT,
-      internal_po TEXT,
-      customer_po TEXT,
-      project_short TEXT,
-      planned_hours NUMERIC
+      id SERIAL PRIMARY KEY
     );
   `);
 
@@ -68,6 +62,7 @@ async function migrate() {
 
   console.log("✅ DB migrate finished");
 }
+
 
 // ======================================================
 // Upload
