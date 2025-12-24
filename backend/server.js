@@ -38,6 +38,36 @@ const pool = new Pool({
     ? { rejectUnauthorized: false }
     : undefined,
 });
+async function migrate() {
+  console.log("🔧 DB migrate start");
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staffplan (
+      id SERIAL PRIMARY KEY,
+      employee_id TEXT,
+      employee_name TEXT,
+      work_date DATE,
+      calendar_week TEXT,
+      customer_name TEXT,
+      internal_po TEXT,
+      customer_po TEXT,
+      project_short TEXT,
+      planned_hours NUMERIC
+    );
+  `);
+
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS employee_id TEXT`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS employee_name TEXT`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS work_date DATE`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS calendar_week TEXT`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS customer_name TEXT`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS internal_po TEXT`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS customer_po TEXT`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS project_short TEXT`);
+  await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS planned_hours NUMERIC`);
+
+  console.log("✅ DB migrate finished");
+}
 
 // ======================================================
 // Upload
