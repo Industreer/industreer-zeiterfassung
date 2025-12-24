@@ -422,5 +422,10 @@ app.get("/api/logo", (req, res) => {
   } catch (e) {
     console.error(e);
     process.exit(1);
+    await pool.query(`
+  ALTER TABLE staffplan
+  ADD COLUMN IF NOT EXISTS customer TEXT
+`);
+
   }
 })();
