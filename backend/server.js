@@ -159,6 +159,39 @@ app.use(express.static(FRONTEND_DIR));
 app.get("/", (req, res) => res.redirect("/admin"));
 app.get("/admin", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "admin.html")));
 app.get("/employee", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "employee.html")));
+// ======================================================================
+// EMPLOYEE LOGIN
+// ======================================================================
+app.get("/api/employee/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const r = await pool.query(
+      `SELECT employee_id, name, email, language
+       FROM employees
+       WHERE employee_id = $1`,
+      [id]
+    );
+
+    if (r.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Mitarbeiter nicht gefunden"
+      });
+    }
+
+    res.json({
+      ok: true,
+      employee: r.rows[0]
+    });
+  } catch (e) {
+    console.error("Employee login error:", e);
+    res.status(500).json({
+      ok: false,
+      error: "Serverfehler"
+    });
+  }
+});
 
 // --------------------
 // Health
