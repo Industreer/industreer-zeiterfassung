@@ -155,7 +155,63 @@ app.get("/api/employee/:id", async (req, res) => {
   );
   if (!r.rowCount) return res.status(404).json({ ok: false });
   res.json({ ok: true, employee: r.rows[0] });
+});// ======================================================================
+// EMPLOYEE – HEUTIGE PROJEKTE / DEBUG
+// ======================================================================
+
+app.get("/api/employee/today", async (req, res) => {
+  console.log("➡️ /api/employee/today aufgerufen");
+  console.log("Query:", req.query);
+
+  try {
+    const employeeId = req.query.employee_id;
+    if (!employeeId) {
+      return res.status(400).json({
+        ok: false,
+        error: "employee_id fehlt"
+      });
+    }
+
+    const today = new Date();
+    const isoToday = today.toISOString().slice(0, 10);
+
+    console.log("employee_id =", employeeId);
+    console.log("isoToday =", isoToday);
+
+    const q = `
+      SELECT
+        work_date,
+        calendar_week,
+        customer,
+        internal_po,
+        customer_po,
+        project_short,
+        planned_hours
+      FROM staffplan
+      WHERE employee_id = $1
+        AND work_date = $2
+    `;
+
+    console.log("SQL läuft…");
+
+    const result = await pool.query(q, [employeeId, isoToday]);
+
+    console.log("SQL rows:", result.rows.length);
+
+    return res.json({
+      ok: true,
+      rows: result.rows
+    });
+
+  } catch (e) {
+    console.error("❌ TODAY ERROR:", e);
+    return res.status(500).json({
+      ok: false,
+      error: e.message
+    });
+  }
 });
+
 // ======================================================================
 // EMPLOYEE – HEUTIGE PROJEKTE / POs
 // ======================================================================
