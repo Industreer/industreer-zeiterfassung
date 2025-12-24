@@ -241,6 +241,23 @@ app.get("/api/employee/today", async (req, res) => {
   );
   res.json({ ok: true, rows: r.rows });
 });
+// ======================================================================
+// LOGO UPLOAD & ABRUF
+// ======================================================================
+
+app.post("/api/logo", upload.single("file"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ ok: false, error: "Keine Datei erhalten" });
+  }
+  res.json({ ok: true });
+});
+
+app.get("/api/logo", (req, res) => {
+  if (!fs.existsSync(LOGO_FILE)) {
+    return res.status(404).end();
+  }
+  res.sendFile(LOGO_FILE);
+});
 
 // ======================================================
 // START
