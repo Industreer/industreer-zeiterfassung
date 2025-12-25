@@ -1,6 +1,6 @@
 /**
  * backend/server.js
- * CLEAN STABLE VERSION
+ * CLEAN STABLE VERSION – 2025-01
  */
 
 const path = require("path");
@@ -30,7 +30,7 @@ const LOGO_FILE = path.join(DATA_DIR, "logo.png");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // ======================================================
-// DATABASE
+// DB
 // ======================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -39,6 +39,9 @@ const pool = new Pool({
     : undefined,
 });
 
+// ======================================================
+// MIGRATE (EINMALIG & SAUBER)
+// ======================================================
 async function migrate() {
   console.log("🔧 DB migrate start");
 
@@ -136,7 +139,7 @@ app.get("/api/logo", (req, res) => {
 });
 
 app.post("/api/logo", upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ ok: false });
+  if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
   fs.writeFileSync(LOGO_FILE, req.file.buffer);
   res.json({ ok: true });
 });
@@ -159,125 +162,129 @@ app.get("/api/employee/:id", async (req, res) => {
 });
 
 // ======================================================
-// EMPLOYEE – TODAY PROJECTS
+// EMPLOYEE – HEUTIGE PROJEKTE
 // ======================================================
 app.get("/api/employee/today", async (req, res) => {
-  const employeeId = req.query.employee_id;
-  if (!employeeId) {
-    return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+  try {
+    const employeeId = req.query.employee_id;
+    if (!employeeId) {
+      return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    }
+
+    const today = toIsoDate(new Date());
+
+    const { rows } = await pool.query(
+      `
+      SELECT
+        work_date,
+        calendar_week,
+        customer,
+        internal_po,
+        customer_po,
+        project_short,
+        planned_hours
+      FROM staffplan
+      WHERE employee_id = $1
+        AND work_date = $2
+      ORDER BY customer_po, internal_po
+      `,
+      [employeeId, today]
+    );
+
+    res.json({ ok: true, date: today, projects: rows });
+
+  } catch (e) {
+    console.error("TODAY ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
   }
-
-  const today = toIsoDate(new Date());
-
-  const r = await pool.query(
-    `
-    SELECT
-      work_date,
-      calendar_week,
-      customer,
-      internal_po,
-      customer_po,
-      project_short,
-      planned_hours
-    FROM staffplan
-    WHERE employee_id=$1 AND work_date=$2
-    ORDER BY customer_po, internal_po
-    `,
-    [employeeId, today]
-  );
-
-  res.json({
-    ok: true,
-    date: today,
-    projects: r.rows,
-  });
 });
 
 // ======================================================
 // STAFFPLAN IMPORT
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
-  if (!req.file) return res.status(400).json({ ok: false });
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
 
-  const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-  const ws = wb.Sheets[wb.SheetNames[0]];
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
 
-  let startCol = null;
-  let baseDate = null;
-
-  for (let c = 11; c < 300; c++) {
-    const cell = ws[XLSX.utils.encode_cell({ r: 3, c })];
-    const d = parseExcelDate(cell);
-    if (d) {
-      startCol = c;
-      baseDate = d;
-      break;
+    let startCol = null;
+    let baseDate = null;
+    for (let c = 11; c < 300; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: 3, c })];
+      const d = parseExcelDate(cell);
+      if (d) {
+        startCol = c;
+        baseDate = d;
+        break;
+      }
     }
-  }
-
-  if (!baseDate) {
-    return res.json({ ok: false, error: "Kein Datum gefunden (ab Zelle L4)" });
-  }
-
-  const dates = [];
-  for (let i = 0; i < 300; i++) {
-    const d = new Date(baseDate);
-    d.setDate(baseDate.getDate() + i);
-    dates.push({
-      col: startCol + i,
-      iso: toIsoDate(d),
-      cw: "CW" + getISOWeek(d),
-    });
-  }
-
-  await pool.query("DELETE FROM staffplan");
-  let imported = 0;
-
-  for (let r = 5; r < 20000; r += 2) {
-    const nameCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
-    if (!nameCell?.v) continue;
-
-    const employeeName = String(nameCell.v).trim();
-
-    let emp = await pool.query(
-      `SELECT employee_id FROM employees WHERE name=$1`,
-      [employeeName]
-    );
-
-    let employeeId;
-    if (!emp.rowCount) {
-      employeeId = "AUTO" + r;
-      await pool.query(
-        `INSERT INTO employees (employee_id,name) VALUES ($1,$2)`,
-        [employeeId, employeeName]
-      );
-    } else {
-      employeeId = emp.rows[0].employee_id;
+    if (!baseDate) {
+      return res.json({ ok: false, error: "Kein Datum gefunden (ab L4)" });
     }
 
-    const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
-    const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
-    const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
+    const dates = [];
+    for (let i = 0; i < 300; i++) {
+      const d = new Date(baseDate);
+      d.setDate(baseDate.getDate() + i);
+      dates.push({ col: startCol + i, iso: toIsoDate(d), cw: "CW" + getISOWeek(d) });
+    }
 
-    for (const d of dates) {
-      const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
-      const plan = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v || null;
-      if (!proj && !plan) continue;
+    await pool.query("DELETE FROM staffplan");
 
-      await pool.query(
-        `
-        INSERT INTO staffplan
-          (employee_id,employee_name,work_date,calendar_week,customer,internal_po,customer_po,project_short,planned_hours)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-        `,
-        [employeeId, employeeName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
+    let imported = 0;
+
+    for (let r = 5; r < 20000; r += 2) {
+      const nameCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
+      if (!nameCell?.v) continue;
+      const employeeName = String(nameCell.v).trim();
+
+      let emp = await pool.query(
+        `SELECT employee_id FROM employees WHERE name=$1`,
+        [employeeName]
       );
 
-      imported++;
-    }
-  }
+      let employeeId;
+      if (emp.rowCount === 0) {
+        employeeId = "AUTO" + r;
+        await pool.query(
+          `INSERT INTO employees (employee_id,name) VALUES ($1,$2)`,
+          [employeeId, employeeName]
+        );
+      } else {
+        employeeId = emp.rows[0].employee_id;
+      }
 
-  res.json({ ok: true, imported });
+      const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
+      const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
+      const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
+
+      for (const d of dates) {
+        const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
+        const plan = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v || null;
+        if (!proj && !plan) continue;
+
+        await pool.query(
+          `
+          INSERT INTO staffplan
+            (employee_id,employee_name,work_date,calendar_week,
+             customer,internal_po,customer_po,project_short,planned_hours)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          `,
+          [employeeId, employeeName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
+        );
+
+        imported++;
+      }
+    }
+
+    res.json({ ok: true, imported });
+
+  } catch (e) {
+    console.error("STAFFPLAN IMPORT ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ======================================================
@@ -286,11 +293,11 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 (async () => {
   try {
     await migrate();
-    app.listen(PORT, () => {
-      console.log("🚀 Server läuft auf Port", PORT);
-    });
+    app.listen(PORT, () =>
+      console.log("🚀 Server läuft auf Port", PORT)
+    );
   } catch (e) {
-    console.error("❌ STARTUP ERROR:", e);
+    console.error("❌ START ERROR:", e);
     process.exit(1);
   }
 })();
