@@ -1,34 +1,3 @@
-/**
- * backend/server.js
- * Stable full version – employee_id based
- */
-
-const path = require("path");
-const fs = require("fs");
-const express = require("express");
-const cors = require("cors");
-const multer = require("multer");
-const XLSX = require("xlsx");
-const PDFDocument = require("pdfkit");
-const { Pool } = require("pg");
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-const PORT = process.env.PORT || 10000;
-
-// ======================================================
-// Paths
-// ======================================================
-const ROOT = path.join(__dirname, "..");
-const FRONTEND_DIR = path.join(ROOT, "frontend");
-const DATA_DIR = path.join(__dirname, "data");
-const LOGO_FILE = path.join(DATA_DIR, "logo.png");
-
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
 // ======================================================
 // DB
 // ======================================================
@@ -38,8 +7,6 @@ const pool = new Pool({
     ? { rejectUnauthorized: false }
     : undefined,
 });
-async function migrate() {
-  console.log("🔧 DB migrate start");
 
 async function migrate() {
   console.log("🔧 DB migrate start");
@@ -61,39 +28,6 @@ async function migrate() {
   await pool.query(`ALTER TABLE staffplan ADD COLUMN IF NOT EXISTS planned_hours NUMERIC`);
 
   console.log("✅ DB migrate finished");
-}
-
-
-// ======================================================
-// Upload
-// ======================================================
-const upload = multer({ storage: multer.memoryStorage() });
-
-// ======================================================
-// Helpers
-// ======================================================
-function toIsoDate(d) {
-  return d.toISOString().slice(0, 10);
-}
-
-function getISOWeek(date) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const day = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - day);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-}
-
-function parseExcelDate(cell) {
-  if (!cell) return null;
-  if (typeof cell.v === "number") {
-    const epoch = new Date(1899, 11, 30);
-    return new Date(epoch.getTime() + cell.v * 86400000);
-  }
-  const t = String(cell.w || cell.v || "").trim();
-  const m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
-  return null;
 }
 
 // ======================================================
