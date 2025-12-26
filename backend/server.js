@@ -14,7 +14,6 @@ const PDFDocument = require("pdfkit"); // wird später genutzt
 const { Pool } = require("pg");
 
 const app = express();
-throw new Error("🔥 DEBUG SERVER START");
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -170,15 +169,7 @@ app.get("/api/employee/:id", async (req, res) => {
 // ======================================================
 // EMPLOYEE – HEUTIGE PROJEKTE
 // ======================================================
-app.get("/api/employee/today", async (req, res) => {
-  try {
-    const employeeId = req.query.employee_id;
-    if (!employeeId) {
-      return res.status(400).json({
-        ok: false,
-        error: "employee_id fehlt"
-      });
-    }
+app.get("/api/employee/today"
 
     const today = toIsoDate(new Date());
 
