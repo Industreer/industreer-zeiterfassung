@@ -198,30 +198,20 @@ app.get("/api/employee/today", async (req, res) => {
       [employeeId, today]
     );
 
-    if (!rows.length) {
-      return res.json({
-        ok: true,
-        date: today,
-        projects: [],
-        message: "Keine Staffplan-Daten gefunden"
-      });
-    }
-
     return res.json({
       ok: true,
-      date: rows[0].work_date,
+      date: today,
       projects: rows
     });
 
   } catch (e) {
     console.error("TODAY ERROR:", e);
-    res.status(500).json({
+    return res.status(500).json({
       ok: false,
       error: e.message
     });
   }
 });
-
 // ======================================================
 // STAFFPLAN IMPORT
 // ======================================================
