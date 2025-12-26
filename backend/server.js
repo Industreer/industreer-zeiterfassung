@@ -45,17 +45,18 @@ const pool = new Pool({
 async function migrate() {
   console.log("🔧 DB migrate start");
 
-  // ACHTUNG: Alte fehlerhafte Tabelle bewusst entfernen
-  await pool.query(`DROP TABLE IF EXISTS staffplan CASCADE`);
-
+  // employees bleibt bestehen
   await pool.query(`
-    CREATE TABLE employees (
+    CREATE TABLE IF NOT EXISTS employees (
       employee_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT,
       language TEXT DEFAULT 'de'
     );
   `);
+
+  // staffplan IMMER frisch (wichtig!)
+  await pool.query(`DROP TABLE IF EXISTS staffplan CASCADE`);
 
   await pool.query(`
     CREATE TABLE staffplan (
@@ -72,8 +73,9 @@ async function migrate() {
     );
   `);
 
+  // time_entries bleibt bestehen
   await pool.query(`
-    CREATE TABLE time_entries (
+    CREATE TABLE IF NOT EXISTS time_entries (
       id BIGSERIAL PRIMARY KEY,
       employee_id TEXT NOT NULL,
       work_date DATE NOT NULL,
@@ -84,7 +86,7 @@ async function migrate() {
     );
   `);
 
-  console.log("✅ DB migrate finished (fresh schema)");
+  console.log("✅ DB migrate finished");
 }
 // ======================================================
 // UPLOAD
