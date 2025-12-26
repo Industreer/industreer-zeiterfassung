@@ -172,7 +172,10 @@ app.get("/api/employee/today", async (req, res) => {
   try {
     const employeeId = req.query.employee_id;
     if (!employeeId) {
-      return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+      return res.status(400).json({
+        ok: false,
+        error: "employee_id fehlt"
+      });
     }
 
     const today = toIsoDate(new Date());
@@ -189,17 +192,33 @@ app.get("/api/employee/today", async (req, res) => {
         planned_hours
       FROM staffplan
       WHERE employee_id = $1
-        AND work_date = $2
-      ORDER BY customer_po, internal_po
+        AND work_date <= $2
+      ORDER BY work_date DESC
       `,
       [employeeId, today]
     );
 
-    res.json({ ok: true, date: today, projects: rows });
+    if (!rows.length) {
+      return res.json({
+        ok: true,
+        date: today,
+        projects: [],
+        message: "Keine Staffplan-Daten gefunden"
+      });
+    }
+
+    return res.json({
+      ok: true,
+      date: rows[0].work_date,
+      projects: rows
+    });
 
   } catch (e) {
     console.error("TODAY ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({
+      ok: false,
+      error: e.message
+    });
   }
 });
 
