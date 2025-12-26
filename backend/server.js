@@ -9,7 +9,7 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const XLSX = require("xlsx");
-const PDFDocument = require("pdfkit");
+const PDFDocument = require("pdfkit"); // wird später genutzt
 const { Pool } = require("pg");
 
 const app = express();
