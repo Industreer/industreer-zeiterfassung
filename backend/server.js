@@ -1,3 +1,4 @@
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY 🔥🔥🔥");
 /**
  * backend/server.js
  * CLEAN STABLE VERSION – 2025-01
