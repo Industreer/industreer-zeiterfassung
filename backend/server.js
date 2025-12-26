@@ -169,6 +169,7 @@ app.get("/api/employee/:id", async (req, res) => {
 // EMPLOYEE – HEUTIGE PROJEKTE
 // ======================================================
 app.get("/api/employee/today", async (req, res) => {
+console.log("🟢 HIT /api/employee/today", req.query);
   try {
     const employeeId = req.query.employee_id;
     if (!employeeId) {
