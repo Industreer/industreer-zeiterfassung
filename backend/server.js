@@ -170,7 +170,6 @@ app.get("/api/employee/:id", async (req, res) => {
 // EMPLOYEE – HEUTIGE PROJEKTE
 // ======================================================
 app.get("/api/employee/today", async (req, res) => {
-console.log("🟢 HIT /api/employee/today", req.query);
   try {
     const employeeId = req.query.employee_id;
     if (!employeeId) {
@@ -208,12 +207,13 @@ console.log("🟢 HIT /api/employee/today", req.query);
 
   } catch (e) {
     console.error("TODAY ERROR:", e);
-    return res.status(500).json({
+    res.status(500).json({
       ok: false,
       error: e.message
     });
   }
 });
+
 // ======================================================
 // STAFFPLAN IMPORT
 // ======================================================
