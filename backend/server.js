@@ -167,11 +167,19 @@ app.get("/api/employee/:id", async (req, res) => {
 });
 
 // ======================================================
-// EMPLOYEE – HEUTIGE PROJEKTE
+// EMPLOYEE – HEUTIGE PROJEKTE (FINAL)
 // ======================================================
-app.get("/api/employee/today"
+app.get("/api/employee/today", async (req, res) => {
+  try {
+    const employeeId = req.query.employee_id;
+    if (!employeeId) {
+      return res.status(400).json({
+        ok: false,
+        error: "employee_id fehlt"
+      });
+    }
 
-    const today = toIsoDate(new Date());
+    const today = new Date().toISOString().slice(0, 10);
 
     const { rows } = await pool.query(
       `
@@ -185,8 +193,8 @@ app.get("/api/employee/today"
         planned_hours
       FROM staffplan
       WHERE employee_id = $1
-        AND work_date <= $2
-      ORDER BY work_date DESC
+        AND work_date = $2
+      ORDER BY customer_po, internal_po
       `,
       [employeeId, today]
     );
@@ -198,14 +206,13 @@ app.get("/api/employee/today"
     });
 
   } catch (e) {
-    console.error("TODAY ERROR:", e);
-    res.status(500).json({
+    console.error("EMPLOYEE TODAY ERROR:", e);
+    return res.status(500).json({
       ok: false,
       error: e.message
     });
   }
 });
-
 // ======================================================
 // STAFFPLAN IMPORT
 // ======================================================
