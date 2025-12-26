@@ -14,6 +14,7 @@ const PDFDocument = require("pdfkit"); // wird später genutzt
 const { Pool } = require("pg");
 
 const app = express();
+throw new Error("🔥 DEBUG SERVER START");
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
