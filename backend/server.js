@@ -268,24 +268,33 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       todayCol = fallbackFirstDateCol;
     }
 
-    // ----------------------------
-    // 3) DATUMS-SPALTEN AUFBAUEN (± ZEITFENSTER)
-    // ----------------------------
+
 // ----------------------------
-// 3) ALLE DATUMS-SPALTEN AUS EXCEL LESEN (KEIN FENSTER!)
+// 3) ALLE DATUMS-SPALTEN AUS EXCEL LESEN (BIS ZUM SHEET-ENDE)
+//    -> statt hartem Limit (c < 300)
 // ----------------------------
 const dates = [];
 
-for (let c = 11; c < 300; c++) {
-  const cell = ws[XLSX.utils.encode_cell({ r: 3, c })];
+const ref = ws["!ref"] || "A1:A1";
+const range = XLSX.utils.decode_range(ref); // echter benutzter Bereich im Sheet
+
+for (let c = 11; c <= range.e.c; c++) {     // ab Spalte L (c=11) bis letzte benutzte Spalte
+  const cell = ws[XLSX.utils.encode_cell({ r: 3, c })]; // Zeile 4 (r=3)
   const d = parseExcelDate(cell);
   if (!d) continue;
 
   dates.push({
     col: c,
     iso: d.toISOString().slice(0, 10),
-    cw: "CW" + getISOWeek(d)
+    cw: "CW" + getISOWeek(d),
   });
+}
+
+// Optionales Logging (hilft beim Debuggen)
+if (dates.length) {
+  console.log("📅 Header dates:", dates[0].iso, "…", dates[dates.length - 1].iso, "count:", dates.length);
+} else {
+  console.log("⚠️ No header dates found in row 4 from col L to end. ref=", ref);
 }
 
     
