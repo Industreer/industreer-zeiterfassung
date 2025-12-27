@@ -1,13 +1,13 @@
-console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY (ROUTING-FIX + IMPORT-FIX) 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY (ROUTING-FIX + IMPORT-FIX + REQUESTER) 🔥🔥🔥");
 /**
  * backend/server.js
  * CLEAN STABLE VERSION – 2025-01
  *
  * Fix:
  * - /api/employee/today steht VOR /api/employee/:id (Routing-Kollision behoben)
- * - Staffplan-Import: Headerrow automatisch finden + Datum pro Spalte lückenlos bauen
- *   (wichtig bei Formeln wie =AL4+1, xlsx berechnet Formeln nicht)
+ * - Staffplan-Import: Headerrow automatisch finden + Datum pro Spalte lückenlos bauen (Formeln wie =AL4+1)
  * - planned_hours wird beim Import nur als Zahl gespeichert (verhindert NUMERIC-Fehler)
+ * - requester_name (Ansprechpartner, z.B. Hoffmann) wird extra gespeichert (für Stundenzettel)
  */
 
 const path = require("path");
@@ -68,6 +68,7 @@ async function migrate() {
       id BIGSERIAL PRIMARY KEY,
       employee_id TEXT NOT NULL,
       employee_name TEXT NOT NULL,
+      requester_name TEXT,
       work_date DATE NOT NULL,
       calendar_week TEXT NOT NULL,
       customer TEXT,
@@ -114,7 +115,7 @@ function getISOWeek(date) {
 }
 
 // robust: erkennt auch "Sa 27.12.2025" / "27.12." etc.
-// Hinweis: Formeln werden NICHT berechnet – dafür haben wir Datum-Fallback im Import.
+// Hinweis: Formeln werden NICHT berechnet – dafür Datum-Fallback im Import.
 function parseExcelDate(cell) {
   if (!cell) return null;
 
@@ -160,6 +161,23 @@ function parseExcelDate(cell) {
   }
 
   return null;
+}
+
+function swapCommaName(name) {
+  const s = String(name || "").trim();
+  if (!s.includes(",")) return s;
+  const parts = s.split(",");
+  const last = (parts[0] || "").trim();
+  const first = (parts.slice(1).join(",") || "").trim();
+  return (`${first} ${last}`).trim() || s;
+}
+
+function normName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/,/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 // ======================================================
@@ -218,6 +236,7 @@ app.get("/api/employee/today", async (req, res) => {
         work_date,
         calendar_week,
         customer,
+        requester_name,
         internal_po,
         customer_po,
         project_short,
@@ -251,6 +270,8 @@ app.get("/api/employee/:id", async (req, res) => {
 
 // ======================================================
 // STAFFPLAN IMPORT (robust: Headerrow finden + Datum lückenlos bauen)
+// WICHTIG: requester_name (c=8) ist Ansprechpartner, NICHT Mitarbeitername!
+// Mitarbeitername wird aus benachbarten Spalten gesucht und gegen employees gematcht.
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
@@ -281,7 +302,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       }
     }
 
-    // Wir akzeptieren auch 1 Datum (manche Vorlagen haben wenige "echte" Datumscells wegen Formeln)
+    // wir akzeptieren auch 1 Datum (manche Vorlagen haben wenige "echte" Datumscells wegen Formeln)
     if (headerRow === null || bestCnt < 1) {
       return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
     }
@@ -304,9 +325,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       return res.json({ ok: false, error: "Header-Zeile gefunden, aber kein erstes Datum parsebar" });
     }
 
-    // 3) Datumsliste lückenlos pro Spalte bauen:
-    //    - wenn später wieder ein echtes Datum kommt: Base reset
-    //    - sonst: Base + Offset
+    // 3) Datumsliste lückenlos pro Spalte bauen
     const dates = [];
     let currentBaseDate = baseDate;
     let currentBaseCol = firstDateCol;
@@ -343,20 +362,57 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
     let imported = 0;
 
-    // 5) Mitarbeiterzeilen wie bisher
+    // 5) Mitarbeiterzeilen
     for (let r = 5; r < 20000; r += 2) {
-      const nameCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
-      if (!nameCell?.v) continue;
-      const employeeName = String(nameCell.v).trim();
+      // Ansprechpartner/Requester in Spalte I (c=8)
+      const requesterCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
+      const requesterName = requesterCell?.v ? String(requesterCell.v).trim() : null;
 
-      let emp = await pool.query(`SELECT employee_id FROM employees WHERE name=$1`, [employeeName]);
+      // Mitarbeitername: wir suchen in benachbarten Spalten (anpassbar)
+      const candidateCols = [7, 9, 10, 11, 12, 8]; // 8 am Ende, aber wird gefiltert wenn gleich requester
+      let employeeNameRaw = null;
+
+      for (const cc of candidateCols) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c: cc })];
+        const v = cell?.v ? String(cell.v).trim() : "";
+        if (!v) continue;
+        if (requesterName && v === requesterName) continue;
+        employeeNameRaw = v;
+        break;
+      }
+
+      if (!employeeNameRaw) continue;
+
+      const employeeNameSwapped = swapCommaName(employeeNameRaw);
+      const candidates = Array.from(new Set([
+        normName(employeeNameRaw),
+        normName(employeeNameSwapped),
+      ])).filter(Boolean);
+
+      // Mitarbeiter matchen gegen employees (normalisiert)
+      let emp = await pool.query(
+        `
+        SELECT employee_id, name
+        FROM employees
+        WHERE lower(regexp_replace(regexp_replace(trim(name), ',', '', 'g'), '\\s+', ' ', 'g')) = ANY($1)
+        LIMIT 1
+        `,
+        [candidates]
+      );
 
       let employeeId;
-      if (emp.rowCount === 0) {
-        employeeId = "AUTO" + r;
-        await pool.query(`INSERT INTO employees (employee_id,name) VALUES ($1,$2)`, [employeeId, employeeName]);
-      } else {
+      let employeeName;
+
+      if (emp.rowCount > 0) {
         employeeId = emp.rows[0].employee_id;
+        employeeName = emp.rows[0].name;
+      } else {
+        employeeName = employeeNameSwapped || employeeNameRaw;
+        employeeId = "AUTO" + r;
+        await pool.query(
+          `INSERT INTO employees (employee_id,name) VALUES ($1,$2)`,
+          [employeeId, employeeName]
+        );
       }
 
       const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
@@ -366,7 +422,6 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       for (const d of dates) {
         const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
 
-        // planned_hours NUR als Zahl speichern
         const planRaw = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v ?? null;
         const plan = (typeof planRaw === "number" && isFinite(planRaw)) ? planRaw : null;
 
@@ -375,11 +430,11 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         await pool.query(
           `
           INSERT INTO staffplan
-            (employee_id,employee_name,work_date,calendar_week,
+            (employee_id,employee_name,requester_name,work_date,calendar_week,
              customer,internal_po,customer_po,project_short,planned_hours)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
           `,
-          [employeeId, employeeName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
+          [employeeId, employeeName, requesterName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
         );
 
         imported++;
@@ -438,8 +493,8 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
         SELECT COUNT(*)::int AS cnt
         FROM staffplan
         WHERE work_date = $1::date
-          AND lower(regexp_replace(trim(employee_name), '\\s+', ' ', 'g'))
-              = lower(regexp_replace(trim($2), '\\s+', ' ', 'g'))
+          AND lower(regexp_replace(regexp_replace(trim(employee_name), ',', '', 'g'), '\\s+', ' ', 'g'))
+              = lower(regexp_replace(regexp_replace(trim($2), ',', '', 'g'), '\\s+', ' ', 'g'))
         `,
         [date, employeeName]
       );
@@ -456,16 +511,17 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
     staffplan_for_employee_name: byName ? byName.rows[0].cnt : null,
   });
 });
+
 // ======================================================
 // DEBUG: staffplan-on-date (zeigt Zeilen für ein Datum)
 // ======================================================
 app.get("/api/debug/staffplan-on-date", async (req, res) => {
-  const date = String(req.query.date || "").trim(); // YYYY-MM-DD
+  const date = String(req.query.date || "").trim();
   if (!date) return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
 
   const r = await pool.query(
     `
-    SELECT employee_id, employee_name, customer_po, internal_po, project_short, planned_hours
+    SELECT employee_id, employee_name, requester_name, customer_po, internal_po, project_short, planned_hours
     FROM staffplan
     WHERE work_date = $1::date
     ORDER BY employee_name, customer_po, internal_po
