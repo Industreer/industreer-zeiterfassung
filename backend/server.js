@@ -97,29 +97,45 @@ const upload = multer({ storage: multer.memoryStorage() });
 // ======================================================
 // HELPERS
 // ======================================================
-function toIsoDate(d) {
-  return d.toISOString().slice(0, 10);
-}
-
-function getISOWeek(date) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const day = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - day);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-}
-
 function parseExcelDate(cell) {
   if (!cell) return null;
-  if (typeof cell.v === "number") {
-    const epoch = new Date(1899, 11, 30);
+
+  // 1) Excel-Seriennummer
+  if (typeof cell.v === "number" && isFinite(cell.v)) {
+    const epoch = new Date(Date.UTC(1899, 11, 30)); // UTC, stabil
     return new Date(epoch.getTime() + cell.v * 86400000);
   }
+
+  // 2) Textdarstellung (w oder v)
   const t = String(cell.w || cell.v || "").trim();
-  const m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+  if (!t) return null;
+
+  // 2a) DD.MM.YYYY
+  let m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
+
+  // 2b) DD.MM.   (ohne Jahr) -> Jahr aus aktuellem Jahr ableiten (Berlin/Server)
+  //     Optional: Wenn dein Plan typischerweise über Jahreswechsel geht, können wir das später smarter machen.
+  m = t.match(/^(\d{1,2})\.(\d{1,2})\.$/);
+  if (m) {
+    const y = new Date().getFullYear();
+    return new Date(Date.UTC(y, +m[2] - 1, +m[1]));
+  }
+
+  // 2c) z.B. "Sa 27.12.2025" oder "27.12.2025 (Sa)" -> Datum extrahieren
+  m = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
+
+  // 2d) z.B. "Sa 27.12." -> Datum extrahieren, Jahr annehmen
+  m = t.match(/(\d{1,2})\.(\d{1,2})\./);
+  if (m) {
+    const y = new Date().getFullYear();
+    return new Date(Date.UTC(y, +m[2] - 1, +m[1]));
+  }
+
   return null;
 }
+
 
 // ======================================================
 // STATIC
