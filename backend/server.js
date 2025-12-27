@@ -1,20 +1,12 @@
-console.log("🔥🔥🔥 SERVER.JS VERSION 2025-12-27 (FULL FINAL) 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-12-27 (FULL FINAL + BREAK_ENTRIES SELF-HEAL) 🔥🔥🔥");
 
 /**
  * backend/server.js
  *
- * Features:
- * - Express + Render + PostgreSQL
- * - Logo Upload
- * - Staffplan Import (Excel)
- * - Employee lookup + Today projects
- * - Time tracking (start/end) + breaks
- * - Debug endpoints (build, staffplan-on-date, time-entries, cleanup-time)
- *
- * IMPORTANT:
- * - /api/employee/today MUST be before /api/employee/:id
- * - Time tracking uses start_time/end_time as source of truth
- * - "Open blocks" are filtered to TODAY to avoid old dangling rows breaking end().
+ * - /api/employee/today vor /api/employee/:id (Routing-Fix)
+ * - Staffplan Import: requester in Spalte I (c=8), Mitarbeiter in Spalte K (c=10), Datums-Spalten ab L (c=11)
+ * - Time Tracking stabil über start_time/end_time (und optional start_ts/end_ts)
+ * - break_entries wird robust “self-healed” (end_ts existiert garantiert)
  */
 
 const path = require("path");
@@ -76,7 +68,6 @@ function getISOWeek(date) {
 function parseExcelDate(cell) {
   if (!cell) return null;
 
-  // Excel serial
   if (typeof cell.v === "number" && isFinite(cell.v)) {
     const epoch = new Date(Date.UTC(1899, 11, 30));
     return new Date(epoch.getTime() + cell.v * 86400000);
@@ -138,7 +129,6 @@ async function ensureEmployeesSchema() {
 }
 
 async function ensureStaffplanSchemaFresh() {
-  // by design: staffplan always fresh on restart
   await pool.query(`DROP TABLE IF EXISTS public.staffplan CASCADE`);
   await pool.query(`
     CREATE TABLE public.staffplan (
@@ -158,34 +148,30 @@ async function ensureStaffplanSchemaFresh() {
 }
 
 async function ensureTimeEntriesSchema() {
-  // do not drop
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.time_entries (
       id BIGSERIAL PRIMARY KEY
     );
   `);
 
-  // ensure both old + new columns exist
   const cols = [
     ["employee_id", "TEXT"],
     ["work_date", "DATE"],
 
-    // stable legacy columns
     ["start_time", "TIMESTAMP"],
     ["end_time", "TIMESTAMP"],
+
     ["break_minutes", "INTEGER"],
     ["auto_break_minutes", "INTEGER"],
     ["total_hours", "NUMERIC"],
     ["overtime_hours", "NUMERIC"],
 
-    // business fields
     ["activity", "TEXT"],
     ["internal_po", "TEXT"],
     ["project_short", "TEXT"],
     ["requester_name", "TEXT"],
     ["customer_po", "TEXT"],
 
-    // optional new columns
     ["start_ts", "TIMESTAMPTZ"],
     ["end_ts", "TIMESTAMPTZ"],
   ];
@@ -195,15 +181,17 @@ async function ensureTimeEntriesSchema() {
   }
 }
 
+// ✅ FIX: break_entries robust (end_ts wird garantiert nachgezogen)
 async function ensureBreakEntriesSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.break_entries (
-      id BIGSERIAL PRIMARY KEY,
-      employee_id TEXT NOT NULL,
-      start_ts TIMESTAMPTZ NOT NULL,
-      end_ts TIMESTAMPTZ
+      id BIGSERIAL PRIMARY KEY
     );
   `);
+
+  await pool.query(`ALTER TABLE public.break_entries ADD COLUMN IF NOT EXISTS employee_id TEXT;`);
+  await pool.query(`ALTER TABLE public.break_entries ADD COLUMN IF NOT EXISTS start_ts TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE public.break_entries ADD COLUMN IF NOT EXISTS end_ts TIMESTAMPTZ;`);
 }
 
 // ======================================================
@@ -212,7 +200,7 @@ async function ensureBreakEntriesSchema() {
 async function migrate() {
   console.log("🔧 DB migrate start");
   await ensureEmployeesSchema();
-  await ensureStaffplanSchemaFresh();
+  await ensureStaffplanSchemaFresh(); // staffplan always fresh
   await ensureTimeEntriesSchema();
   await ensureBreakEntriesSchema();
   console.log("✅ DB migrate finished");
@@ -528,7 +516,7 @@ app.post("/api/break/end", async (req, res) => {
 });
 
 // ======================================================
-// TIME: current/start/end (ONLY TODAY -> prevents old dangling rows)
+// TIME: current/start/end (ONLY TODAY)
 // Source of truth: start_time/end_time
 // ======================================================
 app.get("/api/time/current/:employee_id", async (req, res) => {
@@ -570,7 +558,6 @@ app.post("/api/time/start", async (req, res) => {
     const now = new Date();
     const today = toIsoDate(now);
 
-    // if already running today, return it
     const open = await pool.query(
       `
       SELECT id, start_time
@@ -596,7 +583,7 @@ app.post("/api/time/start", async (req, res) => {
       [employeeId, today, "Arbeitszeit", now]
     );
 
-    // optional: start_ts best effort
+    // optional best-effort start_ts
     try {
       await pool.query(`UPDATE public.time_entries SET start_ts=$1 WHERE id=$2`, [now, ins.rows[0].id]);
     } catch (e) {
@@ -644,13 +631,11 @@ app.post("/api/time/end", async (req, res) => {
     const id = open.rows[0].id;
     const startTime = new Date(open.rows[0].start_time);
 
-    // close open breaks (if any)
     await pool.query(
       `UPDATE public.break_entries SET end_ts=$1 WHERE employee_id=$2 AND end_ts IS NULL`,
       [now, employeeId]
     );
 
-    // close working block
     await pool.query(
       `
       UPDATE public.time_entries
@@ -661,14 +646,13 @@ app.post("/api/time/end", async (req, res) => {
       [now, activity, id]
     );
 
-    // optional: end_ts best effort
+    // optional best-effort end_ts
     try {
       await pool.query(`UPDATE public.time_entries SET end_ts=$1 WHERE id=$2`, [now, id]);
     } catch (e) {
       console.warn("end_ts update skipped:", e.message);
     }
 
-    // sum breaks within the block window
     const br = await pool.query(
       `
       SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_ts - start_ts)) * 1000), 0)::bigint AS ms
@@ -739,21 +723,6 @@ app.get("/api/debug/time-entries-columns", async (req, res) => {
   }
 });
 
-app.get("/api/debug/repair-time-entries", async (req, res) => {
-  try {
-    await ensureTimeEntriesSchema();
-    const r = await pool.query(`
-      SELECT column_name, data_type
-      FROM information_schema.columns
-      WHERE table_schema='public' AND table_name='time_entries'
-      ORDER BY ordinal_position
-    `);
-    return res.json({ ok: true, repaired: true, columns: r.rows });
-  } catch (e) {
-    return res.status(500).json({ ok: false, repaired: false, error: e.message });
-  }
-});
-
 app.get("/api/debug/staffplan-on-date", async (req, res) => {
   const date = String(req.query.date || "").trim();
   if (!date) return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
@@ -784,9 +753,7 @@ app.post("/api/debug/cleanup-time", async (req, res) => {
     await ensureBreakEntriesSchema();
 
     const employeeId = String(req.body.employee_id || "").trim();
-    if (!employeeId) {
-      return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-    }
+    if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
     const delNullStart = await pool.query(
       `DELETE FROM public.time_entries WHERE employee_id=$1 AND start_time IS NULL`,
