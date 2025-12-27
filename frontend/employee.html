@@ -84,6 +84,10 @@
   let currentEmployee = null;
   let timerInterval = null;
 
+  // Option B: erstes Projekt automatisch verwenden
+  let todayProjects = [];
+  let autoProject = null;
+
   const el = (id) => document.getElementById(id);
   function setStatus(msg) { el("status").innerText = msg || ""; }
 
@@ -117,9 +121,7 @@
       const r = await fetch(`/api/time/current/${encodeURIComponent(currentEmployee.employee_id)}`);
       const j = await r.json();
       if (j.ok) startTimer(j.start_time);
-    } catch (e) {
-      // optional
-    }
+    } catch (e) {}
   }
 
   // ---------- Login ----------
@@ -129,7 +131,7 @@
     const id = el("employeeId").value.trim();
     if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
 
-    const url = `/api/employee/${encodeURIComponent(id)}`; // ABSOLUTER PFAD!
+    const url = `/api/employee/${encodeURIComponent(id)}`;
     setStatus("Login Request:\n" + url);
 
     const r = await fetch(url);
@@ -150,18 +152,18 @@
     setStatus("Angemeldet");
   }
 
-  // Auto-Login (optional)
+  // Auto-fill last ID
   window.addEventListener("load", () => {
     const last = localStorage.getItem("lastEmployeeId");
     if (last) el("employeeId").value = last;
   });
 
-  // ---------- Today Projects ----------
+  // ---------- Today Projects (Option B) ----------
   async function loadTodayProjects() {
     const box = el("todayBox");
     box.innerText = "Lade heutige Projekte …";
 
-    const url = `/api/employee/today?employee_id=${encodeURIComponent(currentEmployee.employee_id)}`; // ABSOLUTER PFAD!
+    const url = `/api/employee/today?employee_id=${encodeURIComponent(currentEmployee.employee_id)}`;
     let j;
 
     try {
@@ -179,21 +181,30 @@
       return;
     }
 
-    if (!j.projects || !j.projects.length) {
+    todayProjects = Array.isArray(j.projects) ? j.projects : [];
+    autoProject = todayProjects.length ? todayProjects[0] : null;
+
+    if (!autoProject) {
       box.innerText = "Heute keine geplanten Projekte.";
       return;
     }
 
     box.innerHTML =
       "<b>Heutige Projekte:</b><ul>" +
-      j.projects.map(p => {
+      todayProjects.map((p, idx) => {
         const po = p.customer_po || "-";
         const ipo = p.internal_po || "-";
         const proj = p.project_short || "";
         const req = p.requester_name ? ` (Ansprechpartner: ${p.requester_name})` : "";
-        return `<li>${po} / ${ipo} – ${proj}${req}</li>`;
+        const tag = (idx === 0) ? " <b>[AUTO]</b>" : "";
+        return `<li>${po} / ${ipo} – ${proj}${req}${tag}</li>`;
       }).join("") +
       "</ul>";
+
+    setStatus(
+      "Auto-Projekt gewählt:\n" +
+      `${autoProject.customer_po || "-"} / ${autoProject.internal_po || "-"} – ${autoProject.project_short || ""}`
+    );
   }
 
   // ---------- Activity UI ----------
@@ -217,7 +228,13 @@
     const r = await fetch("/api/time/start", {
       method: "POST",
       headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ employee_id: currentEmployee.employee_id })
+      body: JSON.stringify({
+        employee_id: currentEmployee.employee_id,
+        customer_po: autoProject?.customer_po || null,
+        internal_po: autoProject?.internal_po || null,
+        project_short: autoProject?.project_short || null,
+        requester_name: autoProject?.requester_name || null
+      })
     });
 
     const j = await r.json();
@@ -235,7 +252,14 @@
     const r = await fetch("/api/time/end", {
       method: "POST",
       headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ employee_id: currentEmployee.employee_id, activity })
+      body: JSON.stringify({
+        employee_id: currentEmployee.employee_id,
+        activity,
+        customer_po: autoProject?.customer_po || null,
+        internal_po: autoProject?.internal_po || null,
+        project_short: autoProject?.project_short || null,
+        requester_name: autoProject?.requester_name || null
+      })
     });
 
     const j = await r.json();
@@ -285,7 +309,7 @@
     return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
   }
 
-  // ---------- Option B: Print ALL POs ----------
+  // ---------- Print ALL POs ----------
   async function printLastWeekAllPOs() {
     if (!currentEmployee) return alert("Bitte zuerst anmelden");
     const d = new Date();
