@@ -1,7 +1,11 @@
-console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY (ROUTING-FIX) 🔥🔥🔥");
 /**
  * backend/server.js
  * CLEAN STABLE VERSION – 2025-01
+ *
+ * Fix:
+ * - /api/employee/today steht VOR /api/employee/:id (Routing-Kollision behoben)
+ * - planned_hours wird beim Import nur als Zahl gespeichert (verhindert NUMERIC-Fehler)
  */
 
 const path = require("path");
@@ -89,6 +93,7 @@ async function migrate() {
 
   console.log("✅ DB migrate finished");
 }
+
 // ======================================================
 // UPLOAD
 // ======================================================
@@ -157,29 +162,19 @@ app.get("/api/employees", async (req, res) => {
   res.json(r.rows);
 });
 
-app.get("/api/employee/:id", async (req, res) => {
-  const r = await pool.query(
-    `SELECT employee_id,name,email,language FROM employees WHERE employee_id=$1`,
-    [req.params.id]
-  );
-  if (!r.rowCount) return res.status(404).json({ ok: false });
-  res.json({ ok: true, employee: r.rows[0] });
-});
-
 // ======================================================
-// EMPLOYEE – HEUTIGE PROJEKTE (FINAL)
+// EMPLOYEE – HEUTIGE PROJEKTE (WICHTIG: VOR /:id!)
 // ======================================================
 app.get("/api/employee/today", async (req, res) => {
   try {
-    const employeeId = req.query.employee_id;
+    const employeeId = String(req.query.employee_id || "").trim();
     if (!employeeId) {
-      return res.status(400).json({
-        ok: false,
-        error: "employee_id fehlt"
-      });
+      return res.status(400).json({ ok: false, error: "employee_id fehlt" });
     }
 
-    const today = new Date().toISOString().slice(0, 10);
+    // optionaler Override zum Testen: ?date=YYYY-MM-DD
+    const dateOverride = String(req.query.date || "").trim();
+    const today = dateOverride || new Date().toISOString().slice(0, 10);
 
     const { rows } = await pool.query(
       `
@@ -204,15 +199,24 @@ app.get("/api/employee/today", async (req, res) => {
       date: today,
       projects: rows
     });
-
   } catch (e) {
     console.error("EMPLOYEE TODAY ERROR:", e);
-    return res.status(500).json({
-      ok: false,
-      error: e.message
-    });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// ======================================================
+// EMPLOYEE – EINZELNER MITARBEITER
+// ======================================================
+app.get("/api/employee/:id", async (req, res) => {
+  const r = await pool.query(
+    `SELECT employee_id,name,email,language FROM employees WHERE employee_id=$1`,
+    [req.params.id]
+  );
+  if (!r.rowCount) return res.status(404).json({ ok: false });
+  res.json({ ok: true, employee: r.rows[0] });
+});
+
 // ======================================================
 // STAFFPLAN IMPORT
 // ======================================================
@@ -276,8 +280,12 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
       for (const d of dates) {
         const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
-        const plan = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v || null;
-        if (!proj && !plan) continue;
+
+        // planned_hours NUR als Zahl speichern (verhindert "invalid input syntax for type numeric")
+        const planRaw = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v ?? null;
+        const plan = (typeof planRaw === "number" && isFinite(planRaw)) ? planRaw : null;
+
+        if (!proj && plan === null) continue;
 
         await pool.query(
           `
