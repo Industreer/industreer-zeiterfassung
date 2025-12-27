@@ -1,10 +1,12 @@
-console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY (ROUTING-FIX) 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY (ROUTING-FIX + IMPORT-FIX) 🔥🔥🔥");
 /**
  * backend/server.js
  * CLEAN STABLE VERSION – 2025-01
  *
  * Fix:
  * - /api/employee/today steht VOR /api/employee/:id (Routing-Kollision behoben)
+ * - Staffplan-Import: Headerrow automatisch finden + Datum pro Spalte lückenlos bauen
+ *   (wichtig bei Formeln wie =AL4+1, xlsx berechnet Formeln nicht)
  * - planned_hours wird beim Import nur als Zahl gespeichert (verhindert NUMERIC-Fehler)
  */
 
@@ -14,7 +16,7 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const XLSX = require("xlsx");
-const PDFDocument = require("pdfkit"); // wird später genutzt
+const PDFDocument = require("pdfkit"); // später
 const { Pool } = require("pg");
 
 const app = express();
@@ -50,7 +52,6 @@ const pool = new Pool({
 async function migrate() {
   console.log("🔧 DB migrate start");
 
-  // employees bleibt bestehen
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       employee_id TEXT PRIMARY KEY,
@@ -62,7 +63,6 @@ async function migrate() {
 
   // staffplan IMMER frisch (wichtig!)
   await pool.query(`DROP TABLE IF EXISTS staffplan CASCADE`);
-
   await pool.query(`
     CREATE TABLE staffplan (
       id BIGSERIAL PRIMARY KEY,
@@ -78,7 +78,6 @@ async function migrate() {
     );
   `);
 
-  // time_entries bleibt bestehen
   await pool.query(`
     CREATE TABLE IF NOT EXISTS time_entries (
       id BIGSERIAL PRIMARY KEY,
@@ -114,6 +113,8 @@ function getISOWeek(date) {
   return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
 
+// robust: erkennt auch "Sa 27.12.2025" / "27.12." etc.
+// Hinweis: Formeln werden NICHT berechnet – dafür haben wir Datum-Fallback im Import.
 function parseExcelDate(cell) {
   if (!cell) return null;
 
@@ -160,7 +161,6 @@ function parseExcelDate(cell) {
 
   return null;
 }
-
 
 // ======================================================
 // STATIC
@@ -230,11 +230,7 @@ app.get("/api/employee/today", async (req, res) => {
       [employeeId, today]
     );
 
-    return res.json({
-      ok: true,
-      date: today,
-      projects: rows
-    });
+    return res.json({ ok: true, date: today, projects: rows });
   } catch (e) {
     console.error("EMPLOYEE TODAY ERROR:", e);
     return res.status(500).json({ ok: false, error: e.message });
@@ -252,128 +248,157 @@ app.get("/api/employee/:id", async (req, res) => {
   if (!r.rowCount) return res.status(404).json({ ok: false });
   res.json({ ok: true, employee: r.rows[0] });
 });
+
 // ======================================================
-// STAFFPLAN IMPORT (robust: Header-Zeile finden + Datum pro Spalte lückenlos bauen)
+// STAFFPLAN IMPORT (robust: Headerrow finden + Datum lückenlos bauen)
 // ======================================================
+app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
 
-// ✅ HeaderRow muss vorher geprüft werden (sonst später Chaos)
-if (headerRow === null || bestCnt < 3) {
-  return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
-}
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
 
-// --- 2) Dates lückenlos pro Spalte bauen (Formel-Zellen ohne cached value abfangen) ---
-let firstDateCol = null;
-let baseDate = null;
+    const ref = ws["!ref"] || "A1:A1";
+    const range = XLSX.utils.decode_range(ref);
 
-// erstes parsebares Datum in der Header-Zeile suchen
-for (let c = startCol; c <= endCol; c++) {
-  const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
-  const d = parseExcelDate(cell);
-  if (d) {
-    firstDateCol = c;
-    baseDate = d;
-    break;
-  }
-}
+    const startCol = 11;      // ab Spalte L
+    const endCol = range.e.c; // bis letzte benutzte Spalte
 
-if (!baseDate) {
-  return res.json({ ok: false, error: "Header-Zeile gefunden, aber kein erstes Datum parsebar" });
-}
+    // 1) Header-Zeile finden: Zeile (oben), die am meisten Datumszellen hat
+    let headerRow = null;
+    let bestCnt = 0;
 
-// ✅ NUR EINMAL dates deklarieren:
-const dates = [];
-let currentBaseDate = baseDate;
-let currentBaseCol = firstDateCol;
+    for (let r = 0; r <= Math.min(range.e.r, 20); r++) {
+      let cnt = 0;
+      for (let c = startCol; c <= endCol; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (parseExcelDate(cell)) cnt++;
+      }
+      if (cnt > bestCnt) {
+        bestCnt = cnt;
+        headerRow = r;
+      }
+    }
 
-for (let c = firstDateCol; c <= endCol; c++) {
-  const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
-  const parsed = parseExcelDate(cell);
+    // Wir akzeptieren auch 1 Datum (manche Vorlagen haben wenige "echte" Datumscells wegen Formeln)
+    if (headerRow === null || bestCnt < 1) {
+      return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
+    }
 
-  // Wenn später wieder ein echtes Datum auftaucht (neuer Block), Base neu setzen
-  if (parsed) {
-    currentBaseDate = parsed;
-    currentBaseCol = c;
-  }
+    // 2) Erstes parsebares Datum suchen (wichtig bei Formeln wie =AL4+1)
+    let firstDateCol = null;
+    let baseDate = null;
 
-  // Datum für diese Spalte: entweder parsed oder (Base + Offset)
-  const d = parsed
-    ? parsed
-    : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
+    for (let c = startCol; c <= endCol; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+      const d = parseExcelDate(cell);
+      if (d) {
+        firstDateCol = c;
+        baseDate = d;
+        break;
+      }
+    }
 
-  dates.push({
-    col: c,
-    iso: toIsoDate(d),
-    cw: "CW" + getISOWeek(d),
-  });
-}
+    if (!baseDate) {
+      return res.json({ ok: false, error: "Header-Zeile gefunden, aber kein erstes Datum parsebar" });
+    }
 
-if (!dates.length) {
-  return res.json({ ok: false, error: "Datumszeile gefunden, aber keine Datumsspalten erzeugt" });
-}
+    // 3) Datumsliste lückenlos pro Spalte bauen:
+    //    - wenn später wieder ein echtes Datum kommt: Base reset
+    //    - sonst: Base + Offset
+    const dates = [];
+    let currentBaseDate = baseDate;
+    let currentBaseCol = firstDateCol;
 
-console.log(
-  "📅 HeaderRow:", headerRow + 1,
-  "First:", dates[0]?.iso,
-  "Last:", dates[dates.length - 1]?.iso,
-  "count:", dates.length
-);
+    for (let c = firstDateCol; c <= endCol; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+      const parsed = parseExcelDate(cell);
 
-// --- 3) staffplan leeren ---
-await pool.query("DELETE FROM staffplan");
+      if (parsed) {
+        currentBaseDate = parsed;
+        currentBaseCol = c;
+      }
 
-// ab hier läuft DEIN bestehender Code weiter:
-let imported = 0;
+      const d = parsed
+        ? parsed
+        : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
 
-// --- 4) wie bisher: Mitarbeiter in Zeile r=5, Schritt 2, Name in Spalte I (c=8) ---
-for (let r = 5; r < 20000; r += 2) {
-  const nameCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
-  if (!nameCell?.v) continue;
-  const employeeName = String(nameCell.v).trim();
+      dates.push({
+        col: c,
+        iso: toIsoDate(d),
+        cw: "CW" + getISOWeek(d),
+      });
+    }
 
-  // Mitarbeiter suchen / anlegen
-  let emp = await pool.query(
-    `SELECT employee_id FROM employees WHERE name=$1`,
-    [employeeName]
-  );
-
-  let employeeId;
-  if (emp.rowCount === 0) {
-    employeeId = "AUTO" + r;
-    await pool.query(
-      `INSERT INTO employees (employee_id,name) VALUES ($1,$2)`,
-      [employeeId, employeeName]
-    );
-  } else {
-    employeeId = emp.rows[0].employee_id;
-  }
-
-  const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
-  const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
-  const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
-
-  for (const d of dates) {
-    const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
-
-    const planRaw = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v ?? null;
-    const plan = (typeof planRaw === "number" && isFinite(planRaw)) ? planRaw : null;
-
-    if (!proj && plan === null) continue;
-
-    await pool.query(
-      `
-      INSERT INTO staffplan
-        (employee_id,employee_name,work_date,calendar_week,
-         customer,internal_po,customer_po,project_short,planned_hours)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-      `,
-      [employeeId, employeeName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
+    console.log(
+      "📅 HeaderRow:", headerRow + 1,
+      "First:", dates[0]?.iso,
+      "Last:", dates[dates.length - 1]?.iso,
+      "count:", dates.length
     );
 
-    imported++;
-  }
-}
+    // 4) staffplan leeren
+    await pool.query("DELETE FROM staffplan");
 
-// return res.json(...) bleibt bei dir danach wie gehabt
+    let imported = 0;
+
+    // 5) Mitarbeiterzeilen wie bisher
+    for (let r = 5; r < 20000; r += 2) {
+      const nameCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
+      if (!nameCell?.v) continue;
+      const employeeName = String(nameCell.v).trim();
+
+      let emp = await pool.query(`SELECT employee_id FROM employees WHERE name=$1`, [employeeName]);
+
+      let employeeId;
+      if (emp.rowCount === 0) {
+        employeeId = "AUTO" + r;
+        await pool.query(`INSERT INTO employees (employee_id,name) VALUES ($1,$2)`, [employeeId, employeeName]);
+      } else {
+        employeeId = emp.rows[0].employee_id;
+      }
+
+      const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
+      const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
+      const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
+
+      for (const d of dates) {
+        const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
+
+        // planned_hours NUR als Zahl speichern
+        const planRaw = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v ?? null;
+        const plan = (typeof planRaw === "number" && isFinite(planRaw)) ? planRaw : null;
+
+        if (!proj && plan === null) continue;
+
+        await pool.query(
+          `
+          INSERT INTO staffplan
+            (employee_id,employee_name,work_date,calendar_week,
+             customer,internal_po,customer_po,project_short,planned_hours)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          `,
+          [employeeId, employeeName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
+        );
+
+        imported++;
+      }
+    }
+
+    return res.json({
+      ok: true,
+      imported,
+      header_row: headerRow + 1,
+      date_from: dates[0].iso,
+      date_to: dates[dates.length - 1].iso,
+      date_cols: dates.length,
+    });
+  } catch (e) {
+    console.error("STAFFPLAN IMPORT ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ======================================================
 // DEBUG: staffplan-check (TEMPORARY)
@@ -428,7 +453,7 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
     employee_id: employeeId || null,
     staffplan_for_employee_id: forEmployee ? forEmployee.rows[0].cnt : null,
     employee_name_from_employees: employeeName,
-    staffplan_for_employee_name: byName ? byName.rows[0].cnt : null
+    staffplan_for_employee_name: byName ? byName.rows[0].cnt : null,
   });
 });
 
@@ -438,9 +463,7 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
 (async () => {
   try {
     await migrate();
-    app.listen(PORT, () =>
-      console.log("🚀 Server läuft auf Port", PORT)
-    );
+    app.listen(PORT, () => console.log("🚀 Server läuft auf Port", PORT));
   } catch (e) {
     console.error("❌ START ERROR:", e);
     process.exit(1);
