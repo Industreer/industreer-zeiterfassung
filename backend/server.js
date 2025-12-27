@@ -1,15 +1,14 @@
-console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY (ROUTING-FIX + IMPORT-FIX + REQUESTER + EMPLOYEE=K) 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY (FULL + AUTO-PROJECT SUPPORT) 🔥🔥🔥");
 /**
  * backend/server.js
- * CLEAN STABLE VERSION – 2025-01
  *
- * Fix:
- * - /api/employee/today steht VOR /api/employee/:id (Routing-Kollision behoben)
- * - Staffplan-Import: Headerrow automatisch finden + Datum pro Spalte lückenlos bauen
- *   (wichtig bei Formeln wie =AL4+1, xlsx berechnet Formeln nicht)
- * - planned_hours wird beim Import nur als Zahl gespeichert (verhindert NUMERIC-Fehler)
- * - requester_name (Ansprechpartner, z.B. Hoffmann) wird extra gespeichert (für Stundenzettel)
- * - Mitarbeitername steht fix in Spalte K (Index 10): z.B. "Irrgang, Jens"
+ * Features:
+ * - employee today projects (routing safe)
+ * - staffplan import robust (handles formula date columns by building dates from first real date)
+ * - requester_name stored separately (Spalte I / index 8)
+ * - employee name from column K (index 10), supports "Nachname, Vorname"
+ * - time tracking: start/end/current + breaks
+ * - KW PO list + basic PDF timesheet (per PO)
  */
 
 const path = require("path");
@@ -18,7 +17,7 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const XLSX = require("xlsx");
-const PDFDocument = require("pdfkit"); // später
+const PDFDocument = require("pdfkit");
 const { Pool } = require("pg");
 
 const app = express();
@@ -63,7 +62,7 @@ async function migrate() {
     );
   `);
 
-  // staffplan IMMER frisch (wichtig!)
+  // staffplan ALWAYS fresh (per your design)
   await pool.query(`DROP TABLE IF EXISTS staffplan CASCADE`);
   await pool.query(`
     CREATE TABLE staffplan (
@@ -81,6 +80,7 @@ async function migrate() {
     );
   `);
 
+  // time entries persistent
   await pool.query(`
     CREATE TABLE IF NOT EXISTS time_entries (
       id BIGSERIAL PRIMARY KEY,
@@ -90,6 +90,21 @@ async function migrate() {
       start_ts TIMESTAMPTZ NOT NULL,
       end_ts TIMESTAMPTZ,
       activity TEXT
+    );
+  `);
+
+  // upgrades (safe)
+  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS internal_po TEXT;`);
+  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS project_short TEXT;`);
+  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS requester_name TEXT;`);
+
+  // breaks table (simple)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS break_entries (
+      id BIGSERIAL PRIMARY KEY,
+      employee_id TEXT NOT NULL,
+      start_ts TIMESTAMPTZ NOT NULL,
+      end_ts TIMESTAMPTZ
     );
   `);
 
@@ -116,12 +131,11 @@ function getISOWeek(date) {
   return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
 
-// robust: erkennt auch "Sa 27.12.2025" / "27.12." etc.
-// Hinweis: Formeln werden NICHT berechnet – dafür Datum-Fallback im Import.
+// robust date parse; formulas are not calculated by xlsx -> handled in import by date fill
 function parseExcelDate(cell) {
   if (!cell) return null;
 
-  // Excel-Seriennummer
+  // Excel serial
   if (typeof cell.v === "number" && isFinite(cell.v)) {
     const epoch = new Date(Date.UTC(1899, 11, 30));
     return new Date(epoch.getTime() + cell.v * 86400000);
@@ -130,27 +144,13 @@ function parseExcelDate(cell) {
   const t = String(cell.w || cell.v || "").trim();
   if (!t) return null;
 
-  // DD.MM.YYYY
   let m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
 
-  // Datum irgendwo im Text: "Sa 27.12.2025"
   m = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
 
-  // DD.MM. (ohne Jahr) -> heuristisch Jahr bestimmen
-  m = t.match(/^(\d{1,2})\.(\d{1,2})\.$/);
-  if (m) {
-    const today = new Date();
-    const y0 = today.getFullYear();
-    let guess = new Date(Date.UTC(y0, +m[2] - 1, +m[1]));
-    const diffDays = Math.round((guess.getTime() - today.getTime()) / 86400000);
-    if (diffDays > 200) guess = new Date(Date.UTC(y0 - 1, +m[2] - 1, +m[1]));
-    if (diffDays < -200) guess = new Date(Date.UTC(y0 + 1, +m[2] - 1, +m[1]));
-    return guess;
-  }
-
-  // "Sa 27.12." -> DD.MM. irgendwo im Text
+  // DD.MM. -> guess year around today
   m = t.match(/(\d{1,2})\.(\d{1,2})\./);
   if (m) {
     const today = new Date();
@@ -180,6 +180,14 @@ function normName(name) {
     .replace(/,/g, "")
     .replace(/\s+/g, " ")
     .toLowerCase();
+}
+
+function parseCW(kw) {
+  const m = String(kw || "").trim().match(/^CW\s*(\d{1,2})$/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n < 1 || n > 53) return null;
+  return n;
 }
 
 // ======================================================
@@ -219,14 +227,13 @@ app.get("/api/employees", async (req, res) => {
 });
 
 // ======================================================
-// EMPLOYEE – HEUTIGE PROJEKTE (WICHTIG: VOR /:id!)
+// EMPLOYEE – HEUTIGE PROJEKTE (MUST be before /:id in older setups)
 // ======================================================
 app.get("/api/employee/today", async (req, res) => {
   try {
     const employeeId = String(req.query.employee_id || "").trim();
     if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
-    // optional: ?date=YYYY-MM-DD
     const dateOverride = String(req.query.date || "").trim();
     const today = dateOverride || new Date().toISOString().slice(0, 10);
 
@@ -270,9 +277,9 @@ app.get("/api/employee/:id", async (req, res) => {
 
 // ======================================================
 // STAFFPLAN IMPORT
-// WICHTIG:
-// - requester_name = Ansprechpartner in Spalte I (Index 8)
-// - employee_name  = Mitarbeiter in Spalte K (Index 10) (z.B. "Irrgang, Jens")
+// - requester_name = Spalte I (index 8)
+// - employee_name  = Spalte K (index 10) (z.B. "Irrgang, Jens")
+// - date columns start at L (index 11)
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
@@ -288,10 +295,9 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const startCol = 11;      // ab Spalte L
     const endCol = range.e.c; // bis letzte benutzte Spalte
 
-    // 1) Headerrow finden: Zeile (oben), die am meisten Datumszellen hat
+    // 1) find header row by max parsable dates (scan first ~21 rows)
     let headerRow = null;
     let bestCnt = 0;
-
     for (let r = 0; r <= Math.min(range.e.r, 20); r++) {
       let cnt = 0;
       for (let c = startCol; c <= endCol; c++) {
@@ -303,16 +309,13 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         headerRow = r;
       }
     }
-
-    // wir akzeptieren auch 1 Datum (manche Vorlagen haben wenige "echte" Datumscells wegen Formeln)
     if (headerRow === null || bestCnt < 1) {
       return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
     }
 
-    // 2) erstes parsebares Datum suchen (Formeln haben oft keinen cached value)
+    // 2) find first real date in header row
     let firstDateCol = null;
     let baseDate = null;
-
     for (let c = startCol; c <= endCol; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
       const d = parseExcelDate(cell);
@@ -322,12 +325,11 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         break;
       }
     }
-
     if (!baseDate) {
       return res.json({ ok: false, error: "Header-Zeile gefunden, aber kein erstes Datum parsebar" });
     }
 
-    // 3) Datumsliste lückenlos pro Spalte bauen
+    // 3) build dates for each column (lückenlos)
     const dates = [];
     let currentBaseDate = baseDate;
     let currentBaseCol = firstDateCol;
@@ -345,11 +347,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         ? parsed
         : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
 
-      dates.push({
-        col: c,
-        iso: toIsoDate(d),
-        cw: "CW" + getISOWeek(d),
-      });
+      dates.push({ col: c, iso: toIsoDate(d), cw: "CW" + getISOWeek(d) });
     }
 
     console.log(
@@ -359,30 +357,26 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       "count:", dates.length
     );
 
-    // 4) staffplan leeren
+    // 4) clear staffplan
     await pool.query("DELETE FROM staffplan");
 
     let imported = 0;
 
-    // 5) Datenzeilen
+    // 5) loop employees (your format: r=5, step 2)
     for (let r = 5; r < 20000; r += 2) {
-      // Requester (Ansprechpartner) Spalte I (Index 8)
+      // requester in I
       const requesterCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
       const requesterName = requesterCell?.v ? String(requesterCell.v).trim() : null;
 
-      // Mitarbeiter Spalte K (Index 10)
+      // employee in K
       const employeeCell = ws[XLSX.utils.encode_cell({ r, c: 10 })];
       const employeeNameRaw = employeeCell?.v ? String(employeeCell.v).trim() : null;
       if (!employeeNameRaw) continue;
 
-      // "Irrgang, Jens" -> "Jens Irrgang" (für employees-Match)
-      const employeeNameSwapped = swapCommaName(employeeNameRaw);
-      const candidates = Array.from(new Set([
-        normName(employeeNameRaw),
-        normName(employeeNameSwapped),
-      ])).filter(Boolean);
+      const employeeNameSwapped = swapCommaName(employeeNameRaw); // "Irrgang, Jens" -> "Jens Irrgang"
+      const candidates = Array.from(new Set([normName(employeeNameRaw), normName(employeeNameSwapped)])).filter(Boolean);
 
-      // Mitarbeiter matchen gegen employees (normalisiert)
+      // match employee in DB by normalized name
       const emp = await pool.query(
         `
         SELECT employee_id, name
@@ -398,14 +392,11 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
       if (emp.rowCount > 0) {
         employeeId = emp.rows[0].employee_id;
-        employeeName = emp.rows[0].name; // sauberer Name aus DB (z.B. "Jens Irrgang")
+        employeeName = emp.rows[0].name;
       } else {
         employeeName = employeeNameSwapped || employeeNameRaw;
         employeeId = "AUTO" + r;
-        await pool.query(
-          `INSERT INTO employees (employee_id,name) VALUES ($1,$2)`,
-          [employeeId, employeeName]
-        );
+        await pool.query(`INSERT INTO employees (employee_id,name) VALUES ($1,$2)`, [employeeId, employeeName]);
       }
 
       const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
@@ -429,7 +420,6 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
           `,
           [employeeId, employeeName, requesterName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
         );
-
         imported++;
       }
     }
@@ -438,13 +428,352 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       ok: true,
       imported,
       header_row: headerRow + 1,
-      date_from: dates[0].iso,
-      date_to: dates[dates.length - 1].iso,
+      date_from: dates[0]?.iso,
+      date_to: dates[dates.length - 1]?.iso,
       date_cols: dates.length,
     });
   } catch (e) {
     console.error("STAFFPLAN IMPORT ERROR:", e);
     return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
+// TIME: current running
+// ======================================================
+app.get("/api/time/current/:employee_id", async (req, res) => {
+  try {
+    const employeeId = String(req.params.employee_id || "").trim();
+    const r = await pool.query(
+      `SELECT start_ts FROM time_entries WHERE employee_id=$1 AND end_ts IS NULL ORDER BY start_ts DESC LIMIT 1`,
+      [employeeId]
+    );
+    if (!r.rowCount) return res.json({ ok: false });
+    return res.json({ ok: true, start_time: r.rows[0].start_ts });
+  } catch (e) {
+    console.error("TIME CURRENT ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
+// TIME: start
+// (auto-project support: customer_po/internal_po/project_short/requester_name from UI)
+// ======================================================
+app.post("/api/time/start", async (req, res) => {
+  try {
+    const employeeId = String(req.body.employee_id || "").trim();
+    if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const customerPo = req.body.customer_po ? String(req.body.customer_po).trim() : null;
+    const internalPo = req.body.internal_po ? String(req.body.internal_po).trim() : null;
+    const projectShort = req.body.project_short ? String(req.body.project_short).trim() : null;
+    const requesterName = req.body.requester_name ? String(req.body.requester_name).trim() : null;
+
+    // already running?
+    const open = await pool.query(
+      `SELECT id, start_ts FROM time_entries WHERE employee_id=$1 AND end_ts IS NULL ORDER BY start_ts DESC LIMIT 1`,
+      [employeeId]
+    );
+    if (open.rowCount) return res.json({ ok: true, start_time: open.rows[0].start_ts });
+
+    const startTs = new Date();
+    const workDate = toIsoDate(new Date());
+
+    const ins = await pool.query(
+      `
+      INSERT INTO time_entries (employee_id, work_date, customer_po, internal_po, project_short, requester_name, start_ts)
+      VALUES ($1, $2::date, $3, $4, $5, $6, $7)
+      RETURNING start_ts
+      `,
+      [employeeId, workDate, customerPo, internalPo, projectShort, requesterName, startTs]
+    );
+
+    res.json({ ok: true, start_time: ins.rows[0].start_ts });
+  } catch (e) {
+    console.error("TIME START ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
+// BREAK: start
+// ======================================================
+app.post("/api/break/start", async (req, res) => {
+  try {
+    const employeeId = String(req.body.employee_id || "").trim();
+    if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    // prevent multiple open breaks
+    const open = await pool.query(
+      `SELECT id FROM break_entries WHERE employee_id=$1 AND end_ts IS NULL ORDER BY start_ts DESC LIMIT 1`,
+      [employeeId]
+    );
+    if (open.rowCount) return res.json({ ok: true });
+
+    await pool.query(
+      `INSERT INTO break_entries (employee_id, start_ts) VALUES ($1, $2)`,
+      [employeeId, new Date()]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("BREAK START ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
+// BREAK: end
+// ======================================================
+app.post("/api/break/end", async (req, res) => {
+  try {
+    const employeeId = String(req.body.employee_id || "").trim();
+    if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const open = await pool.query(
+      `SELECT id, start_ts FROM break_entries WHERE employee_id=$1 AND end_ts IS NULL ORDER BY start_ts DESC LIMIT 1`,
+      [employeeId]
+    );
+    if (!open.rowCount) return res.status(400).json({ ok: false, error: "Keine laufende Pause" });
+
+    const endTs = new Date();
+    const startTs = new Date(open.rows[0].start_ts);
+
+    await pool.query(
+      `UPDATE break_entries SET end_ts=$1 WHERE id=$2`,
+      [endTs, open.rows[0].id]
+    );
+
+    const minutes = Math.max(0, Math.round((endTs.getTime() - startTs.getTime()) / 60000));
+    res.json({ ok: true, minutes });
+  } catch (e) {
+    console.error("BREAK END ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
+// TIME: end (subtract breaks between start/end)
+// ======================================================
+app.post("/api/time/end", async (req, res) => {
+  try {
+    const employeeId = String(req.body.employee_id || "").trim();
+    if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const activity = req.body.activity ? String(req.body.activity).trim() : "Arbeitszeit";
+
+    // optional project details (auto-project from UI)
+    const customerPo = req.body.customer_po ? String(req.body.customer_po).trim() : null;
+    const internalPo = req.body.internal_po ? String(req.body.internal_po).trim() : null;
+    const projectShort = req.body.project_short ? String(req.body.project_short).trim() : null;
+    const requesterName = req.body.requester_name ? String(req.body.requester_name).trim() : null;
+
+    const open = await pool.query(
+      `SELECT id, start_ts FROM time_entries WHERE employee_id=$1 AND end_ts IS NULL ORDER BY start_ts DESC LIMIT 1`,
+      [employeeId]
+    );
+    if (!open.rowCount) return res.status(400).json({ ok: false, error: "Kein laufender Arbeitsblock" });
+
+    const endTs = new Date();
+    const id = open.rows[0].id;
+    const startTs = new Date(open.rows[0].start_ts);
+
+    // close open breaks automatically (optional safety)
+    await pool.query(
+      `UPDATE break_entries SET end_ts=$1 WHERE employee_id=$2 AND end_ts IS NULL`,
+      [endTs, employeeId]
+    );
+
+    await pool.query(
+      `
+      UPDATE time_entries
+      SET end_ts = $1,
+          activity = $2,
+          customer_po = COALESCE($3, customer_po),
+          internal_po = COALESCE($4, internal_po),
+          project_short = COALESCE($5, project_short),
+          requester_name = COALESCE($6, requester_name)
+      WHERE id = $7
+      `,
+      [endTs, activity, customerPo, internalPo, projectShort, requesterName, id]
+    );
+
+    const totalMs = Math.max(0, endTs.getTime() - startTs.getTime());
+
+    // sum breaks during this time window
+    const br = await pool.query(
+      `
+      SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_ts - start_ts)) * 1000), 0)::bigint AS ms
+      FROM break_entries
+      WHERE employee_id = $1
+        AND start_ts >= $2
+        AND end_ts <= $3
+        AND end_ts IS NOT NULL
+      `,
+      [employeeId, startTs, endTs]
+    );
+
+    const breakMs = Number(br.rows[0]?.ms || 0);
+    const netMs = Math.max(0, totalMs - breakMs);
+
+    const netHours = netMs / 3600000;
+    const breakMinutes = Math.round(breakMs / 60000);
+
+    res.json({
+      ok: true,
+      net_hours: netHours.toFixed(2),
+      break_minutes: breakMinutes
+    });
+  } catch (e) {
+    console.error("TIME END ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
+// PO list for a KW (uses staffplan)
+// GET /api/employee/:id/pos/:kw  -> { ok:true, pos:[...] }
+// ======================================================
+app.get("/api/employee/:id/pos/:kw", async (req, res) => {
+  try {
+    const employeeId = String(req.params.id || "").trim();
+    const kw = String(req.params.kw || "").trim();
+
+    if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    if (!kw) return res.status(400).json({ ok: false, error: "kw fehlt (z.B. CW52)" });
+
+    const r = await pool.query(
+      `
+      SELECT DISTINCT customer_po
+      FROM staffplan
+      WHERE employee_id = $1
+        AND calendar_week = $2
+        AND customer_po IS NOT NULL
+      ORDER BY customer_po
+      `,
+      [employeeId, kw]
+    );
+
+    res.json({ ok: true, pos: r.rows.map(x => x.customer_po).filter(Boolean) });
+  } catch (e) {
+    console.error("POS LIST ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
+// PDF timesheet (basic) per PO
+// GET /api/pdf/timesheet/:employee_id/:kw/:po
+// ======================================================
+app.get("/api/pdf/timesheet/:employee_id/:kw/:po", async (req, res) => {
+  try {
+    const employeeId = String(req.params.employee_id || "").trim();
+    const kwStr = String(req.params.kw || "").trim();
+    const po = String(req.params.po || "").trim();
+
+    const kwNum = parseCW(kwStr);
+    if (!kwNum) return res.status(400).send("Invalid KW (use CW52 etc.)");
+
+    // get employee name
+    const emp = await pool.query(`SELECT name FROM employees WHERE employee_id=$1`, [employeeId]);
+    const employeeName = emp.rowCount ? emp.rows[0].name : employeeId;
+
+    // We filter by ISO week number on time_entries
+    // Note: Without year in kwStr, we choose current ISO year.
+    const now = new Date();
+    const isoYear = now.getUTCFullYear();
+
+    const te = await pool.query(
+      `
+      SELECT work_date, start_ts, end_ts, activity, customer_po, internal_po, project_short, requester_name
+      FROM time_entries
+      WHERE employee_id = $1
+        AND customer_po = $2
+        AND date_part('week', work_date)::int = $3
+        AND date_part('isoyear', work_date)::int = $4
+      ORDER BY work_date, start_ts
+      `,
+      [employeeId, po, kwNum, isoYear]
+    );
+
+    // Pull requester/internal_po/project from staffplan (if exists)
+    const sp = await pool.query(
+      `
+      SELECT requester_name, internal_po, project_short, customer
+      FROM staffplan
+      WHERE employee_id = $1 AND customer_po = $2 AND calendar_week = $3
+      ORDER BY work_date
+      LIMIT 1
+      `,
+      [employeeId, po, kwStr]
+    );
+
+    const requester = sp.rowCount ? sp.rows[0].requester_name : null;
+    const internalPo = sp.rowCount ? sp.rows[0].internal_po : null;
+    const projectShort = sp.rowCount ? sp.rows[0].project_short : null;
+    const customer = sp.rowCount ? sp.rows[0].customer : null;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="timesheet_${employeeId}_${kwStr}_${encodeURIComponent(po)}.pdf"`);
+
+    const doc = new PDFDocument({ margin: 40 });
+    doc.pipe(res);
+
+    doc.fontSize(18).text("Stundenzettel", { align: "center" });
+    doc.moveDown(0.5);
+    doc.fontSize(11);
+
+    doc.text(`Mitarbeiter: ${employeeName} (${employeeId})`);
+    doc.text(`Kalenderwoche: ${kwStr} (ISO-Year: ${isoYear})`);
+    doc.text(`Kunden-PO: ${po}`);
+    if (internalPo) doc.text(`Interne PO: ${internalPo}`);
+    if (projectShort) doc.text(`Projekt: ${projectShort}`);
+    if (customer) doc.text(`Kunde: ${customer}`);
+    if (requester) doc.text(`Ansprechpartner: ${requester}`);
+
+    doc.moveDown(1);
+
+    doc.fontSize(12).text("Einträge:");
+    doc.moveDown(0.3);
+
+    if (!te.rowCount) {
+      doc.fontSize(11).text("Keine Zeiteinträge für diese KW/PO vorhanden.");
+      doc.end();
+      return;
+    }
+
+    let totalMs = 0;
+
+    for (const row of te.rows) {
+      const wd = String(row.work_date).slice(0, 10);
+      const st = row.start_ts ? new Date(row.start_ts).toISOString().slice(11, 16) : "--:--";
+      const en = row.end_ts ? new Date(row.end_ts).toISOString().slice(11, 16) : "--:--";
+      const act = row.activity || "";
+      const ip = row.internal_po || internalPo || "";
+      const pj = row.project_short || projectShort || "";
+      const rq = row.requester_name || requester || "";
+
+      doc.fontSize(10).text(`${wd}  ${st} - ${en}   ${act}`);
+      if (pj || ip || rq) {
+        doc.fontSize(9).fillColor("gray").text(`   Projekt: ${pj}   Intern: ${ip}   Ansprechpartner: ${rq}`);
+        doc.fillColor("black");
+      }
+
+      if (row.start_ts && row.end_ts) {
+        totalMs += Math.max(0, new Date(row.end_ts).getTime() - new Date(row.start_ts).getTime());
+      }
+
+      doc.moveDown(0.2);
+    }
+
+    doc.moveDown(0.8);
+    doc.fontSize(12).text(`Summe (brutto, ohne Pausenlogik im PDF): ${(totalMs / 3600000).toFixed(2)} Std`);
+
+    doc.end();
+  } catch (e) {
+    console.error("PDF ERROR:", e);
+    res.status(500).send("PDF generation error: " + e.message);
   }
 });
 
@@ -513,12 +842,38 @@ app.get("/api/debug/staffplan-on-date", async (req, res) => {
     FROM staffplan
     WHERE work_date = $1::date
     ORDER BY employee_name, customer_po, internal_po
-    LIMIT 50
+    LIMIT 200
     `,
     [date]
   );
 
   res.json({ ok: true, date, rows: r.rows });
+});
+
+// ======================================================
+// DEBUG: time-entries (recent)
+// ======================================================
+app.get("/api/debug/time-entries", async (req, res) => {
+  try {
+    const employeeId = String(req.query.employee_id || "").trim();
+    if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const r = await pool.query(
+      `
+      SELECT id, work_date, customer_po, internal_po, project_short, requester_name, start_ts, end_ts, activity
+      FROM time_entries
+      WHERE employee_id = $1
+      ORDER BY start_ts DESC
+      LIMIT 50
+      `,
+      [employeeId]
+    );
+
+    res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("DEBUG TIME ENTRIES ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ======================================================
