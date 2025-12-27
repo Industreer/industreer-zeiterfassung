@@ -116,15 +116,51 @@ function getISOWeek(date) {
 
 function parseExcelDate(cell) {
   if (!cell) return null;
-  if (typeof cell.v === "number") {
-    const epoch = new Date(1899, 11, 30);
+
+  // Excel-Seriennummer
+  if (typeof cell.v === "number" && isFinite(cell.v)) {
+    const epoch = new Date(Date.UTC(1899, 11, 30));
     return new Date(epoch.getTime() + cell.v * 86400000);
   }
+
   const t = String(cell.w || cell.v || "").trim();
-  const m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+  if (!t) return null;
+
+  // DD.MM.YYYY
+  let m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
+
+  // Datum irgendwo im Text: "Sa 27.12.2025"
+  m = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
+
+  // DD.MM. (ohne Jahr) -> heuristisch Jahr bestimmen
+  m = t.match(/^(\d{1,2})\.(\d{1,2})\.$/);
+  if (m) {
+    const today = new Date();
+    const y0 = today.getFullYear();
+    let guess = new Date(Date.UTC(y0, +m[2] - 1, +m[1]));
+    const diffDays = Math.round((guess.getTime() - today.getTime()) / 86400000);
+    if (diffDays > 200) guess = new Date(Date.UTC(y0 - 1, +m[2] - 1, +m[1]));
+    if (diffDays < -200) guess = new Date(Date.UTC(y0 + 1, +m[2] - 1, +m[1]));
+    return guess;
+  }
+
+  // "Sa 27.12." -> DD.MM. irgendwo im Text
+  m = t.match(/(\d{1,2})\.(\d{1,2})\./);
+  if (m) {
+    const today = new Date();
+    const y0 = today.getFullYear();
+    let guess = new Date(Date.UTC(y0, +m[2] - 1, +m[1]));
+    const diffDays = Math.round((guess.getTime() - today.getTime()) / 86400000);
+    if (diffDays > 200) guess = new Date(Date.UTC(y0 - 1, +m[2] - 1, +m[1]));
+    if (diffDays < -200) guess = new Date(Date.UTC(y0 + 1, +m[2] - 1, +m[1]));
+    return guess;
+  }
+
   return null;
 }
+
 
 // ======================================================
 // STATIC
