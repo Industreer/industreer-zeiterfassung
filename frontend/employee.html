@@ -7,7 +7,7 @@
 
   <style>
     body { font-family: Arial, sans-serif; background:#f4f6f8; margin:0; padding:20px; }
-    .box { max-width:520px; margin:0 auto; background:#fff; padding:18px; border-radius:10px; box-shadow:0 2px 10px rgba(0,0,0,.08); }
+    .box { max-width:720px; margin:0 auto; background:#fff; padding:18px; border-radius:10px; box-shadow:0 2px 10px rgba(0,0,0,.08); }
     .logo { max-width:220px; display:block; margin:0 auto 12px auto; }
     h2 { margin:0 0 10px 0; text-align:center; }
     input, select, textarea, button { width:100%; padding:12px; margin-top:10px; border-radius:8px; border:1px solid #cfd8dc; font-size:16px; box-sizing:border-box; }
@@ -15,13 +15,16 @@
     button { border:none; background:#1565c0; color:#fff; cursor:pointer; }
     button.secondary { background:#455a64; }
     button.pause { background:#f57c00; }
-    .row { margin-top:10px; }
+    .row { margin-top:12px; }
+    .projects { background:#eef3f8; padding:12px; border-radius:8px; font-size:14px; }
+    .projects ul { margin:8px 0 0 18px; padding:0; }
+    .projects li { margin:6px 0; }
+    .meta { font-size:12px; color:#607d8b; text-align:center; margin-top:4px; }
     .timer { margin-top:12px; padding:12px; background:#eef3f8; border-radius:8px; }
-    .projects { margin-top:12px; padding:12px; background:#eef3f8; border-radius:8px; font-size:14px; }
-    .projects ul { margin:6px 0 0 18px; padding:0; }
-    .status { margin-top:12px; white-space:pre-wrap; font-size:13px; font-weight:bold; }
+    .status { margin-top:12px; white-space:pre-wrap; font-size:14px; font-weight:bold; }
+    .debug { margin-top:10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; background:#0b1020; color:#d8e0ff; padding:10px; border-radius:8px; overflow:auto; display:none; }
     hr { margin:18px 0; border:none; border-top:1px solid #e0e0e0; }
-    .muted { color:#607d8b; font-weight:normal; font-size:12px; }
+    .pill { display:inline-block; padding:4px 8px; border-radius:999px; background:#e3f2fd; color:#0d47a1; font-size:12px; margin-left:6px; }
   </style>
 </head>
 
@@ -29,21 +32,24 @@
   <div class="box">
     <img src="/api/logo" class="logo" onerror="this.style.display='none'"/>
 
-    <h2 id="welcomeTitle">Mitarbeiter Zeiterfassung</h2>
-    <div class="muted" id="buildInfo"></div>
+    <h2 id="title">Arbeitszeiterfassung</h2>
+    <div class="meta">Build: <span id="buildTs"></span></div>
 
+    <!-- LOGIN -->
     <div id="loginBox">
-      <input id="employeeId" placeholder="Mitarbeiter-ID (z.B. 1001)" />
-      <button id="loginBtn">Anmelden</button>
+      <input id="employeeId" placeholder="Mitarbeiter-ID (z. B. 1001)" />
+      <button onclick="login()">Anmelden</button>
     </div>
 
+    <!-- MAIN -->
     <div id="mainBox" style="display:none;">
-      <div class="row"><b>Willkommen:</b> <span id="employeeName">-</span></div>
+      <div class="row">
+        <b>Mitarbeiter:</b> <span id="employeeName">-</span>
+        <span class="pill" id="todayDatePill"></span>
+      </div>
 
-      <!-- Heutige Projekte -->
-      <div id="todayBox" class="projects">Lade heutige Projekte …</div>
+      <div id="todayBox" class="row projects">Lade heutige Projekte …</div>
 
-      <!-- Timer -->
       <div id="timerBox" class="timer" style="display:none;">
         <div>Arbeitsbeginn: <span id="startTimeText"></span></div>
         <div>Laufzeit: <span id="elapsed">00:00:00</span></div>
@@ -71,10 +77,8 @@
 
       <hr/>
 
-      <button class="secondary" onclick="printLastWeekAllPOs()">Stundenzettel letzte KW drucken (alle POs)</button>
-
-      <input id="kwInput" placeholder="Kalenderwoche (z. B. CW49)" />
-      <button class="secondary" onclick="printSelectedWeekAllPOs()">Stundenzettel für KW drucken (alle POs)</button>
+      <button class="secondary" onclick="toggleDebug()">Debug anzeigen/ausblenden</button>
+      <div id="debugBox" class="debug"></div>
 
       <div id="status" class="status"></div>
     </div>
@@ -84,15 +88,16 @@
   let currentEmployee = null;
   let timerInterval = null;
 
-  // Option B: erstes Projekt automatisch verwenden
-  let todayProjects = [];
-  let autoProject = null;
-
   const el = (id) => document.getElementById(id);
-  function setStatus(msg) { el("status").innerText = msg || ""; }
+  const setStatus = (msg) => el("status").innerText = msg || "";
+  const setDebug = (obj) => el("debugBox").textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
 
-  // Build Info (Cache-Erkennung)
-  el("buildInfo").innerText = "Build: " + new Date().toISOString();
+  el("buildTs").innerText = new Date().toISOString();
+
+  function toggleDebug() {
+    const b = el("debugBox");
+    b.style.display = (b.style.display === "block") ? "none" : "block";
+  }
 
   // ---------- Timer ----------
   function startTimer(startISO) {
@@ -117,26 +122,18 @@
 
   async function refreshRunningTimer() {
     if (!currentEmployee) return;
-    try {
-      const r = await fetch(`/api/time/current/${encodeURIComponent(currentEmployee.employee_id)}`);
-      const j = await r.json();
-      if (j.ok) startTimer(j.start_time);
-    } catch (e) {}
+    const r = await fetch(`/api/time/current/${encodeURIComponent(currentEmployee.employee_id)}`);
+    const j = await r.json();
+    if (j.ok && j.start_time) startTimer(j.start_time);
   }
 
   // ---------- Login ----------
-  el("loginBtn").addEventListener("click", login);
-
   async function login() {
     const id = el("employeeId").value.trim();
     if (!id) return alert("Bitte Mitarbeiter-ID eingeben");
 
-    const url = `/api/employee/${encodeURIComponent(id)}`;
-    setStatus("Login Request:\n" + url);
-
-    const r = await fetch(url);
+    const r = await fetch(`/api/employee/${encodeURIComponent(id)}`);
     const j = await r.json();
-
     if (!j.ok) return alert(j.error || "Mitarbeiter nicht gefunden");
 
     currentEmployee = j.employee;
@@ -145,67 +142,19 @@
     el("employeeName").innerText = currentEmployee.name;
     el("loginBox").style.display = "none";
     el("mainBox").style.display = "block";
-    el("welcomeTitle").innerText = "Arbeitszeiterfassung";
+    el("title").innerText = "Arbeitszeiterfassung";
 
     await loadTodayProjects();
     await refreshRunningTimer();
+
     setStatus("Angemeldet");
   }
 
-  // Auto-fill last ID
+  // Auto-Login (optional)
   window.addEventListener("load", () => {
     const last = localStorage.getItem("lastEmployeeId");
     if (last) el("employeeId").value = last;
   });
-
-  // ---------- Today Projects (Option B) ----------
-  async function loadTodayProjects() {
-    const box = el("todayBox");
-    box.innerText = "Lade heutige Projekte …";
-
-    const url = `/api/employee/today?employee_id=${encodeURIComponent(currentEmployee.employee_id)}`;
-    let j;
-
-    try {
-      const r = await fetch(url);
-      j = await r.json();
-    } catch (e) {
-      box.innerText = "Fehler beim Laden der Projekte.";
-      setStatus("Today Fehler (fetch):\n" + String(e));
-      return;
-    }
-
-    if (!j.ok) {
-      box.innerText = "Fehler beim Laden der Projekte.";
-      setStatus("Today Fehler:\n" + JSON.stringify(j, null, 2));
-      return;
-    }
-
-    todayProjects = Array.isArray(j.projects) ? j.projects : [];
-    autoProject = todayProjects.length ? todayProjects[0] : null;
-
-    if (!autoProject) {
-      box.innerText = "Heute keine geplanten Projekte.";
-      return;
-    }
-
-    box.innerHTML =
-      "<b>Heutige Projekte:</b><ul>" +
-      todayProjects.map((p, idx) => {
-        const po = p.customer_po || "-";
-        const ipo = p.internal_po || "-";
-        const proj = p.project_short || "";
-        const req = p.requester_name ? ` (Ansprechpartner: ${p.requester_name})` : "";
-        const tag = (idx === 0) ? " <b>[AUTO]</b>" : "";
-        return `<li>${po} / ${ipo} – ${proj}${req}${tag}</li>`;
-      }).join("") +
-      "</ul>";
-
-    setStatus(
-      "Auto-Projekt gewählt:\n" +
-      `${autoProject.customer_po || "-"} / ${autoProject.internal_po || "-"} – ${autoProject.project_short || ""}`
-    );
-  }
 
   // ---------- Activity UI ----------
   el("activitySelect").addEventListener("change", () => {
@@ -221,6 +170,42 @@
     return sel || "Arbeitszeit";
   }
 
+  // ---------- Today Projects ----------
+  async function loadTodayProjects() {
+    const box = el("todayBox");
+    box.innerText = "Lade heutige Projekte …";
+
+    const url = `/api/employee/today?employee_id=${encodeURIComponent(currentEmployee.employee_id)}&cb=${Date.now()}`;
+    const r = await fetch(url);
+    const j = await r.json();
+
+    // Debug immer befüllen (damit du siehst, was ankommt)
+    setDebug({ note: "Today OK", url, response: j });
+
+    el("todayDatePill").innerText = j.date ? `Datum: ${j.date}` : "";
+
+    if (!j.ok) {
+      box.innerText = `Fehler beim Laden der Projekte: ${j.error || "unknown"}`;
+      return;
+    }
+
+    if (!j.projects || !j.projects.length) {
+      box.innerText = "Heute keine geplanten Projekte.";
+      return;
+    }
+
+    box.innerHTML =
+      "<b>Heutige Projekte:</b><ul>" +
+      j.projects.map(p => {
+        const po = p.customer_po || "-";
+        const ipo = p.internal_po || "-";
+        const prj = p.project_short || "";
+        const req = p.requester_name ? ` (Ansprechpartner: ${p.requester_name})` : "";
+        return `<li>${po} / ${ipo} – ${prj}${req}</li>`;
+      }).join("") +
+      "</ul>";
+  }
+
   // ---------- Work ----------
   async function startWork() {
     if (!currentEmployee) return alert("Bitte zuerst anmelden");
@@ -228,19 +213,15 @@
     const r = await fetch("/api/time/start", {
       method: "POST",
       headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({
-        employee_id: currentEmployee.employee_id,
-        customer_po: autoProject?.customer_po || null,
-        internal_po: autoProject?.internal_po || null,
-        project_short: autoProject?.project_short || null,
-        requester_name: autoProject?.requester_name || null
-      })
+      body: JSON.stringify({ employee_id: currentEmployee.employee_id, activity: getActivityText() })
     });
 
     const j = await r.json();
+    setDebug({ note: "Start Work", response: j });
+
     if (!j.ok) return setStatus(`Arbeitsbeginn fehlgeschlagen:\n${j.error || ""}`);
 
-    startTimer(j.start_time);
+    if (j.start_time) startTimer(j.start_time);
     setStatus("Arbeitsblock gestartet");
   }
 
@@ -252,21 +233,19 @@
     const r = await fetch("/api/time/end", {
       method: "POST",
       headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({
-        employee_id: currentEmployee.employee_id,
-        activity,
-        customer_po: autoProject?.customer_po || null,
-        internal_po: autoProject?.internal_po || null,
-        project_short: autoProject?.project_short || null,
-        requester_name: autoProject?.requester_name || null
-      })
+      body: JSON.stringify({ employee_id: currentEmployee.employee_id, activity })
     });
 
     const j = await r.json();
+    setDebug({ note: "End Work", response: j });
+
     if (!j.ok) return setStatus(`Arbeitsende fehlgeschlagen:\n${j.error || ""}`);
 
     stopTimer();
-    setStatus(`Arbeitsblock beendet\nNetto: ${j.net_hours} Std\nPause: ${j.break_minutes} Min`);
+
+    // Anzeige sauber
+    const net = (typeof j.net_hours === "string" ? j.net_hours : String(j.net_hours || "0")).trim();
+    setStatus(`Arbeitsblock beendet\nNetto: ${net} Std\nPause: ${j.break_minutes || 0} Min`);
   }
 
   // ---------- Breaks ----------
@@ -280,8 +259,9 @@
     });
 
     const j = await r.json();
-    if (!j.ok) return setStatus(`Pause starten fehlgeschlagen:\n${j.error || ""}`);
+    setDebug({ note: "Start Break", response: j });
 
+    if (!j.ok) return setStatus(`Pause starten fehlgeschlagen:\n${j.error || ""}`);
     setStatus("Raucherpause gestartet");
   }
 
@@ -295,61 +275,10 @@
     });
 
     const j = await r.json();
+    setDebug({ note: "End Break", response: j });
+
     if (!j.ok) return setStatus(`Pause beenden fehlgeschlagen:\n${j.error || ""}`);
-
-    setStatus(`Raucherpause beendet (${j.minutes} Min)`);
-  }
-
-  // ---------- KW helpers ----------
-  function getWeek(d) {
-    d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-    const dayNum = d.getUTCDay() || 7;
-    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-    const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
-    return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-  }
-
-  // ---------- Print ALL POs ----------
-  async function printLastWeekAllPOs() {
-    if (!currentEmployee) return alert("Bitte zuerst anmelden");
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    const kw = "CW" + getWeek(d);
-    await printAllPOsForKW(kw);
-  }
-
-  async function printSelectedWeekAllPOs() {
-    if (!currentEmployee) return alert("Bitte zuerst anmelden");
-    const kw = el("kwInput").value.trim();
-    if (!kw) return alert("Bitte KW eingeben (z. B. CW49)");
-    await printAllPOsForKW(kw);
-  }
-
-  async function printAllPOsForKW(kw) {
-    setStatus(`Suche POs für ${kw} ...`);
-
-    const r = await fetch(`/api/employee/${encodeURIComponent(currentEmployee.employee_id)}/pos/${encodeURIComponent(kw)}`);
-    const j = await r.json();
-
-    if (!j.ok) {
-      setStatus(`Fehler: ${j.error || "PO-Liste nicht verfügbar"}`);
-      return;
-    }
-
-    if (!j.pos || !j.pos.length) {
-      setStatus(`Keine POs im Staffplan für ${kw} gefunden.`);
-      return;
-    }
-
-    setStatus(`Öffne ${j.pos.length} Stundenzettel (je PO ein PDF) ...`);
-
-    for (const po of j.pos) {
-      const url = `/api/pdf/timesheet/${encodeURIComponent(currentEmployee.employee_id)}/${encodeURIComponent(kw)}/${encodeURIComponent(po)}`;
-      window.open(url, "_blank");
-      await new Promise(r => setTimeout(r, 250));
-    }
-
-    setStatus(`Fertig: ${j.pos.length} PDFs geöffnet.`);
+    setStatus(`Raucherpause beendet (${j.minutes || 0} Min)`);
   }
 </script>
 </body>
