@@ -563,6 +563,29 @@ app.get("/api/debug/db-info", async (req, res) => {
   `);
   res.json(r.rows[0]);
 });
+// DEBUG: zeigt, ob ein employee_id überhaupt im staffplan vorkommt
+app.get("/api/debug/staffplan-has-employee", async (req, res) => {
+  const employeeId = String(req.query.employee_id || "").trim();
+  if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+  const r = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE employee_id = $1`,
+    [employeeId]
+  );
+  res.json({ ok: true, employee_id: employeeId, cnt: r.rows[0].cnt });
+});
+
+// DEBUG: zeigt die Top-Employee-IDs, die im staffplan wirklich vorkommen
+app.get("/api/debug/staffplan-top-employees", async (req, res) => {
+  const r = await pool.query(`
+    SELECT employee_id, employee_name, COUNT(*)::int AS cnt
+    FROM staffplan
+    GROUP BY employee_id, employee_name
+    ORDER BY cnt DESC
+    LIMIT 20
+  `);
+  res.json(r.rows);
+});
 
 // ======================================================
 // START
