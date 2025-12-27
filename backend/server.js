@@ -456,6 +456,26 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
     staffplan_for_employee_name: byName ? byName.rows[0].cnt : null,
   });
 });
+// ======================================================
+// DEBUG: staffplan-on-date (zeigt Zeilen für ein Datum)
+// ======================================================
+app.get("/api/debug/staffplan-on-date", async (req, res) => {
+  const date = String(req.query.date || "").trim(); // YYYY-MM-DD
+  if (!date) return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
+
+  const r = await pool.query(
+    `
+    SELECT employee_id, employee_name, customer_po, internal_po, project_short, planned_hours
+    FROM staffplan
+    WHERE work_date = $1::date
+    ORDER BY employee_name, customer_po, internal_po
+    LIMIT 50
+    `,
+    [date]
+  );
+
+  res.json({ ok: true, date, rows: r.rows });
+});
 
 // ======================================================
 // START
