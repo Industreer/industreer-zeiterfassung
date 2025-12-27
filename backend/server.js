@@ -300,6 +300,21 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// DEBUG: STAFFPLAN DATES (TEMPORARY)
+// ======================================================
+app.get("/api/debug/staffplan-dates", async (req, res) => {
+  const r = await pool.query(`
+    SELECT
+      work_date,
+      COUNT(*)::int AS cnt
+    FROM staffplan
+    GROUP BY work_date
+    ORDER BY work_date DESC
+    LIMIT 10
+  `);
+  res.json(r.rows);
+});
 
 // ======================================================
 // START
