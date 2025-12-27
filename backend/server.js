@@ -1,4 +1,21 @@
-console.log("🔥🔥🔥 SERVER.JS VERSION 2025-12-27 (FULL FINAL + BUILD DEBUG + TIME/END DEBUG) 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-12-27 (FULL FINAL) 🔥🔥🔥");
+
+/**
+ * backend/server.js
+ *
+ * Features:
+ * - Express + Render + PostgreSQL
+ * - Logo Upload
+ * - Staffplan Import (Excel)
+ * - Employee lookup + Today projects
+ * - Time tracking (start/end) + breaks
+ * - Debug endpoints (build, staffplan-on-date, time-entries, cleanup-time)
+ *
+ * IMPORTANT:
+ * - /api/employee/today MUST be before /api/employee/:id
+ * - Time tracking uses start_time/end_time as source of truth
+ * - "Open blocks" are filtered to TODAY to avoid old dangling rows breaking end().
+ */
 
 const path = require("path");
 const fs = require("fs");
@@ -6,7 +23,7 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const XLSX = require("xlsx");
-const PDFDocument = require("pdfkit"); // später
+const PDFDocument = require("pdfkit"); // reserved for later
 const { Pool } = require("pg");
 
 const app = express();
@@ -55,7 +72,7 @@ function getISOWeek(date) {
   return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
 
-// Excel date parsing (Formeln werden von xlsx nicht berechnet)
+// Excel date parsing (xlsx berechnet Formeln NICHT)
 function parseExcelDate(cell) {
   if (!cell) return null;
 
@@ -74,7 +91,7 @@ function parseExcelDate(cell) {
   m = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
 
-  // DD.MM. irgendwo im Text
+  // DD.MM. irgendwo im Text -> heuristisch Jahr
   m = t.match(/(\d{1,2})\.(\d{1,2})\./);
   if (m) {
     const today = new Date();
@@ -121,7 +138,7 @@ async function ensureEmployeesSchema() {
 }
 
 async function ensureStaffplanSchemaFresh() {
-  // design: always fresh on restart
+  // by design: staffplan always fresh on restart
   await pool.query(`DROP TABLE IF EXISTS public.staffplan CASCADE`);
   await pool.query(`
     CREATE TABLE public.staffplan (
@@ -141,14 +158,14 @@ async function ensureStaffplanSchemaFresh() {
 }
 
 async function ensureTimeEntriesSchema() {
-  // do NOT drop
+  // do not drop
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.time_entries (
       id BIGSERIAL PRIMARY KEY
     );
   `);
 
-  // Ensure both old + new columns exist
+  // ensure both old + new columns exist
   const cols = [
     ["employee_id", "TEXT"],
     ["work_date", "DATE"],
@@ -511,22 +528,28 @@ app.post("/api/break/end", async (req, res) => {
 });
 
 // ======================================================
-// TIME: current/start (stable)
+// TIME: current/start/end (ONLY TODAY -> prevents old dangling rows)
+// Source of truth: start_time/end_time
 // ======================================================
 app.get("/api/time/current/:employee_id", async (req, res) => {
   try {
     await ensureTimeEntriesSchema();
 
     const employeeId = String(req.params.employee_id || "").trim();
+    const today = toIsoDate(new Date());
+
     const r = await pool.query(
       `
-      SELECT start_time
+      SELECT id, start_time
       FROM public.time_entries
-      WHERE employee_id=$1 AND end_time IS NULL AND start_time IS NOT NULL
+      WHERE employee_id=$1
+        AND work_date = $2::date
+        AND start_time IS NOT NULL
+        AND end_time IS NULL
       ORDER BY start_time DESC
       LIMIT 1
       `,
-      [employeeId]
+      [employeeId, today]
     );
 
     if (!r.rowCount) return res.json({ ok: false });
@@ -544,20 +567,24 @@ app.post("/api/time/start", async (req, res) => {
     const employeeId = String(req.body.employee_id || "").trim();
     if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
+    const now = new Date();
+    const today = toIsoDate(now);
+
+    // if already running today, return it
     const open = await pool.query(
       `
       SELECT id, start_time
       FROM public.time_entries
-      WHERE employee_id=$1 AND end_time IS NULL AND start_time IS NOT NULL
+      WHERE employee_id=$1
+        AND work_date = $2::date
+        AND start_time IS NOT NULL
+        AND end_time IS NULL
       ORDER BY start_time DESC
       LIMIT 1
       `,
-      [employeeId]
+      [employeeId, today]
     );
     if (open.rowCount) return res.json({ ok: true, start_time: open.rows[0].start_time });
-
-    const now = new Date();
-    const workDate = toIsoDate(new Date());
 
     const ins = await pool.query(
       `
@@ -566,10 +593,10 @@ app.post("/api/time/start", async (req, res) => {
       VALUES ($1, $2::date, $3, $4)
       RETURNING id, start_time
       `,
-      [employeeId, workDate, "Arbeitszeit", now]
+      [employeeId, today, "Arbeitszeit", now]
     );
 
-    // optional: start_ts best-effort
+    // optional: start_ts best effort
     try {
       await pool.query(`UPDATE public.time_entries SET start_ts=$1 WHERE id=$2`, [now, ins.rows[0].id]);
     } catch (e) {
@@ -583,9 +610,6 @@ app.post("/api/time/start", async (req, res) => {
   }
 });
 
-// ======================================================
-// TIME: end (DEBUG VERSION -> returns where + error)
-// ======================================================
 app.post("/api/time/end", async (req, res) => {
   try {
     await ensureTimeEntriesSchema();
@@ -596,99 +620,68 @@ app.post("/api/time/end", async (req, res) => {
 
     const activity = req.body.activity ? String(req.body.activity).trim() : "Arbeitszeit";
 
-    // 1) offenen Arbeitsblock finden
+    const now = new Date();
+    const today = toIsoDate(now);
+
     const open = await pool.query(
       `
       SELECT id, start_time
       FROM public.time_entries
-      WHERE employee_id=$1 AND end_time IS NULL AND start_time IS NOT NULL
+      WHERE employee_id=$1
+        AND work_date = $2::date
+        AND start_time IS NOT NULL
+        AND end_time IS NULL
       ORDER BY start_time DESC
       LIMIT 1
       `,
-      [employeeId]
+      [employeeId, today]
     );
 
     if (!open.rowCount) {
-      return res.status(400).json({
-        ok: false,
-        error: "Kein laufender Arbeitsblock",
-        debug: { employee_id: employeeId }
-      });
+      return res.status(400).json({ ok: false, error: "Kein laufender Arbeitsblock (heute)" });
     }
 
-    const now = new Date();
     const id = open.rows[0].id;
     const startTime = new Date(open.rows[0].start_time);
 
-    // 2) Pausen schließen (separat abfangen)
-    try {
-      await pool.query(
-        `UPDATE public.break_entries SET end_ts=$1 WHERE employee_id=$2 AND end_ts IS NULL`,
-        [now, employeeId]
-      );
-    } catch (e) {
-      return res.status(500).json({
-        ok: false,
-        where: "close_breaks_update",
-        error: e.message,
-        detail: e.detail || null,
-        hint: e.hint || null,
-      });
-    }
+    // close open breaks (if any)
+    await pool.query(
+      `UPDATE public.break_entries SET end_ts=$1 WHERE employee_id=$2 AND end_ts IS NULL`,
+      [now, employeeId]
+    );
 
-    // 3) time_entries schließen (stabil: end_time)
-    try {
-      await pool.query(
-        `
-        UPDATE public.time_entries
-        SET end_time = $1,
-            activity = $2
-        WHERE id = $3
-        `,
-        [now, activity, id]
-      );
-    } catch (e) {
-      return res.status(500).json({
-        ok: false,
-        where: "update_time_entries_end_time",
-        error: e.message,
-        detail: e.detail || null,
-        hint: e.hint || null,
-      });
-    }
+    // close working block
+    await pool.query(
+      `
+      UPDATE public.time_entries
+      SET end_time = $1,
+          activity = $2
+      WHERE id = $3
+      `,
+      [now, activity, id]
+    );
 
-    // 4) optional: end_ts best effort (darf nicht crashen)
+    // optional: end_ts best effort
     try {
       await pool.query(`UPDATE public.time_entries SET end_ts=$1 WHERE id=$2`, [now, id]);
     } catch (e) {
       console.warn("end_ts update skipped:", e.message);
     }
 
-    // 5) Pause summieren (separat abfangen)
-    let breakMs = 0;
-    try {
-      const br = await pool.query(
-        `
-        SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_ts - start_ts)) * 1000), 0)::bigint AS ms
-        FROM public.break_entries
-        WHERE employee_id = $1
-          AND end_ts IS NOT NULL
-          AND start_ts >= $2::timestamptz
-          AND end_ts <= $3::timestamptz
-        `,
-        [employeeId, startTime, now]
-      );
-      breakMs = Number(br.rows[0]?.ms || 0);
-    } catch (e) {
-      return res.status(500).json({
-        ok: false,
-        where: "sum_breaks_query",
-        error: e.message,
-        detail: e.detail || null,
-        hint: e.hint || null,
-      });
-    }
+    // sum breaks within the block window
+    const br = await pool.query(
+      `
+      SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_ts - start_ts)) * 1000), 0)::bigint AS ms
+      FROM public.break_entries
+      WHERE employee_id = $1
+        AND end_ts IS NOT NULL
+        AND start_ts >= $2::timestamptz
+        AND end_ts <= $3::timestamptz
+      `,
+      [employeeId, startTime, now]
+    );
 
+    const breakMs = Number(br.rows[0]?.ms || 0);
     const totalMs = Math.max(0, now.getTime() - startTime.getTime());
     const netMs = Math.max(0, totalMs - breakMs);
 
@@ -696,19 +689,10 @@ app.post("/api/time/end", async (req, res) => {
       ok: true,
       net_hours: (netMs / 3600000).toFixed(2),
       break_minutes: Math.round(breakMs / 60000),
-      debug: { id, start_time: startTime.toISOString(), end_time: now.toISOString() }
     });
-
   } catch (e) {
     console.error("TIME END ERROR:", e);
-    return res.status(500).json({
-      ok: false,
-      where: "outer_catch",
-      error: e.message,
-      detail: e.detail || null,
-      hint: e.hint || null,
-      stack: (e.stack || "").split("\n").slice(0, 6).join("\n")
-    });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -733,6 +717,7 @@ app.get("/api/debug/time-entries", async (req, res) => {
       `,
       [employeeId]
     );
+
     return res.json({ ok: true, rows: r.rows });
   } catch (e) {
     console.error("DEBUG TIME ENTRIES ERROR:", e);
@@ -783,7 +768,58 @@ app.get("/api/debug/staffplan-on-date", async (req, res) => {
     `,
     [date]
   );
+
   return res.json({ ok: true, date, rows: r.rows });
+});
+
+// ======================================================
+// DEBUG: cleanup-time (einmalig zum Aufräumen)
+// - löscht kaputte Rows ohne start_time
+// - schließt alle offenen Blocks (end_time NULL) auf start_time (0h)
+// - schließt offene Pausen (end_ts NULL) auf start_ts
+// ======================================================
+app.post("/api/debug/cleanup-time", async (req, res) => {
+  try {
+    await ensureTimeEntriesSchema();
+    await ensureBreakEntriesSchema();
+
+    const employeeId = String(req.body.employee_id || "").trim();
+    if (!employeeId) {
+      return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    }
+
+    const delNullStart = await pool.query(
+      `DELETE FROM public.time_entries WHERE employee_id=$1 AND start_time IS NULL`,
+      [employeeId]
+    );
+
+    const closeOpen = await pool.query(
+      `
+      UPDATE public.time_entries
+      SET end_time = start_time
+      WHERE employee_id=$1
+        AND start_time IS NOT NULL
+        AND end_time IS NULL
+      `,
+      [employeeId]
+    );
+
+    const closeBreaks = await pool.query(
+      `UPDATE public.break_entries SET end_ts = start_ts WHERE employee_id=$1 AND end_ts IS NULL`,
+      [employeeId]
+    );
+
+    return res.json({
+      ok: true,
+      employee_id: employeeId,
+      deleted_null_start: delNullStart.rowCount,
+      closed_open_time_entries: closeOpen.rowCount,
+      closed_open_breaks: closeBreaks.rowCount,
+    });
+  } catch (e) {
+    console.error("CLEANUP ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ======================================================
