@@ -272,20 +272,21 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     // 3) DATUMS-SPALTEN AUFBAUEN (± ZEITFENSTER)
     // ----------------------------
     const dates = [];
-    for (let i = -30; i <= 60; i++) {
-      const col = todayCol + i;
-      if (col < 0) continue;
 
-      const d = new Date();
-      d.setDate(d.getDate() + i);
+for (let c = todayCol - 60; c <= todayCol + 60; c++) {
+  if (c < 11 || c >= 300) continue;
 
-      dates.push({
-        col,
-        iso: d.toISOString().slice(0, 10),
-        cw: "CW" + getISOWeek(d)
-      });
-    }
+  const cell = ws[XLSX.utils.encode_cell({ r: 3, c })];
+  const d = parseExcelDate(cell);
+  if (!d) continue;
 
+  dates.push({
+    col: c,
+    iso: d.toISOString().slice(0, 10),
+    cw: "CW" + getISOWeek(d)
+  });
+}
+    
     // ----------------------------
     // 4) STAFFPLAN LEEREN
     // ----------------------------
