@@ -1,13 +1,4 @@
-console.log("🔥🔥🔥 SERVER.JS VERSION 2025-12-27 (FULL FINAL + BREAK_ENTRIES SELF-HEAL) 🔥🔥🔥");
-
-/**
- * backend/server.js
- *
- * - /api/employee/today vor /api/employee/:id (Routing-Fix)
- * - Staffplan Import: requester in Spalte I (c=8), Mitarbeiter in Spalte K (c=10), Datums-Spalten ab L (c=11)
- * - Time Tracking stabil über start_time/end_time (und optional start_ts/end_ts)
- * - break_entries wird robust “self-healed” (end_ts existiert garantiert)
- */
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-12-27 (FULL FINAL + AUTO FIRST TODAY PROJECT) 🔥🔥🔥");
 
 const path = require("path");
 const fs = require("fs");
@@ -129,6 +120,7 @@ async function ensureEmployeesSchema() {
 }
 
 async function ensureStaffplanSchemaFresh() {
+  // Achtung: staffplan wird bei jedem Start neu erstellt -> nach Deploy/Restart muss neu importiert werden.
   await pool.query(`DROP TABLE IF EXISTS public.staffplan CASCADE`);
   await pool.query(`
     CREATE TABLE public.staffplan (
@@ -181,7 +173,6 @@ async function ensureTimeEntriesSchema() {
   }
 }
 
-// ✅ FIX: break_entries robust (end_ts wird garantiert nachgezogen)
 async function ensureBreakEntriesSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.break_entries (
@@ -200,10 +191,43 @@ async function ensureBreakEntriesSchema() {
 async function migrate() {
   console.log("🔧 DB migrate start");
   await ensureEmployeesSchema();
-  await ensureStaffplanSchemaFresh(); // staffplan always fresh
+  await ensureStaffplanSchemaFresh();
   await ensureTimeEntriesSchema();
   await ensureBreakEntriesSchema();
   console.log("✅ DB migrate finished");
+}
+
+// ======================================================
+// SMALL DB HELPERS
+// ======================================================
+async function getFirstTodayProject(employeeId, isoDate) {
+  const r = await pool.query(
+    `
+    SELECT customer_po, internal_po, project_short, requester_name
+    FROM public.staffplan
+    WHERE employee_id = $1
+      AND work_date = $2::date
+    ORDER BY customer_po NULLS LAST, internal_po NULLS LAST, id ASC
+    LIMIT 1
+    `,
+    [employeeId, isoDate]
+  );
+
+  if (!r.rowCount) return null;
+  return {
+    customer_po: r.rows[0].customer_po || null,
+    internal_po: r.rows[0].internal_po || null,
+    project_short: r.rows[0].project_short || null,
+    requester_name: r.rows[0].requester_name || null,
+  };
+}
+
+function hasAnyProjectFields(obj) {
+  const cpo = String(obj.customer_po || "").trim();
+  const ipo = String(obj.internal_po || "").trim();
+  const prj = String(obj.project_short || "").trim();
+  const req = String(obj.requester_name || "").trim();
+  return Boolean(cpo || ipo || prj || req);
 }
 
 // ======================================================
@@ -222,7 +246,7 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/api/debug/build", (req, res) => {
   res.json({
     ok: true,
-    build: "server.js FULL FINAL + BUILD DEBUG 2025-12-27",
+    build: "server.js FULL FINAL + AUTO FIRST TODAY PROJECT 2025-12-27",
     node: process.version,
     now: new Date().toISOString(),
   });
@@ -320,7 +344,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const startCol = 11; // L
     const endCol = range.e.c;
 
-    // 1) header row scan (0..20)
+    // header row scan (0..20)
     let headerRow = null;
     let bestCnt = 0;
     for (let r = 0; r <= Math.min(range.e.r, 20); r++) {
@@ -338,7 +362,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
     }
 
-    // 2) first real date
+    // find first real date
     let firstDateCol = null;
     let baseDate = null;
     for (let c = startCol; c <= endCol; c++) {
@@ -352,7 +376,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     }
     if (!baseDate) return res.json({ ok: false, error: "Header gefunden, aber kein erstes Datum parsebar" });
 
-    // 3) build dates lückenlos über alle Spalten
+    // build dates across all columns (lückenlos)
     const dates = [];
     let currentBaseDate = baseDate;
     let currentBaseCol = firstDateCol;
@@ -440,7 +464,18 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
              customer,internal_po,customer_po,project_short,planned_hours)
           VALUES ($1,$2,$3,$4::date,$5,$6,$7,$8,$9,$10)
           `,
-          [employeeId, employeeName, requesterName, d.iso, d.cw, customer, internalPo, customerPo, proj, planned]
+          [
+            employeeId,
+            employeeName,
+            requesterName,
+            d.iso,
+            d.cw,
+            customer,
+            internalPo,
+            customerPo,
+            proj,
+            planned,
+          ]
         );
 
         imported++;
@@ -516,7 +551,7 @@ app.post("/api/break/end", async (req, res) => {
 });
 
 // ======================================================
-// TIME: current/start/end (ONLY TODAY)
+// TIME: current/start/end (TODAY)
 // Source of truth: start_time/end_time
 // ======================================================
 app.get("/api/time/current/:employee_id", async (req, res) => {
@@ -548,6 +583,8 @@ app.get("/api/time/current/:employee_id", async (req, res) => {
   }
 });
 
+// ✅ AUTO PROJECT PICKUP:
+// If body has no project fields -> read first today staffplan row and store it in time_entries.
 app.post("/api/time/start", async (req, res) => {
   try {
     await ensureTimeEntriesSchema();
@@ -573,24 +610,65 @@ app.post("/api/time/start", async (req, res) => {
     );
     if (open.rowCount) return res.json({ ok: true, start_time: open.rows[0].start_time });
 
+    const activity = req.body.activity ? String(req.body.activity).trim() : "Arbeitszeit";
+
+    // project fields from body (optional)
+    let chosen = {
+      customer_po: req.body.customer_po ? String(req.body.customer_po).trim() : "",
+      internal_po: req.body.internal_po ? String(req.body.internal_po).trim() : "",
+      project_short: req.body.project_short ? String(req.body.project_short).trim() : "",
+      requester_name: req.body.requester_name ? String(req.body.requester_name).trim() : "",
+    };
+
+    // If none provided, auto-pick first today project from staffplan
+    if (!hasAnyProjectFields(chosen)) {
+      const first = await getFirstTodayProject(employeeId, today);
+      if (first) {
+        chosen = {
+          customer_po: first.customer_po || "",
+          internal_po: first.internal_po || "",
+          project_short: first.project_short || "",
+          requester_name: first.requester_name || "",
+        };
+      }
+    }
+
     const ins = await pool.query(
       `
       INSERT INTO public.time_entries
-        (employee_id, work_date, activity, start_time)
-      VALUES ($1, $2::date, $3, $4)
-      RETURNING id, start_time
+        (employee_id, work_date, activity, start_time, customer_po, internal_po, project_short, requester_name)
+      VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8)
+      RETURNING id, start_time, customer_po, internal_po, project_short, requester_name
       `,
-      [employeeId, today, "Arbeitszeit", now]
+      [
+        employeeId,
+        today,
+        activity,
+        now,
+        chosen.customer_po || null,
+        chosen.internal_po || null,
+        chosen.project_short || null,
+        chosen.requester_name || null,
+      ]
     );
 
-    // optional best-effort start_ts
+    // best-effort start_ts
     try {
       await pool.query(`UPDATE public.time_entries SET start_ts=$1 WHERE id=$2`, [now, ins.rows[0].id]);
     } catch (e) {
       console.warn("start_ts update skipped:", e.message);
     }
 
-    return res.json({ ok: true, start_time: ins.rows[0].start_time });
+    return res.json({
+      ok: true,
+      start_time: ins.rows[0].start_time,
+      picked_project: {
+        customer_po: ins.rows[0].customer_po,
+        internal_po: ins.rows[0].internal_po,
+        project_short: ins.rows[0].project_short,
+        requester_name: ins.rows[0].requester_name,
+      },
+    });
   } catch (e) {
     console.error("TIME START ERROR:", e);
     return res.status(500).json({ ok: false, error: e.message });
@@ -631,11 +709,13 @@ app.post("/api/time/end", async (req, res) => {
     const id = open.rows[0].id;
     const startTime = new Date(open.rows[0].start_time);
 
+    // close open breaks
     await pool.query(
       `UPDATE public.break_entries SET end_ts=$1 WHERE employee_id=$2 AND end_ts IS NULL`,
       [now, employeeId]
     );
 
+    // close time entry
     await pool.query(
       `
       UPDATE public.time_entries
@@ -646,13 +726,14 @@ app.post("/api/time/end", async (req, res) => {
       [now, activity, id]
     );
 
-    // optional best-effort end_ts
+    // best-effort end_ts
     try {
       await pool.query(`UPDATE public.time_entries SET end_ts=$1 WHERE id=$2`, [now, id]);
     } catch (e) {
       console.warn("end_ts update skipped:", e.message);
     }
 
+    // break sum inside [start_time, now]
     const br = await pool.query(
       `
       SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_ts - start_ts)) * 1000), 0)::bigint AS ms
@@ -741,12 +822,6 @@ app.get("/api/debug/staffplan-on-date", async (req, res) => {
   return res.json({ ok: true, date, rows: r.rows });
 });
 
-// ======================================================
-// DEBUG: cleanup-time (einmalig zum Aufräumen)
-// - löscht kaputte Rows ohne start_time
-// - schließt alle offenen Blocks (end_time NULL) auf start_time (0h)
-// - schließt offene Pausen (end_ts NULL) auf start_ts
-// ======================================================
 app.post("/api/debug/cleanup-time", async (req, res) => {
   try {
     await ensureTimeEntriesSchema();
