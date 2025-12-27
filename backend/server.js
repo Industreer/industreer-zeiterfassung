@@ -255,35 +255,57 @@ app.get("/api/employee/:id", async (req, res) => {
 // ======================================================
 // STAFFPLAN IMPORT (robust: Header-Zeile finden + Datum pro Spalte lesen)
 // ======================================================
-app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+// --- 2) Dates lückenlos pro Spalte bauen (Formel-Zellen ohne cached value abfangen) ---
+let firstDateCol = null;
+let baseDate = null;
 
-    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
+// erstes parsebares Datum in der Header-Zeile suchen
+for (let c = startCol; c <= endCol; c++) {
+  const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+  const d = parseExcelDate(cell);
+  if (d) {
+    firstDateCol = c;
+    baseDate = d;
+    break;
+  }
+}
 
-    // --- Sheet range ---
-    const ref = ws["!ref"] || "A1:A1";
-    const range = XLSX.utils.decode_range(ref);
+if (!baseDate) {
+  return res.json({ ok: false, error: "Header-Zeile gefunden, aber kein erstes Datum parsebar" });
+}
 
-    const startCol = 11; // ab Spalte L
-    const endCol = range.e.c;
+const dates = [];
+let currentBaseDate = baseDate;
+let currentBaseCol = firstDateCol;
 
-    // --- 1) Header-Zeile automatisch finden (Zeile mit meisten Datumszellen) ---
-    let headerRow = null;
-    let bestCnt = 0;
+for (let c = firstDateCol; c <= endCol; c++) {
+  const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+  const parsed = parseExcelDate(cell);
 
-    for (let r = 0; r <= Math.min(range.e.r, 20); r++) {
-      let cnt = 0;
-      for (let c = startCol; c <= endCol; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r, c })];
-        if (parseExcelDate(cell)) cnt++;
-      }
-      if (cnt > bestCnt) {
-        bestCnt = cnt;
-        headerRow = r;
-      }
-    }
+  // Wenn später wieder ein echtes Datum auftaucht (neuer Block), Base neu setzen
+  if (parsed) {
+    currentBaseDate = parsed;
+    currentBaseCol = c;
+  }
+
+  // Datum für diese Spalte: entweder parsed oder (Base + Offset)
+  const d = parsed
+    ? parsed
+    : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
+
+  dates.push({
+    col: c,
+    iso: toIsoDate(d),
+    cw: "CW" + getISOWeek(d),
+  });
+}
+
+console.log(
+  "📅 HeaderRow:", headerRow + 1,
+  "First:", dates[0]?.iso,
+  "Last:", dates[dates.length - 1]?.iso,
+  "count:", dates.length
+);
 
     if (headerRow === null || bestCnt < 3) {
       return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
