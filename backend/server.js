@@ -315,6 +315,23 @@ app.get("/api/debug/staffplan-dates", async (req, res) => {
   `);
   res.json(r.rows);
 });
+// ======================================================
+// DEBUG: DB INFO (TEMPORARY)
+// ======================================================
+app.get("/api/debug/db-info", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT
+        current_database() AS db,
+        inet_server_addr()::text AS host,
+        inet_server_port() AS port,
+        now() AS now
+    `);
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ======================================================
 // START
