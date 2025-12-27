@@ -256,35 +256,58 @@ app.get("/api/employee/:id", async (req, res) => {
 // ======================================================
 // STAFFPLAN IMPORT
 // ======================================================
-app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+// ------------------------------------------------------
+// DATUMS-KOPFZEILE ROBUST FINDEN + DATUM PRO SPALTE LESEN
+// ------------------------------------------------------
+const ref = ws["!ref"] || "A1:A1";
+const range = XLSX.utils.decode_range(ref);
 
-    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
+const startCol = 11;          // ab Spalte L
+const endCol = range.e.c;     // bis letzte benutzte Spalte
 
-    let startCol = null;
-    let baseDate = null;
-    for (let c = 11; c < 300; c++) {
-      const cell = ws[XLSX.utils.encode_cell({ r: 3, c })];
-      const d = parseExcelDate(cell);
-      if (d) {
-        startCol = c;
-        baseDate = d;
-        break;
-      }
-    }
-    if (!baseDate) {
-      return res.json({ ok: false, error: "Kein Datum gefunden (ab L4)" });
-    }
+// 1) Header-Zeile automatisch finden (Zeile mit den meisten Datumszellen)
+let headerRow = null;
+let bestCnt = 0;
 
-    const dates = [];
-    for (let i = 0; i < 300; i++) {
-      const d = new Date(baseDate);
-      d.setDate(baseDate.getDate() + i);
-      dates.push({ col: startCol + i, iso: toIsoDate(d), cw: "CW" + getISOWeek(d) });
-    }
+for (let r = 0; r <= Math.min(range.e.r, 20); r++) {
+  let cnt = 0;
+  for (let c = startCol; c <= endCol; c++) {
+    const cell = ws[XLSX.utils.encode_cell({ r, c })];
+    if (parseExcelDate(cell)) cnt++;
+  }
+  if (cnt > bestCnt) {
+    bestCnt = cnt;
+    headerRow = r;
+  }
+}
 
+if (headerRow === null || bestCnt < 3) {
+  return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
+}
+
+// 2) Dates-Liste: Datum wird pro Spalte aus der Header-Zeile gelesen
+const dates = [];
+for (let c = startCol; c <= endCol; c++) {
+  const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+  const d = parseExcelDate(cell);
+  if (!d) continue;
+
+  dates.push({
+    col: c,
+    iso: toIsoDate(d),
+    cw: "CW" + getISOWeek(d)
+  });
+}
+
+console.log(
+  "📅 HeaderRow:", headerRow + 1,
+  "Dates:", dates[0]?.iso, "…", dates[dates.length - 1]?.iso,
+  "count:", dates.length
+);
+
+if (!dates.length) {
+  return res.json({ ok: false, error: "Datumszeile gefunden, aber keine Datumsspalten parsebar" });
+}
     await pool.query("DELETE FROM staffplan");
 
     let imported = 0;
