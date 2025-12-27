@@ -252,71 +252,79 @@ app.get("/api/employee/:id", async (req, res) => {
   if (!r.rowCount) return res.status(404).json({ ok: false });
   res.json({ ok: true, employee: r.rows[0] });
 });
-
 // ======================================================
-// STAFFPLAN IMPORT
+// STAFFPLAN IMPORT (robust: Header-Zeile finden + Datum pro Spalte lesen)
 // ======================================================
-// ------------------------------------------------------
-// DATUMS-KOPFZEILE ROBUST FINDEN + DATUM PRO SPALTE LESEN
-// ------------------------------------------------------
-const ref = ws["!ref"] || "A1:A1";
-const range = XLSX.utils.decode_range(ref);
+app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
 
-const startCol = 11;          // ab Spalte L
-const endCol = range.e.c;     // bis letzte benutzte Spalte
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
 
-// 1) Header-Zeile automatisch finden (Zeile mit den meisten Datumszellen)
-let headerRow = null;
-let bestCnt = 0;
+    // --- Sheet range ---
+    const ref = ws["!ref"] || "A1:A1";
+    const range = XLSX.utils.decode_range(ref);
 
-for (let r = 0; r <= Math.min(range.e.r, 20); r++) {
-  let cnt = 0;
-  for (let c = startCol; c <= endCol; c++) {
-    const cell = ws[XLSX.utils.encode_cell({ r, c })];
-    if (parseExcelDate(cell)) cnt++;
-  }
-  if (cnt > bestCnt) {
-    bestCnt = cnt;
-    headerRow = r;
-  }
-}
+    const startCol = 11; // ab Spalte L
+    const endCol = range.e.c;
 
-if (headerRow === null || bestCnt < 3) {
-  return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
-}
+    // --- 1) Header-Zeile automatisch finden (Zeile mit meisten Datumszellen) ---
+    let headerRow = null;
+    let bestCnt = 0;
 
-// 2) Dates-Liste: Datum wird pro Spalte aus der Header-Zeile gelesen
-const dates = [];
-for (let c = startCol; c <= endCol; c++) {
-  const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
-  const d = parseExcelDate(cell);
-  if (!d) continue;
+    for (let r = 0; r <= Math.min(range.e.r, 20); r++) {
+      let cnt = 0;
+      for (let c = startCol; c <= endCol; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (parseExcelDate(cell)) cnt++;
+      }
+      if (cnt > bestCnt) {
+        bestCnt = cnt;
+        headerRow = r;
+      }
+    }
 
-  dates.push({
-    col: c,
-    iso: toIsoDate(d),
-    cw: "CW" + getISOWeek(d)
-  });
-}
+    if (headerRow === null || bestCnt < 3) {
+      return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
+    }
 
-console.log(
-  "📅 HeaderRow:", headerRow + 1,
-  "Dates:", dates[0]?.iso, "…", dates[dates.length - 1]?.iso,
-  "count:", dates.length
-);
+    // --- 2) Dates pro Spalte aus Header lesen ---
+    const dates = [];
+    for (let c = startCol; c <= endCol; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+      const d = parseExcelDate(cell);
+      if (!d) continue;
 
-if (!dates.length) {
-  return res.json({ ok: false, error: "Datumszeile gefunden, aber keine Datumsspalten parsebar" });
-}
+      dates.push({
+        col: c,
+        iso: toIsoDate(d),
+        cw: "CW" + getISOWeek(d),
+      });
+    }
+
+    if (!dates.length) {
+      return res.json({ ok: false, error: "Datumszeile gefunden, aber keine Datumsspalten parsebar" });
+    }
+
+    console.log(
+      "📅 HeaderRow:", headerRow + 1,
+      "Dates:", dates[0].iso, "…", dates[dates.length - 1].iso,
+      "count:", dates.length
+    );
+
+    // --- 3) staffplan leeren ---
     await pool.query("DELETE FROM staffplan");
 
     let imported = 0;
 
+    // --- 4) wie bisher: Mitarbeiter in Zeile r=5, Schritt 2, Name in Spalte I (c=8) ---
     for (let r = 5; r < 20000; r += 2) {
       const nameCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
       if (!nameCell?.v) continue;
       const employeeName = String(nameCell.v).trim();
 
+      // Mitarbeiter suchen / anlegen
       let emp = await pool.query(
         `SELECT employee_id FROM employees WHERE name=$1`,
         [employeeName]
@@ -340,7 +348,6 @@ if (!dates.length) {
       for (const d of dates) {
         const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
 
-        // planned_hours NUR als Zahl speichern (verhindert "invalid input syntax for type numeric")
         const planRaw = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v ?? null;
         const plan = (typeof planRaw === "number" && isFinite(planRaw)) ? planRaw : null;
 
@@ -360,13 +367,20 @@ if (!dates.length) {
       }
     }
 
-    res.json({ ok: true, imported });
-
+    return res.json({
+      ok: true,
+      imported,
+      header_row: headerRow + 1,
+      date_from: dates[0].iso,
+      date_to: dates[dates.length - 1].iso,
+      date_cols: dates.length,
+    });
   } catch (e) {
     console.error("STAFFPLAN IMPORT ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // DEBUG: staffplan-check (TEMPORARY)
 // ======================================================
