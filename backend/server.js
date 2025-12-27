@@ -1,4 +1,4 @@
-console.log("🔥🔥🔥 SERVER.JS VERSION 2025-12-27 (SELF-HEAL time_entries schema) 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-12-27 (FULL + SELF-HEAL + REPAIR ENDPOINTS) 🔥🔥🔥");
 
 const path = require("path");
 const fs = require("fs");
@@ -55,11 +55,11 @@ function getISOWeek(date) {
   return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
 
-// Excel date parsing (formulas are not evaluated by xlsx -> import builds dates lückenlos)
+// Excel date parsing (Formeln werden von xlsx nicht berechnet => Import baut Datumsspalten lückenlos)
 function parseExcelDate(cell) {
   if (!cell) return null;
 
-  // Excel serial
+  // Excel serial number
   if (typeof cell.v === "number" && isFinite(cell.v)) {
     const epoch = new Date(Date.UTC(1899, 11, 30));
     return new Date(epoch.getTime() + cell.v * 86400000);
@@ -74,6 +74,7 @@ function parseExcelDate(cell) {
   m = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
 
+  // DD.MM. (ohne Jahr) -> heuristisch Jahr
   m = t.match(/(\d{1,2})\.(\d{1,2})\./);
   if (m) {
     const today = new Date();
@@ -109,28 +110,38 @@ function normName(name) {
 // DB SELF-HEAL (WICHTIG!)
 // ======================================================
 async function ensureTimeEntriesSchema() {
-  // Minimal table
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS time_entries (
-      id BIGSERIAL PRIMARY KEY
-    );
-  `);
+  try {
+    // ensure table exists (minimal)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS public.time_entries (
+        id BIGSERIAL PRIMARY KEY
+      );
+    `);
 
-  // Columns (safe upgrades)
-  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS employee_id TEXT;`);
-  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS work_date DATE;`);
-  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS customer_po TEXT;`);
-  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS internal_po TEXT;`);
-  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS project_short TEXT;`);
-  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS requester_name TEXT;`);
-  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS start_ts TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS end_ts TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS activity TEXT;`);
+    const cols = [
+      ["employee_id", "TEXT"],
+      ["work_date", "DATE"],
+      ["customer_po", "TEXT"],
+      ["internal_po", "TEXT"],
+      ["project_short", "TEXT"],
+      ["requester_name", "TEXT"],
+      ["start_ts", "TIMESTAMPTZ"],
+      ["end_ts", "TIMESTAMPTZ"],
+      ["activity", "TEXT"],
+    ];
+
+    for (const [col, typ] of cols) {
+      await pool.query(`ALTER TABLE public.time_entries ADD COLUMN IF NOT EXISTS ${col} ${typ};`);
+    }
+  } catch (e) {
+    console.error("❌ ensureTimeEntriesSchema FAILED:", e);
+    throw e;
+  }
 }
 
 async function ensureBreakEntriesSchema() {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS break_entries (
+    CREATE TABLE IF NOT EXISTS public.break_entries (
       id BIGSERIAL PRIMARY KEY,
       employee_id TEXT NOT NULL,
       start_ts TIMESTAMPTZ NOT NULL,
@@ -146,7 +157,7 @@ async function migrate() {
   console.log("🔧 DB migrate start");
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS employees (
+    CREATE TABLE IF NOT EXISTS public.employees (
       employee_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT,
@@ -154,10 +165,10 @@ async function migrate() {
     );
   `);
 
-  // staffplan ALWAYS fresh (per your design)
-  await pool.query(`DROP TABLE IF EXISTS staffplan CASCADE`);
+  // staffplan IMMER frisch
+  await pool.query(`DROP TABLE IF EXISTS public.staffplan CASCADE`);
   await pool.query(`
-    CREATE TABLE staffplan (
+    CREATE TABLE public.staffplan (
       id BIGSERIAL PRIMARY KEY,
       employee_id TEXT NOT NULL,
       employee_name TEXT NOT NULL,
@@ -172,7 +183,7 @@ async function migrate() {
     );
   `);
 
-  // upgrade persistent tables
+  // persistent tables -> upgrade
   await ensureTimeEntriesSchema();
   await ensureBreakEntriesSchema();
 
@@ -211,18 +222,19 @@ app.post("/api/logo", upload.single("file"), (req, res) => {
 // EMPLOYEES
 // ======================================================
 app.get("/api/employees", async (req, res) => {
-  const r = await pool.query(`SELECT * FROM employees ORDER BY name`);
+  const r = await pool.query(`SELECT * FROM public.employees ORDER BY name`);
   res.json(r.rows);
 });
 
 // ======================================================
-// EMPLOYEE – HEUTIGE PROJEKTE (WICHTIG: vor /:id)
+// EMPLOYEE – HEUTIGE PROJEKTE (WICHTIG: VOR /:id)
 // ======================================================
 app.get("/api/employee/today", async (req, res) => {
   try {
     const employeeId = String(req.query.employee_id || "").trim();
     if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
+    // optional: ?date=YYYY-MM-DD
     const dateOverride = String(req.query.date || "").trim();
     const today = dateOverride || new Date().toISOString().slice(0, 10);
 
@@ -237,9 +249,9 @@ app.get("/api/employee/today", async (req, res) => {
         customer_po,
         project_short,
         planned_hours
-      FROM staffplan
+      FROM public.staffplan
       WHERE employee_id = $1
-        AND work_date = $2
+        AND work_date = $2::date
       ORDER BY customer_po, internal_po
       `,
       [employeeId, today]
@@ -257,7 +269,7 @@ app.get("/api/employee/today", async (req, res) => {
 // ======================================================
 app.get("/api/employee/:id", async (req, res) => {
   const r = await pool.query(
-    `SELECT employee_id,name,email,language FROM employees WHERE employee_id=$1`,
+    `SELECT employee_id,name,email,language FROM public.employees WHERE employee_id=$1`,
     [req.params.id]
   );
   if (!r.rowCount) return res.status(404).json({ ok: false });
@@ -281,10 +293,10 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const ref = ws["!ref"] || "A1:A1";
     const range = XLSX.utils.decode_range(ref);
 
-    const startCol = 11;      // ab Spalte L
-    const endCol = range.e.c; // bis letzte benutzte Spalte
+    const startCol = 11;      // L
+    const endCol = range.e.c; // last used column
 
-    // 1) header row: row with most parsable dates
+    // 1) find header row with most parseable dates
     let headerRow = null;
     let bestCnt = 0;
     for (let r = 0; r <= Math.min(range.e.r, 20); r++) {
@@ -303,7 +315,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
     }
 
-    // 2) first real date in header row
+    // 2) first real date col
     let firstDateCol = null;
     let baseDate = null;
     for (let c = startCol; c <= endCol; c++) {
@@ -315,12 +327,11 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         break;
       }
     }
-
     if (!baseDate) {
       return res.json({ ok: false, error: "Header gefunden, aber kein erstes Datum parsebar" });
     }
 
-    // 3) build dates for ALL columns (lückenlos, auch wenn Formeln keine cached Values liefern)
+    // 3) build dates lückenlos across columns
     const dates = [];
     let currentBaseDate = baseDate;
     let currentBaseCol = firstDateCol;
@@ -348,17 +359,17 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       "count:", dates.length
     );
 
-    // 4) clear staffplan
-    await pool.query("DELETE FROM staffplan");
+    await pool.query("DELETE FROM public.staffplan");
 
     let imported = 0;
 
-    // 5) scan employees rows (your format: start r=5, step 2)
     for (let r = 5; r < 20000; r += 2) {
-      const requesterCell = ws[XLSX.utils.encode_cell({ r, c: 8 })]; // I
+      // requester (I)
+      const requesterCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
       const requesterName = requesterCell?.v ? String(requesterCell.v).trim() : null;
 
-      const employeeCell = ws[XLSX.utils.encode_cell({ r, c: 10 })]; // K
+      // employee (K)
+      const employeeCell = ws[XLSX.utils.encode_cell({ r, c: 10 })];
       const employeeNameRaw = employeeCell?.v ? String(employeeCell.v).trim() : null;
       if (!employeeNameRaw) continue;
 
@@ -368,7 +379,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       const emp = await pool.query(
         `
         SELECT employee_id, name
-        FROM employees
+        FROM public.employees
         WHERE lower(regexp_replace(regexp_replace(trim(name), ',', '', 'g'), '\\s+', ' ', 'g')) = ANY($1)
         LIMIT 1
         `,
@@ -385,11 +396,12 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         employeeName = employeeNameSwapped || employeeNameRaw;
         employeeId = "AUTO" + r;
         await pool.query(
-          `INSERT INTO employees (employee_id,name) VALUES ($1,$2)`,
+          `INSERT INTO public.employees (employee_id,name) VALUES ($1,$2)`,
           [employeeId, employeeName]
         );
       }
 
+      // other base columns (wie bisher)
       const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
       const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
       const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
@@ -404,10 +416,10 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
         await pool.query(
           `
-          INSERT INTO staffplan
+          INSERT INTO public.staffplan
             (employee_id,employee_name,requester_name,work_date,calendar_week,
              customer,internal_po,customer_po,project_short,planned_hours)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          VALUES ($1,$2,$3,$4::date,$5,$6,$7,$8,$9,$10)
           `,
           [employeeId, employeeName, requesterName, d.iso, d.cw, customer, internalPo, customerPo, proj, planned]
         );
@@ -439,11 +451,16 @@ app.get("/api/time/current/:employee_id", async (req, res) => {
 
     const employeeId = String(req.params.employee_id || "").trim();
     const r = await pool.query(
-      `SELECT start_ts FROM time_entries
-       WHERE employee_id=$1 AND end_ts IS NULL AND start_ts IS NOT NULL
-       ORDER BY start_ts DESC LIMIT 1`,
+      `
+      SELECT start_ts
+      FROM public.time_entries
+      WHERE employee_id=$1 AND end_ts IS NULL AND start_ts IS NOT NULL
+      ORDER BY start_ts DESC
+      LIMIT 1
+      `,
       [employeeId]
     );
+
     if (!r.rowCount) return res.json({ ok: false });
     return res.json({ ok: true, start_time: r.rows[0].start_ts });
   } catch (e) {
@@ -468,19 +485,27 @@ app.post("/api/time/start", async (req, res) => {
     const requesterName = req.body.requester_name ? String(req.body.requester_name).trim() : null;
 
     const open = await pool.query(
-      `SELECT id, start_ts FROM time_entries
-       WHERE employee_id=$1 AND end_ts IS NULL AND start_ts IS NOT NULL
-       ORDER BY start_ts DESC LIMIT 1`,
+      `
+      SELECT id, start_ts
+      FROM public.time_entries
+      WHERE employee_id=$1 AND end_ts IS NULL AND start_ts IS NOT NULL
+      ORDER BY start_ts DESC
+      LIMIT 1
+      `,
       [employeeId]
     );
-    if (open.rowCount) return res.json({ ok: true, start_time: open.rows[0].start_ts });
+
+    if (open.rowCount) {
+      return res.json({ ok: true, start_time: open.rows[0].start_ts });
+    }
 
     const startTs = new Date();
     const workDate = toIsoDate(new Date());
 
     const ins = await pool.query(
       `
-      INSERT INTO time_entries (employee_id, work_date, customer_po, internal_po, project_short, requester_name, start_ts)
+      INSERT INTO public.time_entries
+        (employee_id, work_date, customer_po, internal_po, project_short, requester_name, start_ts)
       VALUES ($1, $2::date, $3, $4, $5, $6, $7)
       RETURNING start_ts
       `,
@@ -505,13 +530,13 @@ app.post("/api/break/start", async (req, res) => {
     if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
     const open = await pool.query(
-      `SELECT id FROM break_entries WHERE employee_id=$1 AND end_ts IS NULL ORDER BY start_ts DESC LIMIT 1`,
+      `SELECT id FROM public.break_entries WHERE employee_id=$1 AND end_ts IS NULL ORDER BY start_ts DESC LIMIT 1`,
       [employeeId]
     );
     if (open.rowCount) return res.json({ ok: true });
 
     await pool.query(
-      `INSERT INTO break_entries (employee_id, start_ts) VALUES ($1, $2)`,
+      `INSERT INTO public.break_entries (employee_id, start_ts) VALUES ($1, $2)`,
       [employeeId, new Date()]
     );
 
@@ -533,7 +558,7 @@ app.post("/api/break/end", async (req, res) => {
     if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
     const open = await pool.query(
-      `SELECT id, start_ts FROM break_entries WHERE employee_id=$1 AND end_ts IS NULL ORDER BY start_ts DESC LIMIT 1`,
+      `SELECT id, start_ts FROM public.break_entries WHERE employee_id=$1 AND end_ts IS NULL ORDER BY start_ts DESC LIMIT 1`,
       [employeeId]
     );
     if (!open.rowCount) return res.status(400).json({ ok: false, error: "Keine laufende Pause" });
@@ -541,7 +566,7 @@ app.post("/api/break/end", async (req, res) => {
     const endTs = new Date();
     const startTs = new Date(open.rows[0].start_ts);
 
-    await pool.query(`UPDATE break_entries SET end_ts=$1 WHERE id=$2`, [endTs, open.rows[0].id]);
+    await pool.query(`UPDATE public.break_entries SET end_ts=$1 WHERE id=$2`, [endTs, open.rows[0].id]);
 
     const minutes = Math.max(0, Math.round((endTs.getTime() - startTs.getTime()) / 60000));
     res.json({ ok: true, minutes });
@@ -572,7 +597,7 @@ app.post("/api/time/end", async (req, res) => {
     const open = await pool.query(
       `
       SELECT id, start_ts
-      FROM time_entries
+      FROM public.time_entries
       WHERE employee_id=$1 AND end_ts IS NULL AND start_ts IS NOT NULL
       ORDER BY start_ts DESC
       LIMIT 1
@@ -585,15 +610,15 @@ app.post("/api/time/end", async (req, res) => {
     const id = open.rows[0].id;
     const startTs = new Date(open.rows[0].start_ts);
 
-    // close open breaks automatically at end time
+    // close open breaks
     await pool.query(
-      `UPDATE break_entries SET end_ts=$1 WHERE employee_id=$2 AND end_ts IS NULL`,
+      `UPDATE public.break_entries SET end_ts=$1 WHERE employee_id=$2 AND end_ts IS NULL`,
       [endTs, employeeId]
     );
 
     await pool.query(
       `
-      UPDATE time_entries
+      UPDATE public.time_entries
       SET end_ts = $1,
           activity = $2,
           customer_po = COALESCE($3, customer_po),
@@ -610,7 +635,7 @@ app.post("/api/time/end", async (req, res) => {
     const br = await pool.query(
       `
       SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_ts - start_ts)) * 1000), 0)::bigint AS ms
-      FROM break_entries
+      FROM public.break_entries
       WHERE employee_id = $1
         AND start_ts >= $2
         AND end_ts <= $3
@@ -646,7 +671,7 @@ app.get("/api/debug/time-entries", async (req, res) => {
     const r = await pool.query(
       `
       SELECT id, work_date, customer_po, internal_po, project_short, requester_name, start_ts, end_ts, activity
-      FROM time_entries
+      FROM public.time_entries
       WHERE employee_id = $1
       ORDER BY start_ts DESC NULLS LAST, id DESC
       LIMIT 50
@@ -671,7 +696,7 @@ app.get("/api/debug/staffplan-on-date", async (req, res) => {
   const r = await pool.query(
     `
     SELECT employee_id, employee_name, requester_name, customer_po, internal_po, project_short, planned_hours
-    FROM staffplan
+    FROM public.staffplan
     WHERE work_date = $1::date
     ORDER BY employee_name, customer_po, internal_po
     LIMIT 200
@@ -680,6 +705,38 @@ app.get("/api/debug/staffplan-on-date", async (req, res) => {
   );
 
   res.json({ ok: true, date, rows: r.rows });
+});
+
+// ======================================================
+// DEBUG: columns of time_entries + repair trigger
+// ======================================================
+app.get("/api/debug/time-entries-columns", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT column_name, data_type
+      FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='time_entries'
+      ORDER BY ordinal_position
+    `);
+    res.json({ ok: true, columns: r.rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/debug/repair-time-entries", async (req, res) => {
+  try {
+    await ensureTimeEntriesSchema();
+    const r = await pool.query(`
+      SELECT column_name, data_type
+      FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='time_entries'
+      ORDER BY ordinal_position
+    `);
+    res.json({ ok: true, repaired: true, columns: r.rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, repaired: false, error: e.message });
+  }
 });
 
 // ======================================================
