@@ -253,8 +253,14 @@ app.get("/api/employee/:id", async (req, res) => {
   res.json({ ok: true, employee: r.rows[0] });
 });
 // ======================================================
-// STAFFPLAN IMPORT (robust: Header-Zeile finden + Datum pro Spalte lesen)
+// STAFFPLAN IMPORT (robust: Header-Zeile finden + Datum pro Spalte lückenlos bauen)
 // ======================================================
+
+// ✅ HeaderRow muss vorher geprüft werden (sonst später Chaos)
+if (headerRow === null || bestCnt < 3) {
+  return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
+}
+
 // --- 2) Dates lückenlos pro Spalte bauen (Formel-Zellen ohne cached value abfangen) ---
 let firstDateCol = null;
 let baseDate = null;
@@ -274,6 +280,7 @@ if (!baseDate) {
   return res.json({ ok: false, error: "Header-Zeile gefunden, aber kein erstes Datum parsebar" });
 }
 
+// ✅ NUR EINMAL dates deklarieren:
 const dates = [];
 let currentBaseDate = baseDate;
 let currentBaseCol = firstDateCol;
@@ -300,6 +307,10 @@ for (let c = firstDateCol; c <= endCol; c++) {
   });
 }
 
+if (!dates.length) {
+  return res.json({ ok: false, error: "Datumszeile gefunden, aber keine Datumsspalten erzeugt" });
+}
+
 console.log(
   "📅 HeaderRow:", headerRow + 1,
   "First:", dates[0]?.iso,
@@ -307,101 +318,62 @@ console.log(
   "count:", dates.length
 );
 
-    if (headerRow === null || bestCnt < 3) {
-      return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
-    }
+// --- 3) staffplan leeren ---
+await pool.query("DELETE FROM staffplan");
 
-    // --- 2) Dates pro Spalte aus Header lesen ---
-    const dates = [];
-    for (let c = startCol; c <= endCol; c++) {
-      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
-      const d = parseExcelDate(cell);
-      if (!d) continue;
+// ab hier läuft DEIN bestehender Code weiter:
+let imported = 0;
 
-      dates.push({
-        col: c,
-        iso: toIsoDate(d),
-        cw: "CW" + getISOWeek(d),
-      });
-    }
+// --- 4) wie bisher: Mitarbeiter in Zeile r=5, Schritt 2, Name in Spalte I (c=8) ---
+for (let r = 5; r < 20000; r += 2) {
+  const nameCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
+  if (!nameCell?.v) continue;
+  const employeeName = String(nameCell.v).trim();
 
-    if (!dates.length) {
-      return res.json({ ok: false, error: "Datumszeile gefunden, aber keine Datumsspalten parsebar" });
-    }
+  // Mitarbeiter suchen / anlegen
+  let emp = await pool.query(
+    `SELECT employee_id FROM employees WHERE name=$1`,
+    [employeeName]
+  );
 
-    console.log(
-      "📅 HeaderRow:", headerRow + 1,
-      "Dates:", dates[0].iso, "…", dates[dates.length - 1].iso,
-      "count:", dates.length
+  let employeeId;
+  if (emp.rowCount === 0) {
+    employeeId = "AUTO" + r;
+    await pool.query(
+      `INSERT INTO employees (employee_id,name) VALUES ($1,$2)`,
+      [employeeId, employeeName]
+    );
+  } else {
+    employeeId = emp.rows[0].employee_id;
+  }
+
+  const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
+  const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
+  const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
+
+  for (const d of dates) {
+    const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
+
+    const planRaw = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v ?? null;
+    const plan = (typeof planRaw === "number" && isFinite(planRaw)) ? planRaw : null;
+
+    if (!proj && plan === null) continue;
+
+    await pool.query(
+      `
+      INSERT INTO staffplan
+        (employee_id,employee_name,work_date,calendar_week,
+         customer,internal_po,customer_po,project_short,planned_hours)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `,
+      [employeeId, employeeName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
     );
 
-    // --- 3) staffplan leeren ---
-    await pool.query("DELETE FROM staffplan");
-
-    let imported = 0;
-
-    // --- 4) wie bisher: Mitarbeiter in Zeile r=5, Schritt 2, Name in Spalte I (c=8) ---
-    for (let r = 5; r < 20000; r += 2) {
-      const nameCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
-      if (!nameCell?.v) continue;
-      const employeeName = String(nameCell.v).trim();
-
-      // Mitarbeiter suchen / anlegen
-      let emp = await pool.query(
-        `SELECT employee_id FROM employees WHERE name=$1`,
-        [employeeName]
-      );
-
-      let employeeId;
-      if (emp.rowCount === 0) {
-        employeeId = "AUTO" + r;
-        await pool.query(
-          `INSERT INTO employees (employee_id,name) VALUES ($1,$2)`,
-          [employeeId, employeeName]
-        );
-      } else {
-        employeeId = emp.rows[0].employee_id;
-      }
-
-      const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
-      const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
-      const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
-
-      for (const d of dates) {
-        const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
-
-        const planRaw = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v ?? null;
-        const plan = (typeof planRaw === "number" && isFinite(planRaw)) ? planRaw : null;
-
-        if (!proj && plan === null) continue;
-
-        await pool.query(
-          `
-          INSERT INTO staffplan
-            (employee_id,employee_name,work_date,calendar_week,
-             customer,internal_po,customer_po,project_short,planned_hours)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-          `,
-          [employeeId, employeeName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
-        );
-
-        imported++;
-      }
-    }
-
-    return res.json({
-      ok: true,
-      imported,
-      header_row: headerRow + 1,
-      date_from: dates[0].iso,
-      date_to: dates[dates.length - 1].iso,
-      date_cols: dates.length,
-    });
-  } catch (e) {
-    console.error("STAFFPLAN IMPORT ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
+    imported++;
   }
-});
+}
+
+// return res.json(...) bleibt bei dir danach wie gehabt
 
 // ======================================================
 // DEBUG: staffplan-check (TEMPORARY)
