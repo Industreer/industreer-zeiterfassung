@@ -1,13 +1,15 @@
-console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY (ROUTING-FIX + IMPORT-FIX + REQUESTER) 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS VERSION 2025-DEBUG-EMPLOYEE-TODAY (ROUTING-FIX + IMPORT-FIX + REQUESTER + EMPLOYEE=K) 🔥🔥🔥");
 /**
  * backend/server.js
  * CLEAN STABLE VERSION – 2025-01
  *
  * Fix:
  * - /api/employee/today steht VOR /api/employee/:id (Routing-Kollision behoben)
- * - Staffplan-Import: Headerrow automatisch finden + Datum pro Spalte lückenlos bauen (Formeln wie =AL4+1)
+ * - Staffplan-Import: Headerrow automatisch finden + Datum pro Spalte lückenlos bauen
+ *   (wichtig bei Formeln wie =AL4+1, xlsx berechnet Formeln nicht)
  * - planned_hours wird beim Import nur als Zahl gespeichert (verhindert NUMERIC-Fehler)
  * - requester_name (Ansprechpartner, z.B. Hoffmann) wird extra gespeichert (für Stundenzettel)
+ * - Mitarbeitername steht fix in Spalte K (Index 10): z.B. "Irrgang, Jens"
  */
 
 const path = require("path");
@@ -47,7 +49,7 @@ const pool = new Pool({
 });
 
 // ======================================================
-// MIGRATE (EINMALIG & SAUBER)
+// MIGRATE
 // ======================================================
 async function migrate() {
   console.log("🔧 DB migrate start");
@@ -222,11 +224,9 @@ app.get("/api/employees", async (req, res) => {
 app.get("/api/employee/today", async (req, res) => {
   try {
     const employeeId = String(req.query.employee_id || "").trim();
-    if (!employeeId) {
-      return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-    }
+    if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
-    // optionaler Override zum Testen: ?date=YYYY-MM-DD
+    // optional: ?date=YYYY-MM-DD
     const dateOverride = String(req.query.date || "").trim();
     const today = dateOverride || new Date().toISOString().slice(0, 10);
 
@@ -269,9 +269,10 @@ app.get("/api/employee/:id", async (req, res) => {
 });
 
 // ======================================================
-// STAFFPLAN IMPORT (robust: Headerrow finden + Datum lückenlos bauen)
-// WICHTIG: requester_name (c=8) ist Ansprechpartner, NICHT Mitarbeitername!
-// Mitarbeitername wird aus benachbarten Spalten gesucht und gegen employees gematcht.
+// STAFFPLAN IMPORT
+// WICHTIG:
+// - requester_name = Ansprechpartner in Spalte I (Index 8)
+// - employee_name  = Mitarbeiter in Spalte K (Index 10) (z.B. "Irrgang, Jens")
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
@@ -279,6 +280,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) return res.status(400).json({ ok: false, error: "Kein Worksheet gefunden" });
 
     const ref = ws["!ref"] || "A1:A1";
     const range = XLSX.utils.decode_range(ref);
@@ -286,7 +288,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const startCol = 11;      // ab Spalte L
     const endCol = range.e.c; // bis letzte benutzte Spalte
 
-    // 1) Header-Zeile finden: Zeile (oben), die am meisten Datumszellen hat
+    // 1) Headerrow finden: Zeile (oben), die am meisten Datumszellen hat
     let headerRow = null;
     let bestCnt = 0;
 
@@ -307,7 +309,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..21)" });
     }
 
-    // 2) Erstes parsebares Datum suchen (wichtig bei Formeln wie =AL4+1)
+    // 2) erstes parsebares Datum suchen (Formeln haben oft keinen cached value)
     let firstDateCol = null;
     let baseDate = null;
 
@@ -362,27 +364,18 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
     let imported = 0;
 
-    // 5) Mitarbeiterzeilen
+    // 5) Datenzeilen
     for (let r = 5; r < 20000; r += 2) {
-      // Ansprechpartner/Requester in Spalte I (c=8)
+      // Requester (Ansprechpartner) Spalte I (Index 8)
       const requesterCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
       const requesterName = requesterCell?.v ? String(requesterCell.v).trim() : null;
 
-      // Mitarbeitername: wir suchen in benachbarten Spalten (anpassbar)
-      const candidateCols = [7, 9, 10, 11, 12, 8]; // 8 am Ende, aber wird gefiltert wenn gleich requester
-      let employeeNameRaw = null;
-
-      for (const cc of candidateCols) {
-        const cell = ws[XLSX.utils.encode_cell({ r, c: cc })];
-        const v = cell?.v ? String(cell.v).trim() : "";
-        if (!v) continue;
-        if (requesterName && v === requesterName) continue;
-        employeeNameRaw = v;
-        break;
-      }
-
+      // Mitarbeiter Spalte K (Index 10)
+      const employeeCell = ws[XLSX.utils.encode_cell({ r, c: 10 })];
+      const employeeNameRaw = employeeCell?.v ? String(employeeCell.v).trim() : null;
       if (!employeeNameRaw) continue;
 
+      // "Irrgang, Jens" -> "Jens Irrgang" (für employees-Match)
       const employeeNameSwapped = swapCommaName(employeeNameRaw);
       const candidates = Array.from(new Set([
         normName(employeeNameRaw),
@@ -390,7 +383,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       ])).filter(Boolean);
 
       // Mitarbeiter matchen gegen employees (normalisiert)
-      let emp = await pool.query(
+      const emp = await pool.query(
         `
         SELECT employee_id, name
         FROM employees
@@ -405,7 +398,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
       if (emp.rowCount > 0) {
         employeeId = emp.rows[0].employee_id;
-        employeeName = emp.rows[0].name;
+        employeeName = emp.rows[0].name; // sauberer Name aus DB (z.B. "Jens Irrgang")
       } else {
         employeeName = employeeNameSwapped || employeeNameRaw;
         employeeId = "AUTO" + r;
@@ -456,15 +449,13 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 });
 
 // ======================================================
-// DEBUG: staffplan-check (TEMPORARY)
+// DEBUG: staffplan-check
 // ======================================================
 app.get("/api/debug/staffplan-check", async (req, res) => {
   const employeeId = String(req.query.employee_id || "").trim();
   const date = String(req.query.date || "").trim(); // YYYY-MM-DD
 
-  if (!date) {
-    return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
-  }
+  if (!date) return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
 
   const totalOnDate = await pool.query(
     `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE work_date = $1::date`,
@@ -481,10 +472,7 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
       [date, employeeId]
     );
 
-    const emp = await pool.query(
-      `SELECT name FROM employees WHERE employee_id = $1`,
-      [employeeId]
-    );
+    const emp = await pool.query(`SELECT name FROM employees WHERE employee_id = $1`, [employeeId]);
     employeeName = emp.rowCount ? emp.rows[0].name : null;
 
     if (employeeName) {
@@ -513,7 +501,7 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
 });
 
 // ======================================================
-// DEBUG: staffplan-on-date (zeigt Zeilen für ein Datum)
+// DEBUG: staffplan-on-date
 // ======================================================
 app.get("/api/debug/staffplan-on-date", async (req, res) => {
   const date = String(req.query.date || "").trim();
