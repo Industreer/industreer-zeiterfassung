@@ -213,47 +213,96 @@ app.get("/api/employee/today", async (req, res) => {
     });
   }
 });
+
 // ======================================================
-// STAFFPLAN IMPORT
+// STAFFPLAN IMPORT (ROBUST – HEUTE AUS EXCEL ERKENNEN)
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "Keine Datei" });
+    }
 
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    let startCol = null;
-    let baseDate = null;
+    // ----------------------------
+    // 1) HEUTIGES DATUM DEFINIEREN
+    // ----------------------------
+    const todayISO = new Date()
+      .toLocaleDateString("sv-SE"); // YYYY-MM-DD, lokal stabil
+
+    // ----------------------------
+    // 2) SPALTE MIT HEUTIGEM DATUM SUCHEN (ZEILE 4)
+    // ----------------------------
+    let todayCol = null;
+    let fallbackFirstDateCol = null;
+    let fallbackFirstDate = null;
+
     for (let c = 11; c < 300; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r: 3, c })];
       const d = parseExcelDate(cell);
-      if (d) {
-        startCol = c;
-        baseDate = d;
+      if (!d) continue;
+
+      const iso = d.toISOString().slice(0, 10);
+
+      if (!fallbackFirstDateCol) {
+        fallbackFirstDateCol = c;
+        fallbackFirstDate = d;
+      }
+
+      if (iso === todayISO) {
+        todayCol = c;
         break;
       }
     }
-    if (!baseDate) {
-      return res.json({ ok: false, error: "Kein Datum gefunden (ab L4)" });
+
+    if (todayCol === null) {
+      if (!fallbackFirstDateCol) {
+        return res.json({
+          ok: false,
+          error: "Kein Datum in Zeile 4 gefunden"
+        });
+      }
+      console.warn("⚠️ Heute nicht gefunden – Fallback auf erstes Datum");
+      todayCol = fallbackFirstDateCol;
     }
 
+    // ----------------------------
+    // 3) DATUMS-SPALTEN AUFBAUEN (± ZEITFENSTER)
+    // ----------------------------
     const dates = [];
-    for (let i = 0; i < 300; i++) {
-      const d = new Date(baseDate);
-      d.setDate(baseDate.getDate() + i);
-      dates.push({ col: startCol + i, iso: toIsoDate(d), cw: "CW" + getISOWeek(d) });
+    for (let i = -30; i <= 60; i++) {
+      const col = todayCol + i;
+      if (col < 0) continue;
+
+      const d = new Date();
+      d.setDate(d.getDate() + i);
+
+      dates.push({
+        col,
+        iso: d.toISOString().slice(0, 10),
+        cw: "CW" + getISOWeek(d)
+      });
     }
 
+    // ----------------------------
+    // 4) STAFFPLAN LEEREN
+    // ----------------------------
     await pool.query("DELETE FROM staffplan");
 
     let imported = 0;
 
+    // ----------------------------
+    // 5) ZEILEN DURCHLAUFEN (MITARBEITER)
+    // ----------------------------
     for (let r = 5; r < 20000; r += 2) {
       const nameCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
       if (!nameCell?.v) continue;
+
       const employeeName = String(nameCell.v).trim();
 
+      // Mitarbeiter suchen oder anlegen
       let emp = await pool.query(
         `SELECT employee_id FROM employees WHERE name=$1`,
         [employeeName]
@@ -274,32 +323,54 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
       const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
 
+      // ----------------------------
+      // 6) TAGES-SPALTEN IMPORTIEREN
+      // ----------------------------
       for (const d of dates) {
         const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
         const plan = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v || null;
+
         if (!proj && !plan) continue;
 
         await pool.query(
           `
           INSERT INTO staffplan
-            (employee_id,employee_name,work_date,calendar_week,
-             customer,internal_po,customer_po,project_short,planned_hours)
+            (employee_id, employee_name, work_date, calendar_week,
+             customer, internal_po, customer_po, project_short, planned_hours)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
           `,
-          [employeeId, employeeName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
+          [
+            employeeId,
+            employeeName,
+            d.iso,
+            d.cw,
+            customer,
+            internalPo,
+            customerPo,
+            proj,
+            plan
+          ]
         );
 
         imported++;
       }
     }
 
-    res.json({ ok: true, imported });
+    // ----------------------------
+    // 7) FERTIG
+    // ----------------------------
+    res.json({
+      ok: true,
+      imported,
+      todayISO
+    });
 
   } catch (e) {
     console.error("STAFFPLAN IMPORT ERROR:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // DEBUG: STAFFPLAN DATES (TEMPORARY)
 // ======================================================
