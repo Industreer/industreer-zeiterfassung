@@ -308,6 +308,62 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// DEBUG: staffplan-check (TEMPORARY)
+// ======================================================
+app.get("/api/debug/staffplan-check", async (req, res) => {
+  const employeeId = String(req.query.employee_id || "").trim();
+  const date = String(req.query.date || "").trim(); // YYYY-MM-DD
+
+  if (!date) {
+    return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
+  }
+
+  const totalOnDate = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE work_date = $1::date`,
+    [date]
+  );
+
+  let forEmployee = null;
+  let employeeName = null;
+  let byName = null;
+
+  if (employeeId) {
+    forEmployee = await pool.query(
+      `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE work_date = $1::date AND employee_id = $2`,
+      [date, employeeId]
+    );
+
+    const emp = await pool.query(
+      `SELECT name FROM employees WHERE employee_id = $1`,
+      [employeeId]
+    );
+    employeeName = emp.rowCount ? emp.rows[0].name : null;
+
+    if (employeeName) {
+      byName = await pool.query(
+        `
+        SELECT COUNT(*)::int AS cnt
+        FROM staffplan
+        WHERE work_date = $1::date
+          AND lower(regexp_replace(trim(employee_name), '\\s+', ' ', 'g'))
+              = lower(regexp_replace(trim($2), '\\s+', ' ', 'g'))
+        `,
+        [date, employeeName]
+      );
+    }
+  }
+
+  res.json({
+    ok: true,
+    date,
+    total_on_date: totalOnDate.rows[0].cnt,
+    employee_id: employeeId || null,
+    staffplan_for_employee_id: forEmployee ? forEmployee.rows[0].cnt : null,
+    employee_name_from_employees: employeeName,
+    staffplan_for_employee_name: byName ? byName.rows[0].cnt : null
+  });
+});
 
 // ======================================================
 // START
