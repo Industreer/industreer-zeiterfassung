@@ -328,7 +328,9 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       // ----------------------------
       for (const d of dates) {
         const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
-        const plan = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v || null;
+       let planRaw = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v ?? null;
+let plan = (typeof planRaw === "number" && !isNaN(planRaw)) ? planRaw : null;
+
 
         if (!proj && !plan) continue;
 
