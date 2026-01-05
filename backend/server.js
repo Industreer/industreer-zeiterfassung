@@ -1,4 +1,4 @@
-console.log("🔥🔥🔥 SERVER.JS FULL FINAL + SAFE IMPORT + SCAN-DATES + UPSERT + EXTEND TO 2025-12-27 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX 🔥🔥🔥");
 
 const path = require("path");
 const fs = require("fs");
@@ -265,7 +265,7 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/api/debug/build", (req, res) => {
   res.json({
     ok: true,
-    build: "server.js FULL FINAL + SAFE IMPORT + SCAN-DATES + UPSERT + EXTEND TO 2025-12-27",
+    build: "server.js FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX",
     node: process.version,
     now: new Date().toISOString(),
   });
@@ -304,7 +304,7 @@ app.get("/api/employee/:id", async (req, res) => {
 });
 
 // ======================================================
-// EMPLOYEE – HEUTIGE PROJEKTE (SMART MATCH)
+// EMPLOYEE TODAY
 // ======================================================
 app.get("/api/employee/today", async (req, res) => {
   try {
@@ -329,7 +329,7 @@ app.get("/api/employee/today", async (req, res) => {
 });
 
 // ======================================================
-// DEBUG: Scan Dates (ohne DB-Write)
+// DEBUG: scan-dates
 // ======================================================
 app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
   try {
@@ -344,109 +344,7 @@ app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
     let bestEndCol = null;
 
     for (let rr = 0; rr <= 25; rr++) {
-      let cnt = 0;
-      let first = null;
-      let last = null;
-      for (let c = 0; c <= 400; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r: rr, c })];
-        const d = parseExcelDate(cell);
-        if (d) {
-          cnt++;
-          if (first === null) first = c;
-          last = c;
-        }
-      }
-      if (cnt > bestCnt) {
-        bestCnt = cnt;
-        headerRow = rr;
-        bestStartCol = first;
-        bestEndCol = last;
-      }
-    }
-
-    if (headerRow === null || bestCnt < 3 || bestStartCol === null || bestEndCol === null) {
-      return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden", bestCnt, headerRow, bestStartCol, bestEndCol });
-    }
-
-    const startCol = bestStartCol;
-    const endCol = bestEndCol;
-
-    let firstDateCol = null;
-    let baseDate = null;
-
-    for (let c = startCol; c <= endCol; c++) {
-      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
-      const d = parseExcelDate(cell);
-      if (d) {
-        firstDateCol = c;
-        baseDate = d;
-        break;
-      }
-    }
-
-    if (!baseDate || firstDateCol === null) {
-      return res.json({ ok: false, error: "Header-Zeile gefunden, aber kein erstes Datum parsebar" });
-    }
-
-    const dates = [];
-    let currentBaseDate = baseDate;
-    let currentBaseCol = firstDateCol;
-
-    for (let c = firstDateCol; c <= endCol; c++) {
-      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
-      const parsed = parseExcelDate(cell);
-
-      if (parsed) {
-        currentBaseDate = parsed;
-        currentBaseCol = c;
-      }
-
-      const d = parsed ? parsed : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
-      dates.push({ col: c, iso: toIsoDate(d), header_raw: cell?.w ?? cell?.v ?? null, parsed_from_header: !!parsed });
-    }
-
-    return res.json({
-      ok: true,
-      sheet: wb.SheetNames[0],
-      header_row_1based: headerRow + 1,
-      start_col: startCol,
-      end_col: endCol,
-      date_cols: dates.length,
-      date_from: dates[0]?.iso,
-      date_to: dates[dates.length - 1]?.iso,
-      tail: dates.slice(-15),
-    });
-  } catch (e) {
-    console.error("SCAN DATES ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// ======================================================
-// DEBUG: Scan Values für ein Ziel-Datum (ohne DB-Write)
-// POST /api/debug/scan-values?target=2025-12-27
-// Body: FormData file=<xlsx>
-// ======================================================
-app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
-  try {
-    const targetIso = String(req.query.target || "2025-12-27").trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetIso)) {
-      return res.status(400).json({ ok: false, error: "target muss YYYY-MM-DD sein" });
-    }
-    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
-
-    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-
-    // HeaderRow finden wie Import
-    let headerRow = null;
-    let bestCnt = 0;
-    let bestStartCol = null;
-    let bestEndCol = null;
-
-    for (let rr = 0; rr <= 25; rr++) {
-      let cnt = 0;
-      let first = null;
-      let last = null;
+      let cnt = 0, first = null, last = null;
       for (let c = 0; c <= 450; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r: rr, c })];
         const d = parseExcelDate(cell);
@@ -471,7 +369,6 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
     const startCol = bestStartCol;
     const endCol = bestEndCol;
 
-    // erstes Datum finden
     let firstDateCol = null;
     let baseDate = null;
     for (let c = startCol; c <= endCol; c++) {
@@ -483,14 +380,88 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
       return res.json({ ok: false, error: "Kein erstes Datum parsebar" });
     }
 
-    // Wir kennen baseDate bei firstDateCol -> Spalte für target berechnen
+    const dates = [];
+    let currentBaseDate = baseDate;
+    let currentBaseCol = firstDateCol;
+
+    for (let c = firstDateCol; c <= endCol; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+      const parsed = parseExcelDate(cell);
+      if (parsed) { currentBaseDate = parsed; currentBaseCol = c; }
+      const d = parsed ? parsed : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
+      dates.push({ col: c, iso: toIsoDate(d), header_raw: cell?.w ?? cell?.v ?? null, parsed_from_header: !!parsed });
+    }
+
+    return res.json({
+      ok: true,
+      sheet: wb.SheetNames[0],
+      header_row_1based: headerRow + 1,
+      start_col: startCol,
+      end_col: endCol,
+      date_cols: dates.length,
+      date_from: dates[0]?.iso,
+      date_to: dates[dates.length - 1]?.iso,
+      tail: dates.slice(-15),
+    });
+  } catch (e) {
+    console.error("SCAN DATES ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
+// DEBUG: scan-values
+// ======================================================
+app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
+  try {
+    const targetIso = String(req.query.target || "2025-12-27").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetIso)) {
+      return res.status(400).json({ ok: false, error: "target muss YYYY-MM-DD sein" });
+    }
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+
+    let headerRow = null, bestCnt = 0, bestStartCol = null, bestEndCol = null;
+
+    for (let rr = 0; rr <= 25; rr++) {
+      let cnt = 0, first = null, last = null;
+      for (let c = 0; c <= 450; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: rr, c })];
+        const d = parseExcelDate(cell);
+        if (d) { cnt++; if (first === null) first = c; last = c; }
+      }
+      if (cnt > bestCnt) { bestCnt = cnt; headerRow = rr; bestStartCol = first; bestEndCol = last; }
+    }
+
+    if (headerRow === null || bestCnt < 3 || bestStartCol === null || bestEndCol === null) {
+      return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden" });
+    }
+
+    const startCol = bestStartCol;
+    const endCol = bestEndCol;
+
+    let firstDateCol = null;
+    let baseDate = null;
+    for (let c = startCol; c <= endCol; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+      const d = parseExcelDate(cell);
+      if (d) { firstDateCol = c; baseDate = d; break; }
+    }
+    if (!baseDate || firstDateCol === null) {
+      return res.json({ ok: false, error: "Kein erstes Datum parsebar" });
+    }
+
     const baseIso = toIsoDate(baseDate);
     const base = new Date(baseIso + "T00:00:00.000Z");
     const target = new Date(targetIso + "T00:00:00.000Z");
     const diffDays = Math.round((target.getTime() - base.getTime()) / 86400000);
     const targetCol = firstDateCol + diffDays;
 
-    // Scan ein paar Mitarbeiterblöcke: proj in r, plan in r+1
+    const headerCell = ws[XLSX.utils.encode_cell({ r: headerRow, c: targetCol })];
+    const headerRaw = headerCell?.w ?? headerCell?.v ?? null;
+
     let hits = [];
     for (let r = 5; r < 500; r += 2) {
       const empCellK = ws[XLSX.utils.encode_cell({ r, c: 10 })];
@@ -506,20 +477,11 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
       const proj = projCell?.v ?? null;
       const plan = planCell?.v ?? null;
 
-      if (proj !== null && String(proj).trim() !== "" || (typeof plan === "number" && isFinite(plan))) {
-        hits.push({
-          row: r + 1,
-          employee: empName,
-          proj: projCell?.v ?? null,
-          plan: planCell?.v ?? null,
-        });
+      if ((proj !== null && String(proj).trim() !== "") || (typeof plan === "number" && isFinite(plan))) {
+        hits.push({ row: r + 1, employee: empName, proj, plan });
         if (hits.length >= 25) break;
       }
     }
-
-    // Header raw am targetCol (falls vorhanden)
-    const headerCell = ws[XLSX.utils.encode_cell({ r: headerRow, c: targetCol })];
-    const headerRaw = headerCell?.w ?? headerCell?.v ?? null;
 
     return res.json({
       ok: true,
@@ -541,7 +503,7 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
 });
 
 // ======================================================
-// STAFFPLAN IMPORT (SAFE + UPSERT + EXTEND TARGET END)
+// STAFFPLAN IMPORT (FIXED endCol to include target_end col)
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
@@ -550,31 +512,16 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    // ---- HeaderRow finden
-    let headerRow = null;
-    let bestCnt = 0;
-    let bestStartCol = null;
-    let bestEndCol = null;
+    let headerRow = null, bestCnt = 0, bestStartCol = null, bestEndCol = null;
 
     for (let rr = 0; rr <= 25; rr++) {
-      let cnt = 0;
-      let first = null;
-      let last = null;
-      for (let c = 0; c <= 400; c++) {
+      let cnt = 0, first = null, last = null;
+      for (let c = 0; c <= 450; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r: rr, c })];
         const d = parseExcelDate(cell);
-        if (d) {
-          cnt++;
-          if (first === null) first = c;
-          last = c;
-        }
+        if (d) { cnt++; if (first === null) first = c; last = c; }
       }
-      if (cnt > bestCnt) {
-        bestCnt = cnt;
-        headerRow = rr;
-        bestStartCol = first;
-        bestEndCol = last;
-      }
+      if (cnt > bestCnt) { bestCnt = cnt; headerRow = rr; bestStartCol = first; bestEndCol = last; }
     }
 
     if (headerRow === null || bestCnt < 3 || bestStartCol === null || bestEndCol === null) {
@@ -584,25 +531,31 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const startCol = bestStartCol;
     let endCol = bestEndCol;
 
-    // erstes Datum finden
+    // first date
     let firstDateCol = null;
     let baseDate = null;
-
     for (let c = startCol; c <= endCol; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
       const d = parseExcelDate(cell);
-      if (d) {
-        firstDateCol = c;
-        baseDate = d;
-        break;
-      }
+      if (d) { firstDateCol = c; baseDate = d; break; }
     }
-
     if (!baseDate || firstDateCol === null) {
-      return res.json({ ok: false, error: "Header-Zeile gefunden, aber kein erstes Datum parsebar" });
+      return res.json({ ok: false, error: "Header gefunden, aber kein erstes Datum parsebar" });
     }
 
-    // Dates erst bis endCol bauen
+    // 🔥 FIX: ensure endCol covers target_end column
+    const targetEndIso = String(req.query.target_end || "2025-12-27").trim();
+    const baseIso = toIsoDate(baseDate);
+    const base = new Date(baseIso + "T00:00:00.000Z");
+    const targetEnd = new Date(targetEndIso + "T00:00:00.000Z");
+
+    if (isFinite(targetEnd.getTime())) {
+      const diffDays = Math.round((targetEnd.getTime() - base.getTime()) / 86400000);
+      const targetCol = firstDateCol + diffDays;
+      if (targetCol > endCol) endCol = targetCol;
+    }
+
+    // dates build (now includes 25-27 Dec)
     const dates = [];
     let currentBaseDate = baseDate;
     let currentBaseCol = firstDateCol;
@@ -610,40 +563,17 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     for (let c = firstDateCol; c <= endCol; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
       const parsed = parseExcelDate(cell);
-
-      if (parsed) {
-        currentBaseDate = parsed;
-        currentBaseCol = c;
-      }
-
+      if (parsed) { currentBaseDate = parsed; currentBaseCol = c; }
       const d = parsed ? parsed : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
       dates.push({ col: c, iso: toIsoDate(d), cw: "CW" + getISOWeek(d) });
-    }
-
-    // ---- EXTEND bis target_end (Default 2025-12-27)
-    const targetEndIso = String(req.query.target_end || "2025-12-27").trim();
-    const lastIso = dates[dates.length - 1]?.iso;
-    const targetEnd = new Date(targetEndIso + "T00:00:00.000Z");
-
-    if (lastIso) {
-      let lastDate = new Date(lastIso + "T00:00:00.000Z");
-
-      if (isFinite(targetEnd.getTime()) && lastDate.getTime() < targetEnd.getTime()) {
-        const diffDays = Math.round((targetEnd.getTime() - lastDate.getTime()) / 86400000);
-        // wir “erfinden” Spalten rechts: endCol wird entsprechend erweitert
-        for (let i = 1; i <= diffDays; i++) {
-          const d = new Date(lastDate.getTime() + i * 86400000);
-          dates.push({ col: endCol + i, iso: toIsoDate(d), cw: "CW" + getISOWeek(d) });
-        }
-        endCol = endCol + diffDays;
-      }
     }
 
     console.log(
       "📅 Import headerRow:", headerRow + 1,
       "Dates:", dates[0]?.iso, "…", dates[dates.length - 1]?.iso,
       "cols:", dates.length,
-      "endCol:", endCol
+      "endCol:", endCol,
+      "target_end:", targetEndIso
     );
 
     if (String(req.query.reset) === "1") {
@@ -739,7 +669,6 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       date_to: dates[dates.length - 1].iso,
       date_cols: dates.length,
       target_end: targetEndIso,
-      note: "Dates extended beyond header if needed. Rows are inserted only where cells contain values.",
     });
 
   } catch (e) {
@@ -749,7 +678,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 });
 
 // ======================================================
-// DEBUG: Staffplan Min/Max + Topdates (wie gehabt)
+// DEBUG: staffplan
 // ======================================================
 app.get("/api/debug/staffplan-minmax", async (req, res) => {
   const r = await pool.query(`
