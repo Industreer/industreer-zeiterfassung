@@ -1,4 +1,4 @@
-console.log("🔥🔥🔥 SERVER.JS + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS + SHAREPOINT 🔥🔥🔥");
 
 const path = require("path");
 const fs = require("fs");
@@ -9,7 +9,6 @@ const multer = require("multer");
 const XLSX = require("xlsx");
 const { Pool } = require("pg");
 const { downloadExcelFromShareLink } = require("./sharepoint");
-const crypto = require("crypto");
 
 const app = express();
 app.use(cors());
@@ -81,7 +80,7 @@ function makeAutoIdFromName(name) {
   return "AUTO_" + h.toString(36);
 }
 
-function sha256(buf) {
+function sha256Hex(buf) {
   return crypto.createHash("sha256").update(buf).digest("hex");
 }
 
@@ -142,6 +141,26 @@ async function ensureColumn(table, column, typeSql) {
   `);
 }
 
+// -------- Settings helpers --------
+async function getSetting(key) {
+  const r = await pool.query(`SELECT value FROM app_settings WHERE key=$1`, [key]);
+  return r.rowCount ? r.rows[0].value : null;
+}
+
+async function setSetting(key, value) {
+  await pool.query(
+    `
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
+    `,
+    [key, value]
+  );
+}
+
+// ======================================================
+// MIGRATE
+// ======================================================
 async function migrate() {
   console.log("🔧 DB migrate start");
 
@@ -233,7 +252,7 @@ async function migrate() {
     ON staffplan_changes (run_id, change_id);
   `);
 
-  // ===== App Settings (z.B. SharePoint Link + last hash) =====
+  // ===== App Settings (SharePoint link + last hash etc.) =====
   await pool.query(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
@@ -261,7 +280,7 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/api/debug/build", (req, res) => {
   res.json({
     ok: true,
-    build: "server.js + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS",
+    build: "server.js + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS + SHAREPOINT",
     node: process.version,
     now: new Date().toISOString(),
   });
@@ -279,6 +298,24 @@ app.get("/api/logo", (req, res) => {
 app.post("/api/logo", upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
   fs.writeFileSync(LOGO_FILE, req.file.buffer);
+  res.json({ ok: true });
+});
+
+// ======================================================
+// SETTINGS: SharePoint Link + Status
+// ======================================================
+app.get("/api/settings/staffplan-sharelink", async (req, res) => {
+  const url = await getSetting("staffplan_sharelink");
+  const lastHash = await getSetting("staffplan_last_sha256");
+  const lastRunId = await getSetting("staffplan_last_run_id");
+  const lastAt = await getSetting("staffplan_last_import_at");
+  res.json({ ok: true, url, last_hash: lastHash, last_run_id: lastRunId, last_import_at: lastAt });
+});
+
+app.post("/api/settings/staffplan-sharelink", async (req, res) => {
+  const url = String(req.body?.url || "").trim();
+  if (!url.startsWith("https://")) return res.status(400).json({ ok: false, error: "URL ungültig" });
+  await setSetting("staffplan_sharelink", url);
   res.json({ ok: true });
 });
 
@@ -637,26 +674,22 @@ app.post("/api/import/rollback", async (req, res) => {
 });
 
 // ======================================================
-// STAFFPLAN IMPORT (STATS + DRY-RUN + HISTORY)
-// POST /api/import/staffplan?reset=1
-// POST /api/import/staffplan?dry_run=1
-// Optional: &target_end=YYYY-MM-DD
+// IMPORT CORE (Upload + SharePoint use same function)
 // ======================================================
-app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
-  const startedAt = new Date();
-  const isDryRun = String(req.query.dry_run || "") === "1";
+async function doImportStaffplan({
+  buffer,
+  originalname = "staffplan.xlsx",
+  dryRun = false,
+  reset = false,
+  targetEndIso = null,
+  actorIp = null,
+}) {
+  const startedAt = Date.now();
 
   let runId = null;
-  const filename = req.file?.originalname || null;
-  const fileHash = req.file?.buffer ? sha256(req.file.buffer) : null;
-  const targetEndIso = String(req.query.target_end || "").trim() || null;
+  const fileHash = buffer ? sha256Hex(buffer) : null;
 
-  const actorIp =
-    (req.headers["x-forwarded-for"] ? String(req.headers["x-forwarded-for"]).split(",")[0].trim() : null) ||
-    req.socket?.remoteAddress ||
-    null;
-
-  // wir speichern dry-run auch als run (mode=dry_run), aber ohne changes
+  // history run insert
   try {
     const rr = await pool.query(
       `
@@ -665,28 +698,26 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       RETURNING run_id
       `,
       [
-        isDryRun ? "dry_run" : "write",
-        filename,
+        dryRun ? "dry_run" : "write",
+        originalname,
         fileHash,
         targetEndIso,
         actorIp,
-        isDryRun ? "dry-run (no db write)" : "write import",
+        dryRun ? "dry-run (no db write)" : "write import",
       ]
     );
     runId = rr.rows[0].run_id;
   } catch (e) {
-    // wenn history insert fails, import trotzdem nicht komplett killen
     console.error("IMPORT_RUNS INSERT ERROR:", e);
   }
 
   const client = await pool.connect();
   try {
-    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+    if (!buffer || !buffer.length) throw new Error("Leerer Datei-Buffer");
 
-    // Transaction nur für write (Rollback-Consistency)
-    if (!isDryRun) await client.query("BEGIN");
+    if (!dryRun) await client.query("BEGIN");
 
-    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const wb = XLSX.read(buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
     // Header finden
@@ -764,13 +795,13 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     }
 
     // Reset nur wenn NICHT dry-run
-    if (!isDryRun && String(req.query.reset) === "1") {
+    if (!dryRun && reset) {
       await client.query("TRUNCATE staffplan");
     }
 
     // DRY-RUN: existing keys im Date-Range laden
     let existingKeySet = null;
-    if (isDryRun) {
+    if (dryRun) {
       existingKeySet = new Set();
       const rExist = await client.query(
         `
@@ -847,7 +878,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         employeeId = emp.rows[0].employee_id;
       } else {
         employeeId = makeAutoIdFromName(employeeNameCanonical);
-        if (!isDryRun) {
+        if (!dryRun) {
           await client.query(
             `
             INSERT INTO employees (employee_id, name)
@@ -873,7 +904,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
         const key = `${employeeId}#${d.iso}#${customerPo || ""}#${internalPo || ""}#${proj || ""}`;
 
-        if (isDryRun) {
+        if (dryRun) {
           would_write_rows++;
           if (existingKeySet && existingKeySet.has(key)) would_update_rows++;
           else would_insert_rows++;
@@ -972,7 +1003,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       }
     }
 
-    if (!isDryRun) await client.query("COMMIT");
+    if (!dryRun) await client.query("COMMIT");
 
     // update run history
     if (runId) {
@@ -1002,21 +1033,21 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
           inserted_rows,
           updated_rows,
           skippedNoEmployee,
-          isDryRun ? "dry-run ok" : "write ok"
+          dryRun ? "dry-run ok" : "write ok"
         ]
       );
     }
 
-    return res.json({
+    return {
       ok: true,
       run_id: runId,
-      mode: isDryRun ? "dry_run" : "write",
-      imported: isDryRun ? 0 : imported,
-      inserted_rows: isDryRun ? 0 : inserted_rows,
-      updated_rows: isDryRun ? 0 : updated_rows,
-      would_write_rows: isDryRun ? would_write_rows : 0,
-      would_insert_rows: isDryRun ? would_insert_rows : 0,
-      would_update_rows: isDryRun ? would_update_rows : 0,
+      mode: dryRun ? "dry_run" : "write",
+      imported: dryRun ? 0 : imported,
+      inserted_rows: dryRun ? 0 : inserted_rows,
+      updated_rows: dryRun ? 0 : updated_rows,
+      would_write_rows: dryRun ? would_write_rows : 0,
+      would_insert_rows: dryRun ? would_insert_rows : 0,
+      would_update_rows: dryRun ? would_update_rows : 0,
       skipped_no_employee_rows: skippedNoEmployee,
       header_row: headerRow + 1,
       date_from: dates[0].iso,
@@ -1027,13 +1058,14 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         empty_streak_break: EMPTY_STREAK_BREAK,
         last_processed_excel_row_1based: lastProcessedRow ? lastProcessedRow + 1 : null,
       },
-      note: isDryRun
+      note: dryRun
         ? "Dry-run: keine DB-Änderung."
         : "Write: inserted_rows/updated_rows via xmax; Rollback möglich über run_id.",
-      duration_ms: Date.now() - startedAt.getTime()
-    });
+      duration_ms: Date.now() - startedAt,
+      file_sha256: fileHash,
+    };
   } catch (e) {
-    if (!isDryRun) {
+    if (!dryRun) {
       try { await client.query("ROLLBACK"); } catch {}
     }
     console.error("STAFFPLAN IMPORT ERROR:", e);
@@ -1047,9 +1079,104 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       } catch {}
     }
 
-    return res.status(500).json({ ok: false, error: e.message, run_id: runId });
+    return { ok: false, error: e.message, run_id: runId };
   } finally {
     client.release();
+  }
+}
+
+// ======================================================
+// STAFFPLAN IMPORT (Upload)
+// POST /api/import/staffplan?reset=1
+// POST /api/import/staffplan?dry_run=1
+// Optional: &target_end=YYYY-MM-DD
+// ======================================================
+app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
+  const dryRun = String(req.query.dry_run || "") === "1";
+  const reset = String(req.query.reset || "0") === "1";
+  const targetEndIso = String(req.query.target_end || "").trim() || null;
+
+  const actorIp =
+    (req.headers["x-forwarded-for"] ? String(req.headers["x-forwarded-for"]).split(",")[0].trim() : null) ||
+    req.socket?.remoteAddress ||
+    null;
+
+  if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+
+  const result = await doImportStaffplan({
+    buffer: req.file.buffer,
+    originalname: req.file.originalname || "upload.xlsx",
+    dryRun,
+    reset,
+    targetEndIso,
+    actorIp,
+  });
+
+  if (!result.ok) return res.status(500).json(result);
+  return res.json(result);
+});
+
+// ======================================================
+// STAFFPLAN IMPORT (SharePoint / OneDrive link)
+// POST /api/import/staffplan/sharepoint?reset=0
+// POST /api/import/staffplan/sharepoint?dry_run=1
+// Optional: &target_end=YYYY-MM-DD
+// ======================================================
+app.post("/api/import/staffplan/sharepoint", async (req, res) => {
+  try {
+    const dryRun = String(req.query.dry_run || "") === "1";
+    const reset = String(req.query.reset || "0") === "1";
+    const targetEndIso = String(req.query.target_end || "").trim() || null;
+
+    const actorIp =
+      (req.headers["x-forwarded-for"] ? String(req.headers["x-forwarded-for"]).split(",")[0].trim() : null) ||
+      req.socket?.remoteAddress ||
+      null;
+
+    const url = await getSetting("staffplan_sharelink");
+    if (!url) return res.status(400).json({ ok: false, error: "Kein SharePoint-Link gespeichert" });
+
+    const buf = await downloadExcelFromShareLink(url);
+
+    const hash = sha256Hex(buf);
+    const lastHash = await getSetting("staffplan_last_sha256");
+
+    // Skip only in write mode
+    if (!dryRun && lastHash && lastHash === hash) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: "unchanged_file_hash",
+        sha256: hash,
+        note: "Datei unverändert → kein Import ausgeführt",
+      });
+    }
+
+    const result = await doImportStaffplan({
+      buffer: buf,
+      originalname: "sharepoint.xlsx",
+      dryRun,
+      reset,
+      targetEndIso,
+      actorIp,
+    });
+
+    if (!result.ok) return res.status(500).json(result);
+
+    // store last import info only for write
+    if (!dryRun) {
+      await setSetting("staffplan_last_sha256", hash);
+      await setSetting("staffplan_last_run_id", String(result.run_id || ""));
+      await setSetting("staffplan_last_import_at", new Date().toISOString());
+    }
+
+    return res.json({
+      ...result,
+      sharepoint: { url_saved: true, sha256: hash, skipped_due_to_hash: false },
+    });
+  } catch (e) {
+    console.error("SHAREPOINT IMPORT ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
