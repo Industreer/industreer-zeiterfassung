@@ -1,12 +1,12 @@
-console.log("🔥🔥🔥 SERVER.JS FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX + OPTIMIZED IMPORT LOOP + INDEXES + STATS + DRY-RUN 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS 🔥🔥🔥");
 
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const XLSX = require("xlsx");
-const PDFDocument = require("pdfkit"); // später
 const { Pool } = require("pg");
 
 const app = express();
@@ -79,10 +79,13 @@ function makeAutoIdFromName(name) {
   return "AUTO_" + h.toString(36);
 }
 
+function sha256(buf) {
+  return crypto.createHash("sha256").update(buf).digest("hex");
+}
+
 function parseExcelDate(cell) {
   if (!cell) return null;
 
-  // Excel-Seriennummer
   if (typeof cell.v === "number" && isFinite(cell.v)) {
     const epoch = new Date(Date.UTC(1899, 11, 30));
     return new Date(epoch.getTime() + cell.v * 86400000);
@@ -91,15 +94,12 @@ function parseExcelDate(cell) {
   const t = String(cell.w || cell.v || "").trim();
   if (!t) return null;
 
-  // DD.MM.YYYY
   let m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
 
-  // Datum irgendwo im Text
   m = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
 
-  // DD.MM. (ohne Jahr)
   m = t.match(/^(\d{1,2})\.(\d{1,2})\.$/);
   if (m) {
     const today = new Date();
@@ -111,7 +111,6 @@ function parseExcelDate(cell) {
     return guess;
   }
 
-  // "Sa 27.12."
   m = t.match(/(\d{1,2})\.(\d{1,2})\./);
   if (m) {
     const today = new Date();
@@ -169,13 +168,11 @@ async function migrate() {
     );
   `);
 
-  // Unique für UPSERT
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq
     ON staffplan (employee_id, work_date, customer_po, internal_po, project_short);
   `);
 
-  // Performance-Indizes
   await pool.query(`
     CREATE INDEX IF NOT EXISTS staffplan_by_date
     ON staffplan (work_date);
@@ -184,85 +181,57 @@ async function migrate() {
     ON staffplan (work_date, employee_id);
   `);
 
+  // ===== Import History tables =====
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS time_entries (
-      id BIGSERIAL PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS import_runs (
+      run_id BIGSERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      finished_at TIMESTAMPTZ,
+      status TEXT NOT NULL DEFAULT 'running',  -- running|ok|failed
+      mode TEXT NOT NULL,                      -- dry_run|write
+      filename TEXT,
+      file_sha256 TEXT,
+      target_end DATE,
+      date_from DATE,
+      date_to DATE,
+      date_cols INT,
+      imported INT DEFAULT 0,
+      inserted_rows INT DEFAULT 0,
+      updated_rows INT DEFAULT 0,
+      skipped_no_employee_rows INT DEFAULT 0,
+      note TEXT,
+      actor_ip TEXT,
+      rolled_back_at TIMESTAMPTZ,
+      rollback_note TEXT
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staffplan_changes (
+      change_id BIGSERIAL PRIMARY KEY,
+      run_id BIGINT NOT NULL REFERENCES import_runs(run_id) ON DELETE CASCADE,
+      change_type TEXT NOT NULL, -- insert|update
       employee_id TEXT NOT NULL,
       work_date DATE NOT NULL,
       customer_po TEXT,
       internal_po TEXT,
       project_short TEXT,
-      requester_name TEXT,
-      start_time TIMESTAMPTZ,
-      end_time TIMESTAMPTZ,
-      activity TEXT,
-      break_minutes INT DEFAULT 0
+
+      -- old values for rollback (only for updates)
+      old_employee_name TEXT,
+      old_requester_name TEXT,
+      old_calendar_week TEXT,
+      old_customer TEXT,
+      old_planned_hours NUMERIC
     );
   `);
 
-  await ensureColumn("time_entries", "start_ts", "TIMESTAMPTZ");
-  await ensureColumn("time_entries", "end_ts", "TIMESTAMPTZ");
-  await ensureColumn("time_entries", "start_time", "TIMESTAMPTZ");
-  await ensureColumn("time_entries", "end_time", "TIMESTAMPTZ");
-  await ensureColumn("time_entries", "break_minutes", "INT DEFAULT 0");
-  await ensureColumn("time_entries", "customer_po", "TEXT");
-  await ensureColumn("time_entries", "internal_po", "TEXT");
-  await ensureColumn("time_entries", "project_short", "TEXT");
-  await ensureColumn("time_entries", "requester_name", "TEXT");
-  await ensureColumn("time_entries", "activity", "TEXT");
-
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS breaks (
-      id BIGSERIAL PRIMARY KEY,
-      employee_id TEXT NOT NULL,
-      work_date DATE NOT NULL,
-      start_ts TIMESTAMPTZ NOT NULL,
-      end_ts TIMESTAMPTZ
-    );
+    CREATE INDEX IF NOT EXISTS staffplan_changes_by_run
+    ON staffplan_changes (run_id, change_id);
   `);
 
   console.log("✅ DB migrate finished");
-}
-
-async function getEmployeeNameById(employeeId) {
-  const r = await pool.query(`SELECT name FROM employees WHERE employee_id=$1`, [employeeId]);
-  return r.rowCount ? r.rows[0].name : null;
-}
-
-async function getTodayProjectsSmart(employeeId, dateISO) {
-  const r1 = await pool.query(
-    `
-    SELECT work_date, calendar_week, customer, requester_name, internal_po, customer_po, project_short, planned_hours
-    FROM staffplan
-    WHERE employee_id=$1 AND work_date=$2::date
-    ORDER BY customer_po, internal_po
-    `,
-    [employeeId, dateISO]
-  );
-  if (r1.rows.length) return { rows: r1.rows, matched: "employee_id" };
-
-  const empName = await getEmployeeNameById(employeeId);
-  if (!empName) return { rows: [], matched: "none" };
-
-  const r2 = await pool.query(
-    `
-    SELECT work_date, calendar_week, customer, requester_name, internal_po, customer_po, project_short, planned_hours
-    FROM staffplan
-    WHERE work_date=$1::date
-      AND lower(regexp_replace(trim(
-          CASE
-            WHEN position(',' in employee_name) > 0
-              THEN trim(split_part(employee_name, ',', 2)) || ' ' || trim(split_part(employee_name, ',', 1))
-            ELSE employee_name
-          END
-        ), '\\s+', ' ', 'g'))
-        = lower(regexp_replace(trim($2), '\\s+', ' ', 'g'))
-    ORDER BY customer_po, internal_po
-    `,
-    [dateISO, empName]
-  );
-
-  return { rows: r2.rows, matched: r2.rows.length ? "name_fallback" : "none" };
 }
 
 // ======================================================
@@ -271,17 +240,17 @@ async function getTodayProjectsSmart(employeeId, dateISO) {
 app.use(express.static(FRONTEND_DIR));
 app.get("/", (req, res) => res.redirect("/admin"));
 app.get("/admin", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "admin.html")));
-app.get("/employee", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "employee.html")));
+app.get("/debug.html", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "debug.html")));
 
 // ======================================================
 // HEALTH + BUILD
 // ======================================================
 app.get("/health", (req, res) => res.json({ ok: true }));
+
 app.get("/api/debug/build", (req, res) => {
   res.json({
     ok: true,
-    build:
-      "server.js FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX + OPTIMIZED IMPORT LOOP + INDEXES + STATS + DRY-RUN",
+    build: "server.js + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS",
     node: process.version,
     now: new Date().toISOString(),
   });
@@ -300,48 +269,6 @@ app.post("/api/logo", upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
   fs.writeFileSync(LOGO_FILE, req.file.buffer);
   res.json({ ok: true });
-});
-
-// ======================================================
-// EMPLOYEES
-// ======================================================
-app.get("/api/employees", async (req, res) => {
-  const r = await pool.query(`SELECT * FROM employees ORDER BY name`);
-  res.json(r.rows);
-});
-
-app.get("/api/employee/:id", async (req, res) => {
-  const r = await pool.query(
-    `SELECT employee_id,name,email,language FROM employees WHERE employee_id=$1`,
-    [req.params.id]
-  );
-  if (!r.rowCount) return res.status(404).json({ ok: false });
-  res.json({ ok: true, employee: r.rows[0] });
-});
-
-// ======================================================
-// EMPLOYEE TODAY
-// ======================================================
-app.get("/api/employee/today", async (req, res) => {
-  try {
-    const employeeId = String(req.query.employee_id || "").trim();
-    if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-
-    const dateOverride = String(req.query.date || "").trim();
-    const dateISO = dateOverride || new Date().toISOString().slice(0, 10);
-
-    const r = await getTodayProjectsSmart(employeeId, dateISO);
-
-    return res.json({
-      ok: true,
-      date: dateISO,
-      matched: r.matched,
-      projects: r.rows,
-    });
-  } catch (e) {
-    console.error("EMPLOYEE TODAY ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
-  }
 });
 
 // ======================================================
@@ -398,6 +325,7 @@ app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
         break;
       }
     }
+
     if (!baseDate || firstDateCol === null) {
       return res.json({ ok: false, error: "Kein erstes Datum parsebar" });
     }
@@ -413,7 +341,10 @@ app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
         currentBaseDate = parsed;
         currentBaseCol = c;
       }
-      const d = parsed ? parsed : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
+      const d = parsed
+        ? parsed
+        : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
+
       dates.push({
         col: c,
         iso: toIsoDate(d),
@@ -551,16 +482,198 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
 });
 
 // ======================================================
-// STAFFPLAN IMPORT (STATS + DRY-RUN)
+// IMPORT HISTORY API
+// ======================================================
+app.get("/api/import/history", async (req, res) => {
+  const limit = Math.max(1, Math.min(200, parseInt(req.query.limit || "50", 10) || 50));
+  const r = await pool.query(
+    `
+    SELECT run_id, created_at, finished_at, status, mode, filename, file_sha256,
+           target_end, date_from, date_to, date_cols,
+           imported, inserted_rows, updated_rows, skipped_no_employee_rows,
+           rolled_back_at, note
+    FROM import_runs
+    ORDER BY run_id DESC
+    LIMIT $1
+    `,
+    [limit]
+  );
+  res.json({ ok: true, rows: r.rows });
+});
+
+app.get("/api/import/history/:run_id", async (req, res) => {
+  const runId = String(req.params.run_id || "").trim();
+  const run = await pool.query(`SELECT * FROM import_runs WHERE run_id=$1`, [runId]);
+  if (!run.rowCount) return res.status(404).json({ ok: false, error: "run_id nicht gefunden" });
+
+  const ch = await pool.query(
+    `
+    SELECT change_type, COUNT(*)::int AS cnt
+    FROM staffplan_changes
+    WHERE run_id=$1
+    GROUP BY change_type
+    `,
+    [runId]
+  );
+
+  res.json({ ok: true, run: run.rows[0], change_counts: ch.rows });
+});
+
+// ======================================================
+// ROLLBACK API
+// ======================================================
+app.post("/api/import/rollback", async (req, res) => {
+  const runId = String(req.body?.run_id ?? "").trim();
+  if (!runId) return res.status(400).json({ ok: false, error: "run_id fehlt" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const run = await client.query(`SELECT * FROM import_runs WHERE run_id=$1 FOR UPDATE`, [runId]);
+    if (!run.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "run_id nicht gefunden" });
+    }
+    const runRow = run.rows[0];
+
+    if (runRow.mode !== "write") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "Rollback nur für mode=write möglich" });
+    }
+    if (runRow.status !== "ok") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "Rollback nur möglich, wenn status=ok" });
+    }
+    if (runRow.rolled_back_at) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "Dieser Run wurde bereits gerollbackt" });
+    }
+
+    const changes = await client.query(
+      `
+      SELECT *
+      FROM staffplan_changes
+      WHERE run_id=$1
+      ORDER BY change_id DESC
+      `,
+      [runId]
+    );
+
+    let deleted = 0;
+    let restored = 0;
+
+    for (const c of changes.rows) {
+      if (c.change_type === "insert") {
+        const del = await client.query(
+          `
+          DELETE FROM staffplan
+          WHERE employee_id=$1
+            AND work_date=$2::date
+            AND COALESCE(customer_po,'')=COALESCE($3,'')
+            AND COALESCE(internal_po,'')=COALESCE($4,'')
+            AND COALESCE(project_short,'')=COALESCE($5,'')
+          `,
+          [c.employee_id, c.work_date, c.customer_po, c.internal_po, c.project_short]
+        );
+        deleted += del.rowCount;
+      } else if (c.change_type === "update") {
+        const upd = await client.query(
+          `
+          UPDATE staffplan
+          SET employee_name=$1,
+              requester_name=$2,
+              calendar_week=$3,
+              customer=$4,
+              planned_hours=$5
+          WHERE employee_id=$6
+            AND work_date=$7::date
+            AND COALESCE(customer_po,'')=COALESCE($8,'')
+            AND COALESCE(internal_po,'')=COALESCE($9,'')
+            AND COALESCE(project_short,'')=COALESCE($10,'')
+          `,
+          [
+            c.old_employee_name,
+            c.old_requester_name,
+            c.old_calendar_week,
+            c.old_customer,
+            c.old_planned_hours,
+            c.employee_id,
+            c.work_date,
+            c.customer_po,
+            c.internal_po,
+            c.project_short,
+          ]
+        );
+        restored += upd.rowCount;
+      }
+    }
+
+    await client.query(
+      `UPDATE import_runs SET rolled_back_at=NOW(), rollback_note=$2 WHERE run_id=$1`,
+      [runId, `rollback via api, deleted=${deleted}, restored=${restored}`]
+    );
+
+    await client.query("COMMIT");
+    return res.json({ ok: true, run_id: runId, deleted_inserts: deleted, restored_updates: restored });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("ROLLBACK ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ======================================================
+// STAFFPLAN IMPORT (STATS + DRY-RUN + HISTORY)
 // POST /api/import/staffplan?reset=1
 // POST /api/import/staffplan?dry_run=1
 // Optional: &target_end=YYYY-MM-DD
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
+  const startedAt = new Date();
+  const isDryRun = String(req.query.dry_run || "") === "1";
+
+  let runId = null;
+  const filename = req.file?.originalname || null;
+  const fileHash = req.file?.buffer ? sha256(req.file.buffer) : null;
+  const targetEndIso = String(req.query.target_end || "").trim() || null;
+
+  const actorIp =
+    (req.headers["x-forwarded-for"] ? String(req.headers["x-forwarded-for"]).split(",")[0].trim() : null) ||
+    req.socket?.remoteAddress ||
+    null;
+
+  // wir speichern dry-run auch als run (mode=dry_run), aber ohne changes
+  try {
+    const rr = await pool.query(
+      `
+      INSERT INTO import_runs (mode, filename, file_sha256, target_end, actor_ip, status, note)
+      VALUES ($1,$2,$3,$4::date,$5,'running',$6)
+      RETURNING run_id
+      `,
+      [
+        isDryRun ? "dry_run" : "write",
+        filename,
+        fileHash,
+        targetEndIso,
+        actorIp,
+        isDryRun ? "dry-run (no db write)" : "write import",
+      ]
+    );
+    runId = rr.rows[0].run_id;
+  } catch (e) {
+    // wenn history insert fails, import trotzdem nicht komplett killen
+    console.error("IMPORT_RUNS INSERT ERROR:", e);
+  }
+
+  const client = await pool.connect();
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
 
-    const isDryRun = String(req.query.dry_run || "") === "1";
+    // Transaction nur für write (Rollback-Consistency)
+    if (!isDryRun) await client.query("BEGIN");
 
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
@@ -593,7 +706,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     }
 
     if (headerRow === null || bestCnt < 3 || bestStartCol === null || bestEndCol === null) {
-      return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..26)" });
+      throw new Error("Keine Datums-Kopfzeile gefunden (Scan Zeilen 1..26)");
     }
 
     const startCol = bestStartCol;
@@ -611,17 +724,13 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         break;
       }
     }
-    if (!baseDate || firstDateCol === null) {
-      return res.json({ ok: false, error: "Header gefunden, aber kein erstes Datum parsebar" });
-    }
+    if (!baseDate || firstDateCol === null) throw new Error("Header gefunden, aber kein erstes Datum parsebar");
 
-    // ensure endCol covers target_end column
-    const targetEndIso = String(req.query.target_end || "2025-12-27").trim();
-    const baseIso = toIsoDate(baseDate);
-    const base = new Date(baseIso + "T00:00:00.000Z");
-    const targetEnd = new Date(targetEndIso + "T00:00:00.000Z");
-
-    if (isFinite(targetEnd.getTime())) {
+    // ensure endCol covers target_end column (Mindestziel)
+    if (targetEndIso && /^\d{4}-\d{2}-\d{2}$/.test(targetEndIso)) {
+      const baseIso = toIsoDate(baseDate);
+      const base = new Date(baseIso + "T00:00:00.000Z");
+      const targetEnd = new Date(targetEndIso + "T00:00:00.000Z");
       const diffDays = Math.round((targetEnd.getTime() - base.getTime()) / 86400000);
       const targetCol = firstDateCol + diffDays;
       if (targetCol > endCol) endCol = targetCol;
@@ -643,27 +752,16 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       dates.push({ col: c, iso: toIsoDate(d), cw: "CW" + getISOWeek(d) });
     }
 
-    console.log(
-      "📅 Import headerRow:", headerRow + 1,
-      "Dates:", dates[0]?.iso, "…", dates[dates.length - 1]?.iso,
-      "cols:", dates.length,
-      "endCol:", endCol,
-      "target_end:", targetEndIso,
-      "dry_run:", isDryRun
-    );
-
     // Reset nur wenn NICHT dry-run
     if (!isDryRun && String(req.query.reset) === "1") {
-      console.log("🧹 Reset=1 -> TRUNCATE staffplan");
-      await pool.query("TRUNCATE staffplan");
+      await client.query("TRUNCATE staffplan");
     }
 
-    // DRY-RUN: existing keys für Date-Range laden, damit wir would_insert vs would_update zählen können
-    // (wenn reset=1 im echten Import, dann wäre alles insert — aber im Dry-Run respektieren wir reset nicht, weil wir nicht schreiben)
+    // DRY-RUN: existing keys im Date-Range laden
     let existingKeySet = null;
     if (isDryRun) {
       existingKeySet = new Set();
-      const rExist = await pool.query(
+      const rExist = await client.query(
         `
         SELECT employee_id, work_date, COALESCE(customer_po,'') AS customer_po,
                COALESCE(internal_po,'') AS internal_po,
@@ -673,7 +771,6 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         `,
         [dates[0].iso, dates[dates.length - 1].iso]
       );
-
       for (const row of rExist.rows) {
         const k = `${row.employee_id}#${toIsoDate(new Date(row.work_date))}#${row.customer_po}#${row.internal_po}#${row.project_short}`;
         existingKeySet.add(k);
@@ -681,17 +778,17 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     }
 
     // Counters
-    let imported = 0;               // total rows written (real run)
-    let inserted_rows = 0;          // real run
-    let updated_rows = 0;           // real run
+    let imported = 0;
+    let inserted_rows = 0;
+    let updated_rows = 0;
 
-    let would_write_rows = 0;       // dry-run
-    let would_insert_rows = 0;      // dry-run
-    let would_update_rows = 0;      // dry-run
+    let would_write_rows = 0;
+    let would_insert_rows = 0;
+    let would_update_rows = 0;
 
     let skippedNoEmployee = 0;
 
-    // OPTIMIZATION: Break when long empty streak (file end reached)
+    // OPT: stop after long empty streak
     const EMPTY_STREAK_BREAK = 200;
     let emptyEmployeeStreak = 0;
     let lastProcessedRow = null;
@@ -712,23 +809,20 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       if (!employeeNameRaw) {
         skippedNoEmployee++;
         emptyEmployeeStreak++;
-        if (emptyEmployeeStreak >= EMPTY_STREAK_BREAK) {
-          console.log(`🧠 Import stop: ${EMPTY_STREAK_BREAK} leere Mitarbeiterzeilen am Stück (ab Zeile ${r + 1})`);
-          break;
-        }
+        if (emptyEmployeeStreak >= EMPTY_STREAK_BREAK) break;
         continue;
       }
       emptyEmployeeStreak = 0;
 
       const employeeNameCanonical = commaSwapName(employeeNameRaw);
 
-      // employee_id (für dry-run dürfen wir employees nicht anlegen → wir simulieren AUTO-ID wenn nicht vorhanden)
+      // employee_id (dry-run legt keine employees an)
       const n1 = normalizeName(employeeNameRaw);
       const n2 = normalizeName(employeeNameCanonical);
 
-      const emp = await pool.query(
+      const emp = await client.query(
         `
-        SELECT employee_id, name
+        SELECT employee_id
         FROM employees
         WHERE lower(regexp_replace(trim(name), '\\s+', ' ', 'g')) = $1
            OR lower(regexp_replace(trim(name), '\\s+', ' ', 'g')) = $2
@@ -742,9 +836,8 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         employeeId = emp.rows[0].employee_id;
       } else {
         employeeId = makeAutoIdFromName(employeeNameCanonical);
-
         if (!isDryRun) {
-          await pool.query(
+          await client.query(
             `
             INSERT INTO employees (employee_id, name)
             VALUES ($1, $2)
@@ -755,7 +848,6 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         }
       }
 
-      // Customer / POs
       const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
       const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
       const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
@@ -777,8 +869,25 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
           continue;
         }
 
-        // Real run: UPSERT + RETURNING inserted flag via xmax
-        const q = await pool.query(
+        // ===== HISTORY: check existing row BEFORE upsert (needed for rollback of updates)
+        const existing = await client.query(
+          `
+          SELECT employee_name, requester_name, calendar_week, customer, planned_hours
+          FROM staffplan
+          WHERE employee_id=$1
+            AND work_date=$2::date
+            AND COALESCE(customer_po,'')=COALESCE($3,'')
+            AND COALESCE(internal_po,'')=COALESCE($4,'')
+            AND COALESCE(project_short,'')=COALESCE($5,'')
+          LIMIT 1
+          `,
+          [employeeId, d.iso, customerPo, internalPo, proj]
+        );
+
+        const existedBefore = existing.rowCount > 0;
+
+        // UPSERT + inserted flag
+        const q = await client.query(
           `
           INSERT INTO staffplan
             (employee_id, employee_name, requester_name, work_date, calendar_week,
@@ -793,26 +902,110 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
             planned_hours  = EXCLUDED.planned_hours
           RETURNING (xmax = 0) AS inserted
           `,
-          [employeeId, employeeNameCanonical, requesterName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
+          [
+            employeeId,
+            employeeNameCanonical,
+            requesterName,
+            d.iso,
+            d.cw,
+            customer,
+            internalPo,
+            customerPo,
+            proj,
+            plan
+          ]
         );
 
         imported++;
-        if (q.rowCount && q.rows[0]?.inserted) inserted_rows++;
+        const inserted = !!q.rows[0]?.inserted;
+
+        if (inserted) inserted_rows++;
         else updated_rows++;
+
+        // ===== record changes
+        if (runId) {
+          if (inserted && !existedBefore) {
+            await client.query(
+              `
+              INSERT INTO staffplan_changes
+                (run_id, change_type, employee_id, work_date, customer_po, internal_po, project_short)
+              VALUES ($1,'insert',$2,$3::date,$4,$5,$6)
+              `,
+              [runId, employeeId, d.iso, customerPo, internalPo, proj]
+            );
+          } else if (!inserted && existedBefore) {
+            const old = existing.rows[0];
+            await client.query(
+              `
+              INSERT INTO staffplan_changes
+                (run_id, change_type, employee_id, work_date, customer_po, internal_po, project_short,
+                 old_employee_name, old_requester_name, old_calendar_week, old_customer, old_planned_hours)
+              VALUES ($1,'update',$2,$3::date,$4,$5,$6,$7,$8,$9,$10,$11)
+              `,
+              [
+                runId,
+                employeeId,
+                d.iso,
+                customerPo,
+                internalPo,
+                proj,
+                old.employee_name,
+                old.requester_name,
+                old.calendar_week,
+                old.customer,
+                old.planned_hours
+              ]
+            );
+          }
+        }
       }
+    }
+
+    if (!isDryRun) await client.query("COMMIT");
+
+    // update run history
+    if (runId) {
+      await pool.query(
+        `
+        UPDATE import_runs
+        SET finished_at=NOW(),
+            status='ok',
+            target_end=COALESCE($2::date, target_end),
+            date_from=$3::date,
+            date_to=$4::date,
+            date_cols=$5,
+            imported=$6,
+            inserted_rows=$7,
+            updated_rows=$8,
+            skipped_no_employee_rows=$9,
+            note=$10
+        WHERE run_id=$1
+        `,
+        [
+          runId,
+          targetEndIso,
+          dates[0].iso,
+          dates[dates.length - 1].iso,
+          dates.length,
+          imported,
+          inserted_rows,
+          updated_rows,
+          skippedNoEmployee,
+          isDryRun ? "dry-run ok" : "write ok"
+        ]
+      );
     }
 
     return res.json({
       ok: true,
+      run_id: runId,
       mode: isDryRun ? "dry_run" : "write",
       imported: isDryRun ? 0 : imported,
       inserted_rows: isDryRun ? 0 : inserted_rows,
       updated_rows: isDryRun ? 0 : updated_rows,
-
       would_write_rows: isDryRun ? would_write_rows : 0,
       would_insert_rows: isDryRun ? would_insert_rows : 0,
       would_update_rows: isDryRun ? would_update_rows : 0,
-
       skipped_no_employee_rows: skippedNoEmployee,
       header_row: headerRow + 1,
       date_from: dates[0].iso,
@@ -824,17 +1017,33 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         last_processed_excel_row_1based: lastProcessedRow ? lastProcessedRow + 1 : null,
       },
       note: isDryRun
-        ? "Dry-run: keine DB-Änderung. would_* basiert auf bestehenden Keys in staffplan innerhalb des Date-Ranges."
-        : "Write: inserted_rows/updated_rows kommen aus RETURNING (xmax=0) bei UPSERT.",
+        ? "Dry-run: keine DB-Änderung."
+        : "Write: inserted_rows/updated_rows via xmax; Rollback möglich über run_id.",
+      duration_ms: Date.now() - startedAt.getTime()
     });
   } catch (e) {
+    if (!isDryRun) {
+      try { await client.query("ROLLBACK"); } catch {}
+    }
     console.error("STAFFPLAN IMPORT ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
+
+    if (runId) {
+      try {
+        await pool.query(
+          `UPDATE import_runs SET finished_at=NOW(), status='failed', note=$2 WHERE run_id=$1`,
+          [runId, `failed: ${e.message}`]
+        );
+      } catch {}
+    }
+
+    return res.status(500).json({ ok: false, error: e.message, run_id: runId });
+  } finally {
+    client.release();
   }
 });
 
 // ======================================================
-// DEBUG: staffplan
+// DEBUG: Staffplan basics
 // ======================================================
 app.get("/api/debug/staffplan-minmax", async (req, res) => {
   const r = await pool.query(`
@@ -858,9 +1067,7 @@ app.get("/api/debug/staffplan-topdates", async (req, res) => {
 });
 
 app.get("/api/debug/staffplan-check", async (req, res) => {
-  const employeeId = String(req.query.employee_id || "").trim();
   const date = String(req.query.date || "").trim();
-
   if (!date) return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
 
   const totalOnDate = await pool.query(
@@ -868,47 +1075,10 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
     [date]
   );
 
-  let forEmployee = null;
-  let employeeName = null;
-  let byName = null;
-
-  if (employeeId) {
-    forEmployee = await pool.query(
-      `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE work_date=$1::date AND employee_id=$2`,
-      [date, employeeId]
-    );
-
-    const emp = await pool.query(`SELECT name FROM employees WHERE employee_id=$1`, [employeeId]);
-    employeeName = emp.rowCount ? emp.rows[0].name : null;
-
-    if (employeeName) {
-      byName = await pool.query(
-        `
-        SELECT COUNT(*)::int AS cnt
-        FROM staffplan
-        WHERE work_date=$1::date
-          AND lower(regexp_replace(trim(
-              CASE
-                WHEN position(',' in employee_name) > 0
-                  THEN trim(split_part(employee_name, ',', 2)) || ' ' || trim(split_part(employee_name, ',', 1))
-                ELSE employee_name
-              END
-            ), '\\s+', ' ', 'g'))
-            = lower(regexp_replace(trim($2), '\\s+', ' ', 'g'))
-        `,
-        [date, employeeName]
-      );
-    }
-  }
-
   res.json({
     ok: true,
     date,
-    total_on_date: totalOnDate.rows[0].cnt,
-    employee_id: employeeId || null,
-    staffplan_for_employee_id: forEmployee ? forEmployee.rows[0].cnt : null,
-    employee_name_from_employees: employeeName,
-    staffplan_for_employee_name: byName ? byName.rows[0].cnt : null,
+    total_on_date: totalOnDate.rows[0].cnt
   });
 });
 
