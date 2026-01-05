@@ -233,6 +233,15 @@ async function migrate() {
     ON staffplan_changes (run_id, change_id);
   `);
 
+  // ===== App Settings (z.B. SharePoint Link + last hash) =====
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
   console.log("✅ DB migrate finished");
 }
 
