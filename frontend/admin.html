@@ -373,10 +373,9 @@
     try{
       const fd = new FormData();
       fd.append("file", fileEl.files[0]);
-      fd.append("confirm_code", code.trim());
-
+      fd.append("code", code.trim());
       // Erwarteter Backend-Endpoint (multipart/form-data)
-      const r = await fetch("/api/admin/staffplan/upload", { method:"POST", body: fd });
+      const r = await fetch(`/api/admin/staffplan/upload?code=${encodeURIComponent(code.trim())}`, { method:"POST", body: fd });
       const t = await r.text();
       let j; try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
 
