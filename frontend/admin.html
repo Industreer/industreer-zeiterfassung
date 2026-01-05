@@ -71,6 +71,42 @@
     <div id="moveResult" class="small" style="margin-top:10px"></div>
   </div>
 
+  <!-- ✅ Reset-Tools (damit dein vorhandenes JS nicht crasht) -->
+  <div class="card" id="resetTools">
+    <h3 style="margin:0 0 8px">Tools: Import-Daten zurücksetzen</h3>
+    <div class="muted small" style="margin-bottom:10px">
+      Löscht Import-Daten/Zuordnungen serverseitig (je nach Implementierung). Bitte vorsichtig benutzen.
+    </div>
+    <div class="row">
+      <label class="muted">Bestätigung:</label>
+      <input id="resetConfirm" type="text" placeholder="z.B. RESET oder Code (je nach Backend)"/>
+      <button id="btnResetImport">Reset ausführen</button>
+      <span id="resetOut" class="small muted"></span>
+    </div>
+  </div>
+
+  <!-- ✅ Staffplan Tools (sichtbar: Download + Upload) -->
+  <div class="card" id="staffplanTools">
+    <h3 style="margin:0 0 8px">Staffplan Tools</h3>
+    <div class="muted small" style="margin-bottom:10px">
+      Fallback, falls SharePoint/Graph gerade nicht läuft: Download manuell triggern oder Excel hochladen.
+      Aktionen erfordern den Code <b>2012</b>.
+    </div>
+
+    <div class="row">
+      <button id="btnDownloadStaffplan">📥 Staffplan manuell herunterladen</button>
+
+      <input id="staffplanFile" type="file"
+             accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>
+
+      <button id="btnUploadStaffplan">⬆️ Staffplan Excel hochladen</button>
+
+      <span id="dlOut" class="small muted"></span>
+    </div>
+
+    <div id="uploadOut" class="small" style="margin-top:10px"></div>
+  </div>
+
   <div class="card">
     <h3 style="margin:0 0 8px">Mitarbeiterübersicht</h3>
     <div class="muted small">Hinweis: In der Liste siehst du auch Dubletten (gleicher Name, unterschiedliche IDs). Das ist normal – genau dafür ist das Umhängen da.</div>
@@ -116,8 +152,10 @@
   }
 
   function renderTable(rows){
-    const q = $("q").value.trim().toLowerCase();
-    const filter = $("filter").value;
+    const qEl = $("q");
+    const filterEl = $("filter");
+    const q = (qEl ? qEl.value : "").trim().toLowerCase();
+    const filter = filterEl ? filterEl.value : "all";
 
     let out = rows;
 
@@ -134,24 +172,27 @@
     if(filter === "used") out = out.filter(r => (r.staffplan_rows+r.time_rows+r.break_rows) > 0);
 
     const tb = $("tbody");
-    tb.innerHTML = out.map(r => `
-      <tr>
-        <td class="mono">${esc(r.employee_id)}</td>
-        <td>${esc(r.name)}</td>
-        <td>${r.email ? esc(r.email) : '<span class="muted">–</span>'}</td>
-        <td>${esc(r.language || 'de')}</td>
-        <td>
-          <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
-            ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
-          </span>
-        </td>
-        <td>${esc(r.staffplan_rows)}</td>
-        <td>${esc(r.time_rows)}</td>
-        <td>${esc(r.break_rows)}</td>
-      </tr>
-    `).join("");
+    if(tb){
+      tb.innerHTML = out.map(r => `
+        <tr>
+          <td class="mono">${esc(r.employee_id)}</td>
+          <td>${esc(r.name)}</td>
+          <td>${r.email ? esc(r.email) : '<span class="muted">–</span>'}</td>
+          <td>${esc(r.language || 'de')}</td>
+          <td>
+            <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
+              ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
+            </span>
+          </td>
+          <td>${esc(r.staffplan_rows)}</td>
+          <td>${esc(r.time_rows)}</td>
+          <td>${esc(r.break_rows)}</td>
+        </tr>
+      `).join("");
+    }
 
-    $("status").textContent = `Zeilen: ${out.length} (gesamt: ${rows.length})`;
+    const st = $("status");
+    if(st) st.textContent = `Zeilen: ${out.length} (gesamt: ${rows.length})`;
   }
 
   function fillAutoDropdown(rows){
@@ -160,6 +201,8 @@
       .sort((a,b)=> (b.staffplan_rows+b.time_rows+b.break_rows) - (a.staffplan_rows+a.time_rows+a.break_rows));
 
     const sel = $("oldId");
+    if(!sel) return;
+
     sel.innerHTML = autos.map(r => {
       const used = r.staffplan_rows+r.time_rows+r.break_rows;
       const label = `${r.employee_id} — ${r.name} (Daten: ${used})`;
@@ -172,8 +215,12 @@
   }
 
   async function load(){
-    $("moveResult").innerHTML = "";
-    $("status").textContent = "Lade…";
+    const mr = $("moveResult");
+    if(mr) mr.innerHTML = "";
+
+    const st = $("status");
+    if(st) st.textContent = "Lade…";
+
     const j = await api("/api/admin/employees");
     allRows = j.rows || [];
     renderTable(allRows);
@@ -181,24 +228,29 @@
   }
 
   async function move(){
-    const old_employee_id = $("oldId").value;
-    const new_employee_id = $("newId").value.trim();
-    const merge = $("merge").value;
+    const oldIdEl = $("oldId");
+    const newIdEl = $("newId");
+    const mergeEl = $("merge");
+    const resEl = $("moveResult");
+
+    const old_employee_id = oldIdEl ? oldIdEl.value : "";
+    const new_employee_id = newIdEl ? newIdEl.value.trim() : "";
+    const merge = mergeEl ? mergeEl.value : "keep_new";
 
     if(!old_employee_id){
-      $("moveResult").innerHTML = `<span class="bad">Bitte eine alte AUTO_* ID wählen.</span>`;
+      if(resEl) resEl.innerHTML = `<span class="bad">Bitte eine alte AUTO_* ID wählen.</span>`;
       return;
     }
     if(!new_employee_id){
-      $("moveResult").innerHTML = `<span class="bad">Bitte neue ID eingeben (z.B. 0815).</span>`;
+      if(resEl) resEl.innerHTML = `<span class="bad">Bitte neue ID eingeben (z.B. 0815).</span>`;
       return;
     }
     if(new_employee_id.startsWith("AUTO_")){
-      $("moveResult").innerHTML = `<span class="bad">Neue ID darf nicht mit AUTO_ beginnen.</span>`;
+      if(resEl) resEl.innerHTML = `<span class="bad">Neue ID darf nicht mit AUTO_ beginnen.</span>`;
       return;
     }
 
-    $("moveResult").innerHTML = `<span class="muted">Umhängen läuft…</span>`;
+    if(resEl) resEl.innerHTML = `<span class="muted">Umhängen läuft…</span>`;
 
     try{
       const j = await api("/api/admin/employee-id", {
@@ -206,73 +258,174 @@
         body: JSON.stringify({ old_employee_id, new_employee_id, merge })
       });
 
-      $("moveResult").innerHTML = `
-        <div class="ok"><b>✅ Erfolgreich umgehängt</b></div>
-        <div class="small">
-          <div>Alt: <span class="mono">${esc(j.old_employee_id)}</span> → Neu: <span class="mono">${esc(j.new_employee_id)}</span></div>
-          <div>Aktualisiert: staffplan=${esc(j.updated?.staffplan)}, time_entries=${esc(j.updated?.time_entries)}, breaks=${esc(j.updated?.breaks)}</div>
-          <div class="muted">Merge-Modus: ${esc(j.merge_mode)}</div>
-        </div>
-      `;
+      if(resEl){
+        resEl.innerHTML = `
+          <div class="ok"><b>✅ Erfolgreich umgehängt</b></div>
+          <div class="small">
+            <div>Alt: <span class="mono">${esc(j.old_employee_id)}</span> → Neu: <span class="mono">${esc(j.new_employee_id)}</span></div>
+            <div>Aktualisiert: staffplan=${esc(j.updated?.staffplan)}, time_entries=${esc(j.updated?.time_entries)}, breaks=${esc(j.updated?.breaks)}</div>
+            <div class="muted">Merge-Modus: ${esc(j.merge_mode)}</div>
+          </div>
+        `;
+      }
 
       await load();
-      $("newId").value = "";
+      if(newIdEl) newIdEl.value = "";
     }catch(e){
-      $("moveResult").innerHTML = `<span class="bad">❌ Fehler: ${esc(e.message)}</span>`;
+      if(resEl) resEl.innerHTML = `<span class="bad">❌ Fehler: ${esc(e.message)}</span>`;
     }
   }
 
-  $("btnReload").addEventListener("click", load);
-  $("btnMove").addEventListener("click", move);
-  $("q").addEventListener("input", ()=>renderTable(allRows));
-  $("filter").addEventListener("change", ()=>renderTable(allRows));
   // ===== Tools: Reset Import-Daten =====
-  $("btnResetImport").addEventListener("click", async () => {
+  async function doReset(){
     const out = $("resetOut");
-    out.className = "small muted";
-    out.textContent = "Reset läuft…";
+    if(out){
+      out.className = "small muted";
+      out.textContent = "Reset läuft…";
+    }
 
     try {
-      const confirm = $("resetConfirm").value.trim();
+      const confirmEl = $("resetConfirm");
+      const confirm = confirmEl ? confirmEl.value.trim() : "";
       const j = await api("/api/admin/reset", {
         method: "POST",
         body: JSON.stringify({ confirm })
       });
-      out.className = "small ok";
-      out.textContent = "✅ " + (j.note || "Reset erfolgreich");
-      // danach neu laden
+
+      if(out){
+        out.className = "small ok";
+        out.textContent = "✅ " + (j.note || "Reset erfolgreich");
+      }
+
       await load();
-      $("resetConfirm").value = "";
+      if(confirmEl) confirmEl.value = "";
     } catch (e) {
-      out.className = "small bad";
-      out.textContent = "❌ " + e.message;
+      if(out){
+        out.className = "small bad";
+        out.textContent = "❌ " + e.message;
+      }
     }
-  });
+  }
 
   // ===== Tools: Staffplan Download (Code 2012) =====
-  $("btnDownloadStaffplan").addEventListener("click", async () => {
+  async function downloadStaffplan(){
     const out = $("dlOut");
-    out.className = "small muted";
-    out.textContent = "";
+    if(out){
+      out.className = "small muted";
+      out.textContent = "";
+    }
 
     const code = prompt("Bestätigungscode eingeben (2012):");
     if (!code) return;
 
     if (code.trim() !== "2012") {
-      out.className = "small bad";
-      out.textContent = "❌ Falscher Code.";
+      if(out){
+        out.className = "small bad";
+        out.textContent = "❌ Falscher Code.";
+      }
       return;
     }
 
-    out.className = "small muted";
-    out.textContent = "⬇️ Download startet…";
+    if(out){
+      out.className = "small muted";
+      out.textContent = "⬇️ Download startet…";
+    }
 
-    // Download im Browser auslösen
+    // Download im Browser auslösen (dein vorhandener Endpoint)
     window.location.href = `/api/staffplan/download?code=${encodeURIComponent(code.trim())}`;
-  });
+  }
+
+  // ===== Tools: Staffplan Upload (Code 2012) =====
+  async function uploadStaffplan(){
+    const fileEl = $("staffplanFile");
+    const out = $("uploadOut");
+    const dlOut = $("dlOut");
+
+    if(out){
+      out.className = "small muted";
+      out.textContent = "";
+    }
+
+    if(!fileEl || !fileEl.files || !fileEl.files[0]){
+      if(out){
+        out.className = "small bad";
+        out.textContent = "❌ Bitte zuerst eine .xlsx Datei auswählen.";
+      }
+      return;
+    }
+
+    const code = prompt("Bestätigungscode eingeben (2012):");
+    if (!code) return;
+
+    if (code.trim() !== "2012") {
+      if(out){
+        out.className = "small bad";
+        out.textContent = "❌ Falscher Code.";
+      }
+      return;
+    }
+
+    if(dlOut){
+      dlOut.className = "small muted";
+      dlOut.textContent = "⬆️ Upload läuft…";
+    }
+
+    try{
+      const fd = new FormData();
+      fd.append("file", fileEl.files[0]);
+      fd.append("confirm_code", code.trim());
+
+      // Erwarteter Backend-Endpoint (multipart/form-data)
+      const r = await fetch("/api/admin/staffplan/upload", { method:"POST", body: fd });
+      const t = await r.text();
+      let j; try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
+
+      if(!r.ok || j.ok === false){
+        throw new Error(j.error || j.message || t || ("HTTP " + r.status));
+      }
+
+      if(out){
+        out.className = "small ok";
+        out.textContent = "✅ " + (j.message || "Upload/Import gestartet");
+      }
+      if(dlOut) dlOut.textContent = "";
+
+      await load();
+      fileEl.value = "";
+    }catch(e){
+      if(out){
+        out.className = "small bad";
+        out.textContent = "❌ " + e.message;
+      }
+      if(dlOut) dlOut.textContent = "";
+    }
+  }
+
+  // ===== Sichere Event-Bindings (kein Crash, auch wenn Elemente fehlen) =====
+  const btnReload = $("btnReload");
+  if(btnReload) btnReload.addEventListener("click", load);
+
+  const btnMove = $("btnMove");
+  if(btnMove) btnMove.addEventListener("click", move);
+
+  const qEl = $("q");
+  if(qEl) qEl.addEventListener("input", ()=>renderTable(allRows));
+
+  const filterEl = $("filter");
+  if(filterEl) filterEl.addEventListener("change", ()=>renderTable(allRows));
+
+  const btnReset = $("btnResetImport");
+  if(btnReset) btnReset.addEventListener("click", doReset);
+
+  const btnDl = $("btnDownloadStaffplan");
+  if(btnDl) btnDl.addEventListener("click", downloadStaffplan);
+
+  const btnUp = $("btnUploadStaffplan");
+  if(btnUp) btnUp.addEventListener("click", uploadStaffplan);
 
   load().catch(e=>{
-    $("status").innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
+    const st = $("status");
+    if(st) st.innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
   });
 </script>
 </body>
