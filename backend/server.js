@@ -1,22 +1,17 @@
-console.log("🔥🔥🔥 SERVER.JS FULL FINAL + NAME-MATCH + IMPORT FIX 2025-12-27 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS FULL FINAL + SAFE IMPORT + SCAN-DATES + UPSERT 🔥🔥🔥");
 /**
  * backend/server.js
  *
- * Fixes:
- * - /api/employee/today: sucht zuerst nach employee_id, dann Fallback via Name-Match (inkl. "Nachname, Vorname")
- * - Staffplan Import: nutzt Mitarbeitername aus Spalte K (c=10) und Requester aus Spalte I (c=8)
- * - Import: matched gegen employees.name normalisiert (und Komma-Umkehr), damit z.B. "Irrgang, Jens" -> employee_id 1001
- * - Import: employees INSERT ist UPSERT (kein duplicate key employees_pkey)
- * - planned_hours wird nur als Zahl gespeichert (kein NUMERIC-Fehler)
+ * Fixes / Änderungen:
+ * - staffplan Import löscht NICHT mehr automatisch alles (nur wenn ?reset=1)
+ * - staffplan Import ist idempotent via UNIQUE INDEX + UPSERT
+ * - /api/debug/scan-dates hinzugefügt (für debug.html)
+ * - /api/import/staffplan Response enthält date_from/date_to/date_cols/header_row
  *
- * Enthält Debug Endpoints:
- * - /api/debug/build
- * - /api/debug/staffplan-minmax
- * - /api/debug/staffplan-topdates
- * - /api/debug/staffplan-rows?date=YYYY-MM-DD&employee_id=...
- * - /api/debug/staffplan-check?date=YYYY-MM-DD&employee_id=...
- * - /api/debug/time-rows?employee_id=...
- * - /api/debug/cleanup-time (POST)
+ * Bestehende Endpoints bleiben erhalten:
+ * - /api/employee/today (smart match)
+ * - staffplan debug endpoints
+ * - time/break endpoints
  */
 
 const path = require("path");
@@ -190,6 +185,12 @@ async function migrate() {
     );
   `);
 
+  // Unique Index für UPSERT (idempotent reimport)
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq
+    ON staffplan (employee_id, work_date, customer_po, internal_po, project_short);
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS time_entries (
       id BIGSERIAL PRIMARY KEY,
@@ -206,7 +207,7 @@ async function migrate() {
     );
   `);
 
-  // Backward compatibility falls alte Builds andere Spalten hatten:
+  // Backward compatibility
   await ensureColumn("time_entries", "start_ts", "TIMESTAMPTZ");
   await ensureColumn("time_entries", "end_ts", "TIMESTAMPTZ");
   await ensureColumn("time_entries", "start_time", "TIMESTAMPTZ");
@@ -289,7 +290,7 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/api/debug/build", (req, res) => {
   res.json({
     ok: true,
-    build: "server.js FULL FINAL + NAME-MATCH + IMPORT FIX 2025-12-27",
+    build: "server.js FULL FINAL + SAFE IMPORT + SCAN-DATES + UPSERT",
     node: process.version,
     now: new Date().toISOString(),
   });
@@ -353,7 +354,116 @@ app.get("/api/employee/today", async (req, res) => {
 });
 
 // ======================================================
-// STAFFPLAN IMPORT
+// DEBUG: Scan Dates (für debug.html)
+// ======================================================
+app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+
+    let headerRow = null;
+    let bestCnt = 0;
+    let bestStartCol = null;
+    let bestEndCol = null;
+
+    for (let rr = 0; rr <= 25; rr++) {
+      let cnt = 0;
+      let first = null;
+      let last = null;
+      for (let c = 0; c <= 260; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: rr, c })];
+        const d = parseExcelDate(cell);
+        if (d) {
+          cnt++;
+          if (first === null) first = c;
+          last = c;
+        }
+      }
+      if (cnt > bestCnt) {
+        bestCnt = cnt;
+        headerRow = rr;
+        bestStartCol = first;
+        bestEndCol = last;
+      }
+    }
+
+    if (headerRow === null || bestCnt < 3 || bestStartCol === null || bestEndCol === null) {
+      return res.json({
+        ok: false,
+        error: "Keine Datums-Kopfzeile gefunden",
+        bestCnt,
+        headerRow,
+        bestStartCol,
+        bestEndCol,
+      });
+    }
+
+    const startCol = bestStartCol;
+    const endCol = bestEndCol;
+
+    let firstDateCol = null;
+    let baseDate = null;
+
+    for (let c = startCol; c <= endCol; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+      const d = parseExcelDate(cell);
+      if (d) {
+        firstDateCol = c;
+        baseDate = d;
+        break;
+      }
+    }
+
+    if (!baseDate || firstDateCol === null) {
+      return res.json({ ok: false, error: "Header-Zeile gefunden, aber kein erstes Datum parsebar" });
+    }
+
+    const dates = [];
+    let currentBaseDate = baseDate;
+    let currentBaseCol = firstDateCol;
+
+    for (let c = firstDateCol; c <= endCol; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+      const parsed = parseExcelDate(cell);
+
+      if (parsed) {
+        currentBaseDate = parsed;
+        currentBaseCol = c;
+      }
+
+      const d = parsed
+        ? parsed
+        : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
+
+      dates.push({
+        col: c,
+        iso: toIsoDate(d),
+        header_raw: cell?.w ?? cell?.v ?? null,
+        parsed_from_header: !!parsed,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      sheet: wb.SheetNames[0],
+      header_row_1based: headerRow + 1,
+      start_col: startCol,
+      end_col: endCol,
+      date_cols: dates.length,
+      date_from: dates[0]?.iso,
+      date_to: dates[dates.length - 1]?.iso,
+      tail: dates.slice(-15),
+    });
+  } catch (e) {
+    console.error("SCAN DATES ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
+// STAFFPLAN IMPORT (SAFE + UPSERT)
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
@@ -362,7 +472,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    // --- HeaderRow finden (Zeilen 0..25): beste Zeile mit den meisten parsebaren Daten ---
+    // --- HeaderRow finden (Zeilen 0..25)
     let headerRow = null;
     let bestCnt = 0;
     let bestStartCol = null;
@@ -396,7 +506,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const startCol = bestStartCol;
     const endCol = bestEndCol;
 
-    // --- Dates lückenlos pro Spalte bauen ---
+    // --- Dates pro Spalte bauen ---
     let firstDateCol = null;
     let baseDate = null;
 
@@ -440,23 +550,31 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       "cols:", dates.length
     );
 
-    // staffplan leeren
-    await pool.query("DELETE FROM staffplan");
+    // Optionaler Reset
+    if (String(req.query.reset) === "1") {
+      console.log("🧹 Reset=1 -> TRUNCATE staffplan");
+      await pool.query("TRUNCATE staffplan");
+    }
 
     let imported = 0;
+    let skippedNoEmployee = 0;
 
-    // Zeilen: Mitarbeiterblock alle 2 Zeilen, Start typischerweise nach Header
-    // Wir laufen großzügig über 5..20000 wie bisher.
+    // Zeilen: Mitarbeiterblock alle 2 Zeilen
     for (let r = 5; r < 20000; r += 2) {
-      // ✅ Requester: Spalte I (c=8)
+      // Requester I (c=8) – nur wenn wir K als Employee nutzen; sonst kann es konfliktieren
       const requesterCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
       const requesterName = requesterCell?.v ? String(requesterCell.v).trim() : null;
 
-      // ✅ Mitarbeitername: Spalte K (c=10)
-      const empCell = ws[XLSX.utils.encode_cell({ r, c: 10 })];
-      if (!empCell?.v) continue;
+      // Mitarbeiter: primär K (10), fallback I (8) falls K leer
+      const empCellK = ws[XLSX.utils.encode_cell({ r, c: 10 })];
+      const empCellI = ws[XLSX.utils.encode_cell({ r, c: 8 })];
 
-      const employeeNameRaw = String(empCell.v).trim();
+      const employeeNameRaw =
+        (empCellK?.v ? String(empCellK.v).trim() : "") ||
+        (empCellI?.v ? String(empCellI.v).trim() : "");
+
+      if (!employeeNameRaw) { skippedNoEmployee++; continue; }
+
       const employeeNameCanonical = commaSwapName(employeeNameRaw);
 
       // --- Mitarbeiter-ID finden (by normalized name, inkl. Komma-Umkehr) ---
@@ -478,7 +596,6 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       if (emp.rowCount) {
         employeeId = emp.rows[0].employee_id;
       } else {
-        // stabilen AUTO-Key aus Namen bauen (kein duplicate key beim Reimport)
         employeeId = makeAutoIdFromName(employeeNameCanonical);
 
         await pool.query(
@@ -491,7 +608,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         );
       }
 
-      // Customer / POs (wie vorher)
+      // Customer / POs
       const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
       const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
       const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
@@ -510,10 +627,17 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
             (employee_id, employee_name, requester_name, work_date, calendar_week,
              customer, internal_po, customer_po, project_short, planned_hours)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          ON CONFLICT (employee_id, work_date, customer_po, internal_po, project_short)
+          DO UPDATE SET
+            employee_name  = EXCLUDED.employee_name,
+            requester_name = EXCLUDED.requester_name,
+            calendar_week  = EXCLUDED.calendar_week,
+            customer       = EXCLUDED.customer,
+            planned_hours  = EXCLUDED.planned_hours
           `,
           [
             employeeId,
-            employeeNameCanonical, // ✅ canonical speichern
+            employeeNameCanonical,
             requesterName,
             d.iso,
             d.cw,
@@ -532,6 +656,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     return res.json({
       ok: true,
       imported,
+      skipped_no_employee_rows: skippedNoEmployee,
       header_row: headerRow + 1,
       date_from: dates[0].iso,
       date_to: dates[dates.length - 1].iso,
@@ -575,7 +700,6 @@ app.post("/api/time/start", async (req, res) => {
 
     const today = new Date().toISOString().slice(0, 10);
 
-    // keine parallelen offenen Einträge
     const open = await pool.query(
       `SELECT id FROM time_entries WHERE employee_id=$1 AND end_time IS NULL ORDER BY id DESC LIMIT 1`,
       [employeeId]
@@ -585,7 +709,6 @@ app.post("/api/time/start", async (req, res) => {
       return res.json({ ok: true, start_time: row.rows[0].start_time, note: "already_running" });
     }
 
-    // Auto: erstes heutiges Projekt ziehen (SMART)
     const { rows: projects } = await getTodayProjectsSmart(employeeId, today);
     const picked = projects && projects.length ? projects[0] : null;
 
@@ -645,7 +768,6 @@ app.post("/api/time/end", async (req, res) => {
     const row = open.rows[0];
     const now = new Date();
 
-    // Break-Minuten des Tages summieren
     const br = await pool.query(
       `
       SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_ts - start_ts)))/60,0)::int AS mins
@@ -656,7 +778,6 @@ app.post("/api/time/end", async (req, res) => {
     );
     const breakMinutes = br.rows[0].mins || 0;
 
-    // Netto-Stunden
     const start = new Date(row.start_time);
     const grossHours = Math.max(0, (now.getTime() - start.getTime()) / 3600000);
     const netHours = Math.max(0, grossHours - breakMinutes / 60);
@@ -692,7 +813,6 @@ app.post("/api/break/start", async (req, res) => {
 
     const today = new Date().toISOString().slice(0, 10);
 
-    // keine parallele offene Pause
     const open = await pool.query(
       `SELECT id FROM breaks WHERE employee_id=$1 AND end_ts IS NULL ORDER BY id DESC LIMIT 1`,
       [employeeId]
@@ -874,13 +994,11 @@ app.post("/api/debug/cleanup-time", async (req, res) => {
     const employeeId = String(req.body.employee_id || "").trim();
     if (!employeeId) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
-    // Lösche kaputte Zeilen ohne start_time
     const del = await pool.query(
       `DELETE FROM time_entries WHERE employee_id=$1 AND (start_time IS NULL) RETURNING id`,
       [employeeId]
     );
 
-    // Schließe offene Einträge (end_time NULL) auf "jetzt"
     const close = await pool.query(
       `
       UPDATE time_entries
@@ -892,7 +1010,6 @@ app.post("/api/debug/cleanup-time", async (req, res) => {
       [employeeId]
     );
 
-    // Schließe offene breaks
     const closeBreaks = await pool.query(
       `
       UPDATE breaks
