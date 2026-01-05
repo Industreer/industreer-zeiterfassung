@@ -226,6 +226,50 @@
   $("btnMove").addEventListener("click", move);
   $("q").addEventListener("input", ()=>renderTable(allRows));
   $("filter").addEventListener("change", ()=>renderTable(allRows));
+  // ===== Tools: Reset Import-Daten =====
+  $("btnResetImport").addEventListener("click", async () => {
+    const out = $("resetOut");
+    out.className = "small muted";
+    out.textContent = "Reset läuft…";
+
+    try {
+      const confirm = $("resetConfirm").value.trim();
+      const j = await api("/api/admin/reset", {
+        method: "POST",
+        body: JSON.stringify({ confirm })
+      });
+      out.className = "small ok";
+      out.textContent = "✅ " + (j.note || "Reset erfolgreich");
+      // danach neu laden
+      await load();
+      $("resetConfirm").value = "";
+    } catch (e) {
+      out.className = "small bad";
+      out.textContent = "❌ " + e.message;
+    }
+  });
+
+  // ===== Tools: Staffplan Download (Code 2012) =====
+  $("btnDownloadStaffplan").addEventListener("click", async () => {
+    const out = $("dlOut");
+    out.className = "small muted";
+    out.textContent = "";
+
+    const code = prompt("Bestätigungscode eingeben (2012):");
+    if (!code) return;
+
+    if (code.trim() !== "2012") {
+      out.className = "small bad";
+      out.textContent = "❌ Falscher Code.";
+      return;
+    }
+
+    out.className = "small muted";
+    out.textContent = "⬇️ Download startet…";
+
+    // Download im Browser auslösen
+    window.location.href = `/api/staffplan/download?code=${encodeURIComponent(code.trim())}`;
+  });
 
   load().catch(e=>{
     $("status").innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
