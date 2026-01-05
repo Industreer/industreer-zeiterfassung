@@ -1,4 +1,4 @@
-console.log("🔥🔥🔥 SERVER.JS FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX + OPTIMIZED IMPORT LOOP + INDEXES 🔥🔥🔥");
 
 const path = require("path");
 const fs = require("fs");
@@ -164,9 +164,19 @@ async function migrate() {
     );
   `);
 
+  // Unique für UPSERT
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq
     ON staffplan (employee_id, work_date, customer_po, internal_po, project_short);
+  `);
+
+  // ✅ Performance-Indizes
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS staffplan_by_date
+    ON staffplan (work_date);
+
+    CREATE INDEX IF NOT EXISTS staffplan_by_date_emp
+    ON staffplan (work_date, employee_id);
   `);
 
   await pool.query(`
@@ -265,7 +275,8 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/api/debug/build", (req, res) => {
   res.json({
     ok: true,
-    build: "server.js FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX",
+    build:
+      "server.js FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX + OPTIMIZED IMPORT LOOP + INDEXES",
     node: process.version,
     now: new Date().toISOString(),
   });
@@ -338,13 +349,15 @@ app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    let headerRow = null;
-    let bestCnt = 0;
-    let bestStartCol = null;
-    let bestEndCol = null;
+    let headerRow = null,
+      bestCnt = 0,
+      bestStartCol = null,
+      bestEndCol = null;
 
     for (let rr = 0; rr <= 25; rr++) {
-      let cnt = 0, first = null, last = null;
+      let cnt = 0,
+        first = null,
+        last = null;
       for (let c = 0; c <= 450; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r: rr, c })];
         const d = parseExcelDate(cell);
@@ -374,7 +387,11 @@ app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
     for (let c = startCol; c <= endCol; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
       const d = parseExcelDate(cell);
-      if (d) { firstDateCol = c; baseDate = d; break; }
+      if (d) {
+        firstDateCol = c;
+        baseDate = d;
+        break;
+      }
     }
     if (!baseDate || firstDateCol === null) {
       return res.json({ ok: false, error: "Kein erstes Datum parsebar" });
@@ -387,9 +404,17 @@ app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
     for (let c = firstDateCol; c <= endCol; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
       const parsed = parseExcelDate(cell);
-      if (parsed) { currentBaseDate = parsed; currentBaseCol = c; }
+      if (parsed) {
+        currentBaseDate = parsed;
+        currentBaseCol = c;
+      }
       const d = parsed ? parsed : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
-      dates.push({ col: c, iso: toIsoDate(d), header_raw: cell?.w ?? cell?.v ?? null, parsed_from_header: !!parsed });
+      dates.push({
+        col: c,
+        iso: toIsoDate(d),
+        header_raw: cell?.w ?? cell?.v ?? null,
+        parsed_from_header: !!parsed,
+      });
     }
 
     return res.json({
@@ -423,16 +448,30 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    let headerRow = null, bestCnt = 0, bestStartCol = null, bestEndCol = null;
+    let headerRow = null,
+      bestCnt = 0,
+      bestStartCol = null,
+      bestEndCol = null;
 
     for (let rr = 0; rr <= 25; rr++) {
-      let cnt = 0, first = null, last = null;
+      let cnt = 0,
+        first = null,
+        last = null;
       for (let c = 0; c <= 450; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r: rr, c })];
         const d = parseExcelDate(cell);
-        if (d) { cnt++; if (first === null) first = c; last = c; }
+        if (d) {
+          cnt++;
+          if (first === null) first = c;
+          last = c;
+        }
       }
-      if (cnt > bestCnt) { bestCnt = cnt; headerRow = rr; bestStartCol = first; bestEndCol = last; }
+      if (cnt > bestCnt) {
+        bestCnt = cnt;
+        headerRow = rr;
+        bestStartCol = first;
+        bestEndCol = last;
+      }
     }
 
     if (headerRow === null || bestCnt < 3 || bestStartCol === null || bestEndCol === null) {
@@ -447,7 +486,11 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
     for (let c = startCol; c <= endCol; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
       const d = parseExcelDate(cell);
-      if (d) { firstDateCol = c; baseDate = d; break; }
+      if (d) {
+        firstDateCol = c;
+        baseDate = d;
+        break;
+      }
     }
     if (!baseDate || firstDateCol === null) {
       return res.json({ ok: false, error: "Kein erstes Datum parsebar" });
@@ -503,7 +546,7 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
 });
 
 // ======================================================
-// STAFFPLAN IMPORT (FIXED endCol to include target_end col)
+// STAFFPLAN IMPORT (TARGET END COL FIX + OPTIMIZED LOOP)
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
@@ -512,16 +555,30 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    let headerRow = null, bestCnt = 0, bestStartCol = null, bestEndCol = null;
+    let headerRow = null,
+      bestCnt = 0,
+      bestStartCol = null,
+      bestEndCol = null;
 
     for (let rr = 0; rr <= 25; rr++) {
-      let cnt = 0, first = null, last = null;
+      let cnt = 0,
+        first = null,
+        last = null;
       for (let c = 0; c <= 450; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r: rr, c })];
         const d = parseExcelDate(cell);
-        if (d) { cnt++; if (first === null) first = c; last = c; }
+        if (d) {
+          cnt++;
+          if (first === null) first = c;
+          last = c;
+        }
       }
-      if (cnt > bestCnt) { bestCnt = cnt; headerRow = rr; bestStartCol = first; bestEndCol = last; }
+      if (cnt > bestCnt) {
+        bestCnt = cnt;
+        headerRow = rr;
+        bestStartCol = first;
+        bestEndCol = last;
+      }
     }
 
     if (headerRow === null || bestCnt < 3 || bestStartCol === null || bestEndCol === null) {
@@ -537,13 +594,17 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     for (let c = startCol; c <= endCol; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
       const d = parseExcelDate(cell);
-      if (d) { firstDateCol = c; baseDate = d; break; }
+      if (d) {
+        firstDateCol = c;
+        baseDate = d;
+        break;
+      }
     }
     if (!baseDate || firstDateCol === null) {
       return res.json({ ok: false, error: "Header gefunden, aber kein erstes Datum parsebar" });
     }
 
-    // 🔥 FIX: ensure endCol covers target_end column
+    // ✅ ensure endCol covers target_end column
     const targetEndIso = String(req.query.target_end || "2025-12-27").trim();
     const baseIso = toIsoDate(baseDate);
     const base = new Date(baseIso + "T00:00:00.000Z");
@@ -555,7 +616,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       if (targetCol > endCol) endCol = targetCol;
     }
 
-    // dates build (now includes 25-27 Dec)
+    // build dates
     const dates = [];
     let currentBaseDate = baseDate;
     let currentBaseCol = firstDateCol;
@@ -563,7 +624,10 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     for (let c = firstDateCol; c <= endCol; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
       const parsed = parseExcelDate(cell);
-      if (parsed) { currentBaseDate = parsed; currentBaseCol = c; }
+      if (parsed) {
+        currentBaseDate = parsed;
+        currentBaseCol = c;
+      }
       const d = parsed ? parsed : new Date(currentBaseDate.getTime() + (c - currentBaseCol) * 86400000);
       dates.push({ col: c, iso: toIsoDate(d), cw: "CW" + getISOWeek(d) });
     }
@@ -584,7 +648,14 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     let imported = 0;
     let skippedNoEmployee = 0;
 
+    // ✅ OPTIMIZATION: Break when long empty streak (file end reached)
+    const EMPTY_STREAK_BREAK = 200; // robust: very unlikely to cut off real data
+    let emptyEmployeeStreak = 0;
+    let lastProcessedRow = null;
+
     for (let r = 5; r < 20000; r += 2) {
+      lastProcessedRow = r;
+
       const requesterCell = ws[XLSX.utils.encode_cell({ r, c: 8 })];
       const requesterName = requesterCell?.v ? String(requesterCell.v).trim() : null;
 
@@ -595,7 +666,16 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         (empCellK?.v ? String(empCellK.v).trim() : "") ||
         (empCellI?.v ? String(empCellI.v).trim() : "");
 
-      if (!employeeNameRaw) { skippedNoEmployee++; continue; }
+      if (!employeeNameRaw) {
+        skippedNoEmployee++;
+        emptyEmployeeStreak++;
+        if (emptyEmployeeStreak >= EMPTY_STREAK_BREAK) {
+          console.log(`🧠 Import stop: ${EMPTY_STREAK_BREAK} leere Mitarbeiterzeilen am Stück (ab Zeile ${r + 1})`);
+          break;
+        }
+        continue;
+      }
+      emptyEmployeeStreak = 0;
 
       const employeeNameCanonical = commaSwapName(employeeNameRaw);
 
@@ -669,8 +749,11 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       date_to: dates[dates.length - 1].iso,
       date_cols: dates.length,
       target_end: targetEndIso,
+      optimization: {
+        empty_streak_break: EMPTY_STREAK_BREAK,
+        last_processed_excel_row_1based: lastProcessedRow ? lastProcessedRow + 1 : null,
+      },
     });
-
   } catch (e) {
     console.error("STAFFPLAN IMPORT ERROR:", e);
     return res.status(500).json({ ok: false, error: e.message });
@@ -699,6 +782,61 @@ app.get("/api/debug/staffplan-topdates", async (req, res) => {
     LIMIT 15
   `);
   res.json({ ok: true, rows: r.rows });
+});
+
+app.get("/api/debug/staffplan-check", async (req, res) => {
+  const employeeId = String(req.query.employee_id || "").trim();
+  const date = String(req.query.date || "").trim();
+
+  if (!date) return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
+
+  const totalOnDate = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE work_date = $1::date`,
+    [date]
+  );
+
+  let forEmployee = null;
+  let employeeName = null;
+  let byName = null;
+
+  if (employeeId) {
+    forEmployee = await pool.query(
+      `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE work_date=$1::date AND employee_id=$2`,
+      [date, employeeId]
+    );
+
+    const emp = await pool.query(`SELECT name FROM employees WHERE employee_id=$1`, [employeeId]);
+    employeeName = emp.rowCount ? emp.rows[0].name : null;
+
+    if (employeeName) {
+      byName = await pool.query(
+        `
+        SELECT COUNT(*)::int AS cnt
+        FROM staffplan
+        WHERE work_date=$1::date
+          AND lower(regexp_replace(trim(
+              CASE
+                WHEN position(',' in employee_name) > 0
+                  THEN trim(split_part(employee_name, ',', 2)) || ' ' || trim(split_part(employee_name, ',', 1))
+                ELSE employee_name
+              END
+            ), '\\s+', ' ', 'g'))
+            = lower(regexp_replace(trim($2), '\\s+', ' ', 'g'))
+        `,
+        [date, employeeName]
+      );
+    }
+  }
+
+  res.json({
+    ok: true,
+    date,
+    total_on_date: totalOnDate.rows[0].cnt,
+    employee_id: employeeId || null,
+    staffplan_for_employee_id: forEmployee ? forEmployee.rows[0].cnt : null,
+    employee_name_from_employees: employeeName,
+    staffplan_for_employee_name: byName ? byName.rows[0].cnt : null,
+  });
 });
 
 // ======================================================
