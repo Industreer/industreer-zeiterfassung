@@ -1219,6 +1219,216 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
     total_on_date: totalOnDate.rows[0].cnt
   });
 });
+// ======================================================
+// ADMIN: Mitarbeiter-IDs (Hybrid AUTO_* -> echte ID)
+// ======================================================
+
+function isAutoEmployeeId(id) {
+  return String(id || "").startsWith("AUTO_");
+}
+
+// (Optional aber hilfreich) einfacher Employees-GET Endpunkt
+// Damit du auch /api/employees nutzen kannst, falls du ihn brauchst.
+app.get("/api/employees", async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT employee_id, name, email, language FROM employees ORDER BY name`);
+    res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("EMPLOYEES GET ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Admin: Übersicht + Usage Counts
+app.get("/api/admin/employees", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT
+        e.employee_id,
+        e.name,
+        e.email,
+        e.language,
+        CASE WHEN e.employee_id LIKE 'AUTO\\_%' THEN 'auto' ELSE 'manual' END AS id_source,
+        COALESCE(sp.cnt, 0)::int AS staffplan_rows,
+        COALESCE(te.cnt, 0)::int AS time_rows,
+        COALESCE(br.cnt, 0)::int AS break_rows
+      FROM employees e
+      LEFT JOIN (SELECT employee_id, COUNT(*) AS cnt FROM staffplan GROUP BY employee_id) sp
+        ON sp.employee_id = e.employee_id
+      LEFT JOIN (SELECT employee_id, COUNT(*) AS cnt FROM time_entries GROUP BY employee_id) te
+        ON te.employee_id = e.employee_id
+      LEFT JOIN (SELECT employee_id, COUNT(*) AS cnt FROM breaks GROUP BY employee_id) br
+        ON br.employee_id = e.employee_id
+      ORDER BY (CASE WHEN e.employee_id LIKE 'AUTO\\_%' THEN 1 ELSE 0 END) ASC, e.name ASC
+    `);
+
+    res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("ADMIN EMPLOYEES ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Admin: manuell anlegen
+app.post("/api/admin/employees", async (req, res) => {
+  try {
+    const employee_id = String(req.body.employee_id || "").trim();
+    const name = String(req.body.name || "").trim();
+    const email = req.body.email ? String(req.body.email).trim() : null;
+    const language = req.body.language ? String(req.body.language).trim() : "de";
+
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    if (!name) return res.status(400).json({ ok: false, error: "name fehlt" });
+    if (isAutoEmployeeId(employee_id)) {
+      return res.status(400).json({ ok: false, error: "employee_id darf nicht mit AUTO_ beginnen" });
+    }
+
+    await pool.query(
+      `INSERT INTO employees (employee_id, name, email, language) VALUES ($1,$2,$3,$4)`,
+      [employee_id, name, email, language]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    if (String(e.message || "").toLowerCase().includes("duplicate")) {
+      return res.status(409).json({ ok: false, error: "employee_id existiert bereits" });
+    }
+    console.error("ADMIN CREATE EMPLOYEE ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Admin: Daten ändern
+app.patch("/api/admin/employees", async (req, res) => {
+  try {
+    const employee_id = String(req.body.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const name = req.body.name != null ? String(req.body.name).trim() : null;
+    const email = req.body.email != null ? String(req.body.email).trim() : null;
+    const language = req.body.language != null ? String(req.body.language).trim() : null;
+
+    const exists = await pool.query(`SELECT employee_id FROM employees WHERE employee_id=$1`, [employee_id]);
+    if (!exists.rowCount) return res.status(404).json({ ok: false, error: "employee_id nicht gefunden" });
+
+    await pool.query(
+      `
+      UPDATE employees
+      SET name = COALESCE($2, name),
+          email = COALESCE($3, email),
+          language = COALESCE($4, language)
+      WHERE employee_id=$1
+      `,
+      [employee_id, name || null, email || null, language || null]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("ADMIN UPDATE EMPLOYEE ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Admin: ID umhängen (AUTO_* -> echte ID)
+app.post("/api/admin/employee-id", async (req, res) => {
+  const oldId = String(req.body.old_employee_id || "").trim();
+  const newId = String(req.body.new_employee_id || "").trim();
+  const merge = String(req.body.merge || "keep_new").trim(); // keep_new|keep_old
+
+  if (!oldId) return res.status(400).json({ ok: false, error: "old_employee_id fehlt" });
+  if (!newId) return res.status(400).json({ ok: false, error: "new_employee_id fehlt" });
+  if (oldId === newId) return res.status(400).json({ ok: false, error: "old und new sind gleich" });
+  if (isAutoEmployeeId(newId)) return res.status(400).json({ ok: false, error: "new_employee_id darf nicht mit AUTO_ beginnen" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const oldEmp = await client.query(
+      `SELECT employee_id, name, email, language FROM employees WHERE employee_id=$1 FOR UPDATE`,
+      [oldId]
+    );
+    if (!oldEmp.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "old_employee_id nicht gefunden" });
+    }
+
+    const newEmp = await client.query(
+      `SELECT employee_id, name, email, language FROM employees WHERE employee_id=$1 FOR UPDATE`,
+      [newId]
+    );
+
+    const sp = await client.query(`UPDATE staffplan SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
+    const te = await client.query(`UPDATE time_entries SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
+    const br = await client.query(`UPDATE breaks SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
+
+    if (!newEmp.rowCount) {
+      await client.query(`UPDATE employees SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
+    } else {
+      if (merge === "keep_old") {
+        await client.query(
+          `
+          UPDATE employees
+          SET name=$2,
+              email=COALESCE($3,email),
+              language=COALESCE($4,language)
+          WHERE employee_id=$1
+          `,
+          [newId, oldEmp.rows[0].name, oldEmp.rows[0].email, oldEmp.rows[0].language]
+        );
+      }
+      await client.query(`DELETE FROM employees WHERE employee_id=$1`, [oldId]);
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      ok: true,
+      old_employee_id: oldId,
+      new_employee_id: newId,
+      updated: { staffplan: sp.rowCount, time_entries: te.rowCount, breaks: br.rowCount },
+      merge_mode: newEmp.rowCount ? merge : "rename_pk"
+    });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("ADMIN EMPLOYEE-ID ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Admin: löschen (nur wenn unbenutzt)
+app.delete("/api/admin/employees", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    const usage = await pool.query(`
+      SELECT
+        (SELECT COUNT(*) FROM staffplan WHERE employee_id=$1)::int AS staffplan_cnt,
+        (SELECT COUNT(*) FROM time_entries WHERE employee_id=$1)::int AS time_cnt,
+        (SELECT COUNT(*) FROM breaks WHERE employee_id=$1)::int AS break_cnt
+    `, [employee_id]);
+
+    const u = usage.rows[0];
+    if ((u.staffplan_cnt || 0) > 0 || (u.time_cnt || 0) > 0 || (u.break_cnt || 0) > 0) {
+      return res.status(409).json({
+        ok: false,
+        error: "Mitarbeiter wird noch verwendet (staffplan/time/breaks). Erst umhängen oder Daten löschen.",
+        usage: u
+      });
+    }
+
+    const del = await pool.query(`DELETE FROM employees WHERE employee_id=$1`, [employee_id]);
+    if (!del.rowCount) return res.status(404).json({ ok: false, error: "employee_id nicht gefunden" });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("ADMIN DELETE EMPLOYEE ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ======================================================
 // START
