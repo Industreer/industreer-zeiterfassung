@@ -6,23 +6,114 @@
   <title>Admin – Industreer Zeiterfassung</title>
 
   <style>
-    body { font-family: Arial, sans-serif; background: #f4f6f8; padding: 20px; }
-    .box { background: #fff; padding: 20px; border-radius: 10px; max-width: 720px; margin: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f6f8;
+      padding: 20px;
+    }
+    .box {
+      background: #fff;
+      padding: 20px;
+      border-radius: 10px;
+      max-width: 780px;
+      margin: auto;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
     h1 { margin-top: 0; text-align: center; }
-    .section { border: 1px solid #ddd; border-radius: 10px; padding: 15px; margin-top: 20px; }
-    button { padding: 10px 14px; font-size: 16px; border: 0; border-radius: 8px; cursor: pointer; background: #1565c0; color: #fff; margin-top: 10px; }
-    button.secondary { background:#455a64; }
-    input { width: 100%; margin-top: 10px; padding: 10px; }
-    .msg { margin-top: 10px; white-space: pre-wrap; font-size: 14px; }
-    img { max-width: 220px; display: block; margin: 10px auto; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; }
-    .row button { flex:1; }
+    .section {
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 15px;
+      margin-top: 20px;
+    }
+    button {
+      padding: 10px 14px;
+      font-size: 16px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      background: #1565c0;
+      color: #fff;
+      margin-top: 10px;
+      width: 100%;
+    }
+    button.secondary { background: #455a64; }
+    button.warning { background: #d32f2f; }
+    input[type="file"], input[type="text"] {
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .row.single { grid-template-columns: 1fr; }
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      font-size: 14px;
+      color: #333;
+    }
+    .msg {
+      margin-top: 10px;
+      white-space: pre-wrap;
+      font-size: 14px;
+      background: #0b1020;
+      color: #d8e0ff;
+      padding: 10px;
+      border-radius: 8px;
+      overflow: auto;
+      min-height: 48px;
+    }
+    img {
+      max-width: 220px;
+      display: block;
+      margin: 10px auto;
+    }
+    a {
+      color: #1565c0;
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+    .links a { display:block; margin-top:6px; }
+    .hint {
+      color: #555;
+      font-size: 13px;
+      margin-top: 6px;
+      line-height: 1.35;
+    }
+    .pill {
+      display:inline-block;
+      background:#eef3f8;
+      border:1px solid #d0d7e2;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      color:#333;
+      margin-left: 6px;
+    }
   </style>
 </head>
 <body>
 
 <div class="box">
   <h1>Admin</h1>
+
+  <!-- ================= BUILD ================= -->
+  <div class="section">
+    <h3>0) Build / Status <span class="pill" id="buildPill">lade…</span></h3>
+    <div class="hint">
+      Hier siehst du sofort, ob dein neuestes Deployment live ist.
+    </div>
+    <button class="secondary" onclick="loadBuild()">Build neu laden</button>
+    <div class="msg" id="buildMsg"></div>
+  </div>
 
   <!-- ================= LOGO ================= -->
   <div class="section">
@@ -35,85 +126,181 @@
 
   <!-- ================= STAFFPLAN ================= -->
   <div class="section">
-    <h3>2) Staffplan importieren (Excel)</h3>
-    <p>
-      Import erkennt die Datumskopfzeile automatisch.<br>
-      Standard-Mapping im Backend: Kunde=A, interne PO=B, Kunden-PO=E, Requester=I, Mitarbeiter=K (Fallback I).<br>
-      <b>Tipp:</b> Wenn du komplett neu laden willst, nutze „Reset+Import“ (löscht vorher staffplan).
-    </p>
+    <h3>2) Staffplan Import / Dry-Run (Excel)</h3>
+
+    <div class="hint">
+      <b>Dry-Run</b> zählt nur (keine DB-Änderung).<br/>
+      <b>Import</b> schreibt in die DB. Optional kannst du vorher <b>Reset</b> (TRUNCATE) machen.
+    </div>
+
     <input type="file" id="staffFile" accept=".xlsx,.xls" />
 
     <div class="row">
-      <button onclick="importStaffplan(false)">Import</button>
-      <button class="secondary" onclick="importStaffplan(true)">Reset+Import</button>
+      <div>
+        <label for="targetEnd"><b>target_end</b> (YYYY-MM-DD)</label>
+        <input type="text" id="targetEnd" value="2025-12-27" placeholder="2025-12-27" />
+      </div>
+      <div>
+        <label style="margin-top: 28px;">
+          <input type="checkbox" id="resetFirst" />
+          Reset vorher (TRUNCATE staffplan)
+        </label>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="secondary" onclick="staffplanDryRun()">🧪 Staffplan Dry-Run (ohne DB)</button>
+      <button onclick="staffplanImport()">⬆️ Staffplan Import (write)</button>
     </div>
 
     <div class="msg" id="staffMsg"></div>
+
+    <div class="links" style="margin-top:12px;">
+      <h4 style="margin:10px 0 0 0;">Debug-Links</h4>
+      <a href="/api/debug/staffplan-minmax" target="_blank">/api/debug/staffplan-minmax</a>
+      <a href="/api/debug/staffplan-topdates" target="_blank">/api/debug/staffplan-topdates</a>
+      <a href="/api/debug/staffplan-check?date=2025-12-27" target="_blank">/api/debug/staffplan-check?date=2025-12-27</a>
+      <a href="/debug.html" target="_blank">/debug.html (Scan-Dates / Scan-Values Tool)</a>
+    </div>
   </div>
 </div>
 
 <script>
-async function uploadLogo() {
-  const f = document.getElementById("logoFile").files[0];
-  if (!f) { alert("Bitte Logo auswählen"); return; }
+  const el = (id) => document.getElementById(id);
 
-  const fd = new FormData();
-  fd.append("file", f);
+  function fmt(obj) {
+    try { return JSON.stringify(obj, null, 2); } catch { return String(obj); }
+  }
 
-  document.getElementById("logoMsg").textContent = "⏳ Logo wird hochgeladen …";
+  async function loadBuild() {
+    el("buildMsg").textContent = "⏳ Lade Build …";
+    try {
+      const r = await fetch("/api/debug/build?cb=" + Date.now());
+      const j = await r.json();
+      el("buildMsg").textContent = fmt(j);
+      el("buildPill").textContent = j.ok ? "OK" : "ERR";
+    } catch (e) {
+      el("buildMsg").textContent = "❌ Fehler: " + e.message;
+      el("buildPill").textContent = "ERR";
+    }
+  }
 
-  try {
-    const r = await fetch("/api/logo", { method: "POST", body: fd });
-    const data = await r.json();
+  // Auto-load build
+  loadBuild();
 
-    if (!data.ok) {
-      document.getElementById("logoMsg").textContent = "❌ Fehler beim Hochladen";
-      return;
+  async function uploadLogo() {
+    const f = el("logoFile").files[0];
+    if (!f) { alert("Bitte Logo auswählen"); return; }
+
+    const fd = new FormData();
+    fd.append("file", f);
+
+    el("logoMsg").textContent = "⏳ Logo wird hochgeladen …";
+
+    try {
+      const r = await fetch("/api/logo", { method: "POST", body: fd });
+      const data = await r.json();
+
+      if (!data.ok) {
+        el("logoMsg").textContent = "❌ Fehler beim Hochladen: " + (data.error || "unbekannt");
+        return;
+      }
+
+      el("logoMsg").textContent = "✅ Logo erfolgreich gespeichert";
+      setTimeout(() => location.reload(), 800);
+    } catch (e) {
+      el("logoMsg").textContent = "❌ Netzwerkfehler: " + e.message;
+    }
+  }
+
+  function getTargetEnd() {
+    const v = el("targetEnd").value.trim();
+    if (!v) return "2025-12-27";
+    return v;
+  }
+
+  function getReset() {
+    return el("resetFirst").checked;
+  }
+
+  function requireStaffFile() {
+    const f = el("staffFile").files[0];
+    if (!f) { alert("Bitte Staffplan auswählen"); return null; }
+    return f;
+  }
+
+  function summarizeImportResponse(j) {
+    if (!j || !j.ok) return "❌ Fehler: " + (j?.error || "unbekannt");
+
+    const lines = [];
+    lines.push(`✅ OK – Mode: ${j.mode || "-"}`);
+    lines.push(`Range: ${j.date_from} … ${j.date_to} (cols: ${j.date_cols}, target_end: ${j.target_end})`);
+    if (j.optimization) {
+      lines.push(`Optimization: empty_streak_break=${j.optimization.empty_streak_break}, last_row=${j.optimization.last_processed_excel_row_1based}`);
     }
 
-    document.getElementById("logoMsg").textContent = "✅ Logo erfolgreich gespeichert";
-    setTimeout(() => location.reload(), 800);
-
-  } catch (e) {
-    document.getElementById("logoMsg").textContent = "❌ Netzwerkfehler: " + e.message;
-  }
-}
-
-async function importStaffplan(doReset) {
-  const f = document.getElementById("staffFile").files[0];
-  if (!f) { alert("Bitte Staffplan auswählen"); return; }
-
-  const fd = new FormData();
-  fd.append("file", f);
-
-  document.getElementById("staffMsg").textContent =
-    (doReset ? "⏳ Reset + Import läuft … bitte warten" : "⏳ Staffplan wird importiert … bitte warten");
-
-  try {
-    const url = doReset ? "/api/import/staffplan?reset=1" : "/api/import/staffplan";
-    const r = await fetch(url, { method: "POST", body: fd });
-    const data = await r.json();
-
-    if (!data.ok) {
-      document.getElementById("staffMsg").textContent =
-        "❌ Fehler: " + (data.error || "unbekannt");
-      return;
+    if (j.mode === "dry_run") {
+      lines.push("");
+      lines.push("Dry-Run (keine DB-Änderung):");
+      lines.push(`would_write_rows: ${j.would_write_rows}`);
+      lines.push(`would_insert_rows: ${j.would_insert_rows}`);
+      lines.push(`would_update_rows: ${j.would_update_rows}`);
+    } else {
+      lines.push("");
+      lines.push("Write (DB geändert):");
+      lines.push(`imported: ${j.imported}`);
+      lines.push(`inserted_rows: ${j.inserted_rows}`);
+      lines.push(`updated_rows: ${j.updated_rows}`);
+      lines.push(`skipped_no_employee_rows: ${j.skipped_no_employee_rows}`);
     }
 
-    document.getElementById("staffMsg").textContent =
-      "✅ Import erfolgreich\n" +
-      "Importierte Einträge: " + data.imported + "\n" +
-      "Übersprungen (ohne Mitarbeiter): " + (data.skipped_no_employee_rows || 0) + "\n" +
-      "Header-Zeile: " + data.header_row + "\n" +
-      "Datum von: " + data.date_from + "\n" +
-      "Datum bis: " + data.date_to + "\n" +
-      "Datumsspalten: " + data.date_cols;
-
-  } catch (e) {
-    document.getElementById("staffMsg").textContent =
-      "❌ Netzwerkfehler: " + e.message;
+    return lines.join("\n");
   }
-}
+
+  async function staffplanDryRun() {
+    const f = requireStaffFile();
+    if (!f) return;
+
+    const fd = new FormData();
+    fd.append("file", f);
+
+    const targetEnd = encodeURIComponent(getTargetEnd());
+
+    el("staffMsg").textContent = "⏳ Dry-Run läuft … (keine DB-Änderung)";
+
+    try {
+      const url = `/api/import/staffplan?dry_run=1&target_end=${targetEnd}&cb=${Date.now()}`;
+      const r = await fetch(url, { method: "POST", body: fd });
+      const j = await r.json();
+
+      el("staffMsg").textContent = summarizeImportResponse(j) + "\n\nRAW:\n" + fmt(j);
+    } catch (e) {
+      el("staffMsg").textContent = "❌ Netzwerkfehler: " + e.message;
+    }
+  }
+
+  async function staffplanImport() {
+    const f = requireStaffFile();
+    if (!f) return;
+
+    const fd = new FormData();
+    fd.append("file", f);
+
+    const targetEnd = encodeURIComponent(getTargetEnd());
+    const reset = getReset() ? "1" : "0";
+
+    el("staffMsg").textContent = "⏳ Import läuft … (DB write)";
+
+    try {
+      const url = `/api/import/staffplan?reset=${reset}&target_end=${targetEnd}&cb=${Date.now()}`;
+      const r = await fetch(url, { method: "POST", body: fd });
+      const j = await r.json();
+
+      el("staffMsg").textContent = summarizeImportResponse(j) + "\n\nRAW:\n" + fmt(j);
+    } catch (e) {
+      el("staffMsg").textContent = "❌ Netzwerkfehler: " + e.message;
+    }
+  }
 </script>
 
 </body>
