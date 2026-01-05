@@ -35,7 +35,7 @@
 
       out.textContent = "Upload & Scan läuft ...";
 
-      const r = await fetch("/api/debug/scan-dates", { method: "POST", body: fd });
+     const r = await fetch("/api/debug/scan-values?target=2025-12-27", { method: "POST", body: fd });
       const txt = await r.text();
       try {
         out.textContent = JSON.stringify(JSON.parse(txt), null, 2);
