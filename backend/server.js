@@ -1,4 +1,4 @@
-console.log("🔥🔥🔥 SERVER.JS FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX + OPTIMIZED IMPORT LOOP + INDEXES 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX + OPTIMIZED IMPORT LOOP + INDEXES + STATS + DRY-RUN 🔥🔥🔥");
 
 const path = require("path");
 const fs = require("fs");
@@ -82,6 +82,7 @@ function makeAutoIdFromName(name) {
 function parseExcelDate(cell) {
   if (!cell) return null;
 
+  // Excel-Seriennummer
   if (typeof cell.v === "number" && isFinite(cell.v)) {
     const epoch = new Date(Date.UTC(1899, 11, 30));
     return new Date(epoch.getTime() + cell.v * 86400000);
@@ -90,12 +91,15 @@ function parseExcelDate(cell) {
   const t = String(cell.w || cell.v || "").trim();
   if (!t) return null;
 
+  // DD.MM.YYYY
   let m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
 
+  // Datum irgendwo im Text
   m = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
 
+  // DD.MM. (ohne Jahr)
   m = t.match(/^(\d{1,2})\.(\d{1,2})\.$/);
   if (m) {
     const today = new Date();
@@ -107,6 +111,7 @@ function parseExcelDate(cell) {
     return guess;
   }
 
+  // "Sa 27.12."
   m = t.match(/(\d{1,2})\.(\d{1,2})\./);
   if (m) {
     const today = new Date();
@@ -170,7 +175,7 @@ async function migrate() {
     ON staffplan (employee_id, work_date, customer_po, internal_po, project_short);
   `);
 
-  // ✅ Performance-Indizes
+  // Performance-Indizes
   await pool.query(`
     CREATE INDEX IF NOT EXISTS staffplan_by_date
     ON staffplan (work_date);
@@ -276,7 +281,7 @@ app.get("/api/debug/build", (req, res) => {
   res.json({
     ok: true,
     build:
-      "server.js FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX + OPTIMIZED IMPORT LOOP + INDEXES",
+      "server.js FULL FINAL + SAFE IMPORT + SCAN-DATES + SCAN-VALUES + UPSERT + TARGET END COL FIX + OPTIMIZED IMPORT LOOP + INDEXES + STATS + DRY-RUN",
     node: process.version,
     now: new Date().toISOString(),
   });
@@ -546,15 +551,21 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
 });
 
 // ======================================================
-// STAFFPLAN IMPORT (TARGET END COL FIX + OPTIMIZED LOOP)
+// STAFFPLAN IMPORT (STATS + DRY-RUN)
+// POST /api/import/staffplan?reset=1
+// POST /api/import/staffplan?dry_run=1
+// Optional: &target_end=YYYY-MM-DD
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
 
+    const isDryRun = String(req.query.dry_run || "") === "1";
+
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
+    // Header finden
     let headerRow = null,
       bestCnt = 0,
       bestStartCol = null,
@@ -588,7 +599,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
     const startCol = bestStartCol;
     let endCol = bestEndCol;
 
-    // first date
+    // erstes Datum finden
     let firstDateCol = null;
     let baseDate = null;
     for (let c = startCol; c <= endCol; c++) {
@@ -604,7 +615,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       return res.json({ ok: false, error: "Header gefunden, aber kein erstes Datum parsebar" });
     }
 
-    // ✅ ensure endCol covers target_end column
+    // ensure endCol covers target_end column
     const targetEndIso = String(req.query.target_end || "2025-12-27").trim();
     const baseIso = toIsoDate(baseDate);
     const base = new Date(baseIso + "T00:00:00.000Z");
@@ -616,7 +627,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       if (targetCol > endCol) endCol = targetCol;
     }
 
-    // build dates
+    // dates bauen
     const dates = [];
     let currentBaseDate = baseDate;
     let currentBaseCol = firstDateCol;
@@ -637,19 +648,51 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
       "Dates:", dates[0]?.iso, "…", dates[dates.length - 1]?.iso,
       "cols:", dates.length,
       "endCol:", endCol,
-      "target_end:", targetEndIso
+      "target_end:", targetEndIso,
+      "dry_run:", isDryRun
     );
 
-    if (String(req.query.reset) === "1") {
+    // Reset nur wenn NICHT dry-run
+    if (!isDryRun && String(req.query.reset) === "1") {
       console.log("🧹 Reset=1 -> TRUNCATE staffplan");
       await pool.query("TRUNCATE staffplan");
     }
 
-    let imported = 0;
+    // DRY-RUN: existing keys für Date-Range laden, damit wir would_insert vs would_update zählen können
+    // (wenn reset=1 im echten Import, dann wäre alles insert — aber im Dry-Run respektieren wir reset nicht, weil wir nicht schreiben)
+    let existingKeySet = null;
+    if (isDryRun) {
+      existingKeySet = new Set();
+      const rExist = await pool.query(
+        `
+        SELECT employee_id, work_date, COALESCE(customer_po,'') AS customer_po,
+               COALESCE(internal_po,'') AS internal_po,
+               COALESCE(project_short,'') AS project_short
+        FROM staffplan
+        WHERE work_date BETWEEN $1::date AND $2::date
+        `,
+        [dates[0].iso, dates[dates.length - 1].iso]
+      );
+
+      for (const row of rExist.rows) {
+        const k = `${row.employee_id}#${toIsoDate(new Date(row.work_date))}#${row.customer_po}#${row.internal_po}#${row.project_short}`;
+        existingKeySet.add(k);
+      }
+    }
+
+    // Counters
+    let imported = 0;               // total rows written (real run)
+    let inserted_rows = 0;          // real run
+    let updated_rows = 0;           // real run
+
+    let would_write_rows = 0;       // dry-run
+    let would_insert_rows = 0;      // dry-run
+    let would_update_rows = 0;      // dry-run
+
     let skippedNoEmployee = 0;
 
-    // ✅ OPTIMIZATION: Break when long empty streak (file end reached)
-    const EMPTY_STREAK_BREAK = 200; // robust: very unlikely to cut off real data
+    // OPTIMIZATION: Break when long empty streak (file end reached)
+    const EMPTY_STREAK_BREAK = 200;
     let emptyEmployeeStreak = 0;
     let lastProcessedRow = null;
 
@@ -679,6 +722,7 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
 
       const employeeNameCanonical = commaSwapName(employeeNameRaw);
 
+      // employee_id (für dry-run dürfen wir employees nicht anlegen → wir simulieren AUTO-ID wenn nicht vorhanden)
       const n1 = normalizeName(employeeNameRaw);
       const n2 = normalizeName(employeeNameCanonical);
 
@@ -698,28 +742,43 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         employeeId = emp.rows[0].employee_id;
       } else {
         employeeId = makeAutoIdFromName(employeeNameCanonical);
-        await pool.query(
-          `
-          INSERT INTO employees (employee_id, name)
-          VALUES ($1, $2)
-          ON CONFLICT (employee_id) DO UPDATE SET name = EXCLUDED.name
-          `,
-          [employeeId, employeeNameCanonical]
-        );
+
+        if (!isDryRun) {
+          await pool.query(
+            `
+            INSERT INTO employees (employee_id, name)
+            VALUES ($1, $2)
+            ON CONFLICT (employee_id) DO UPDATE SET name = EXCLUDED.name
+            `,
+            [employeeId, employeeNameCanonical]
+          );
+        }
       }
 
+      // Customer / POs
       const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
       const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
       const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
 
       for (const d of dates) {
         const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
+
         const planRaw = ws[XLSX.utils.encode_cell({ r: r + 1, c: d.col })]?.v ?? null;
         const plan = (typeof planRaw === "number" && isFinite(planRaw)) ? planRaw : null;
 
         if (!proj && plan === null) continue;
 
-        await pool.query(
+        const key = `${employeeId}#${d.iso}#${customerPo || ""}#${internalPo || ""}#${proj || ""}`;
+
+        if (isDryRun) {
+          would_write_rows++;
+          if (existingKeySet && existingKeySet.has(key)) would_update_rows++;
+          else would_insert_rows++;
+          continue;
+        }
+
+        // Real run: UPSERT + RETURNING inserted flag via xmax
+        const q = await pool.query(
           `
           INSERT INTO staffplan
             (employee_id, employee_name, requester_name, work_date, calendar_week,
@@ -732,17 +791,28 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
             calendar_week  = EXCLUDED.calendar_week,
             customer       = EXCLUDED.customer,
             planned_hours  = EXCLUDED.planned_hours
+          RETURNING (xmax = 0) AS inserted
           `,
           [employeeId, employeeNameCanonical, requesterName, d.iso, d.cw, customer, internalPo, customerPo, proj, plan]
         );
 
         imported++;
+        if (q.rowCount && q.rows[0]?.inserted) inserted_rows++;
+        else updated_rows++;
       }
     }
 
     return res.json({
       ok: true,
-      imported,
+      mode: isDryRun ? "dry_run" : "write",
+      imported: isDryRun ? 0 : imported,
+      inserted_rows: isDryRun ? 0 : inserted_rows,
+      updated_rows: isDryRun ? 0 : updated_rows,
+
+      would_write_rows: isDryRun ? would_write_rows : 0,
+      would_insert_rows: isDryRun ? would_insert_rows : 0,
+      would_update_rows: isDryRun ? would_update_rows : 0,
+
       skipped_no_employee_rows: skippedNoEmployee,
       header_row: headerRow + 1,
       date_from: dates[0].iso,
@@ -753,6 +823,9 @@ app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
         empty_streak_break: EMPTY_STREAK_BREAK,
         last_processed_excel_row_1based: lastProcessedRow ? lastProcessedRow + 1 : null,
       },
+      note: isDryRun
+        ? "Dry-run: keine DB-Änderung. would_* basiert auf bestehenden Keys in staffplan innerhalb des Date-Ranges."
+        : "Write: inserted_rows/updated_rows kommen aus RETURNING (xmax=0) bei UPSERT.",
     });
   } catch (e) {
     console.error("STAFFPLAN IMPORT ERROR:", e);
