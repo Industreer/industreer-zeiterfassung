@@ -1429,7 +1429,96 @@ app.delete("/api/admin/employees", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// ADMIN: RESET IMPORT DATA (SAFE RESET)
+// POST /api/admin/reset
+// Body: { confirm: "RESET-ALL-IMPORT-DATA" }
+// Löscht: staffplan, import history, AUTO_* employees
+// ======================================================
+app.post("/api/admin/reset", async (req, res) => {
+  const confirm = String(req.body?.confirm || "").trim();
+  if (confirm !== "RESET-ALL-IMPORT-DATA") {
+    return res.status(400).json({
+      ok: false,
+      error: 'Bestätigung fehlt. Sende body.confirm="RESET-ALL-IMPORT-DATA".',
+    });
+  }
 
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Reihenfolge wichtig wegen FK staffplan_changes -> import_runs
+    await client.query(`TRUNCATE staffplan RESTART IDENTITY`);
+    await client.query(`TRUNCATE staffplan_changes RESTART IDENTITY`);
+    await client.query(`TRUNCATE import_runs RESTART IDENTITY`);
+
+    // Optional: AUTO_* Mitarbeiter löschen, damit neu sauber erzeugt wird
+    const delAuto = await client.query(`DELETE FROM employees WHERE employee_id LIKE 'AUTO_%'`);
+
+    await client.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      note: "Reset durchgeführt: staffplan + import_history geleert, AUTO_* employees gelöscht.",
+      deleted_auto_employees: delAuto.rowCount,
+    });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("ADMIN RESET ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
+// ======================================================
+// MANUAL STAFFPLAN DOWNLOAD (SharePoint) - protected by code=2012
+// GET /api/staffplan/download?code=2012
+// Lädt die Datei von SharePoint (URL aus app_settings)
+// Key: sharepoint_staffplan_url
+// ======================================================
+app.get("/api/staffplan/download", async (req, res) => {
+  const code = String(req.query.code || "").trim();
+  if (code !== "2012") {
+    return res.status(403).json({ ok: false, error: "Code falsch oder fehlt (code=2012)" });
+  }
+
+  // SharePoint-URL aus app_settings lesen
+  const s = await pool.query(`SELECT value FROM app_settings WHERE key='sharepoint_staffplan_url' LIMIT 1`);
+  const url = s.rowCount ? s.rows[0].value : null;
+
+  if (!url) {
+    return res.status(400).json({
+      ok: false,
+      error: "Keine SharePoint-URL gesetzt (app_settings key=sharepoint_staffplan_url).",
+    });
+  }
+
+  try {
+    // downloadExcelFromShareLink soll Buffer zurückgeben (oder {buffer, filename})
+    const dl = await downloadExcelFromShareLink(url);
+
+    let buffer, filename;
+    if (Buffer.isBuffer(dl)) {
+      buffer = dl;
+      filename = `staffplan_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    } else {
+      buffer = dl?.buffer;
+      filename = dl?.filename || `staffplan_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    }
+
+    if (!buffer || !Buffer.isBuffer(buffer)) {
+      return res.status(500).json({ ok: false, error: "Download ok, aber kein Buffer erhalten." });
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.end(buffer);
+  } catch (e) {
+    console.error("STAFFPLAN DOWNLOAD ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
 // ======================================================
 // START
 // ======================================================
