@@ -1539,6 +1539,55 @@ app.get("/api/staffplan/download", async (req, res) => {
   }
 });
 // ======================================================
+// ADMIN: STAFFPLAN UPLOAD (Code 2012 geschützt)
+// POST /api/admin/staffplan/upload
+// ======================================================
+app.post("/api/admin/staffplan/upload", upload.single("file"), async (req, res) => {
+  try {
+    // Sicherheitscode prüfen (query | body | header)
+    requireCode2012(req);
+
+    const dryRun = String(req.query.dry_run || "") === "1";
+    const reset  = String(req.query.reset || "0") === "1";
+    const targetEndIso = String(req.query.target_end || "").trim() || null;
+
+    const actorIp =
+      (req.headers["x-forwarded-for"] ? String(req.headers["x-forwarded-for"]).split(",")[0].trim() : null) ||
+      req.socket?.remoteAddress ||
+      null;
+
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "Keine Datei hochgeladen" });
+    }
+
+    const result = await doImportStaffplan({
+      buffer: req.file.buffer,
+      originalname: req.file.originalname || "staffplan.xlsx",
+      dryRun,
+      reset,
+      targetEndIso,
+      actorIp,
+    });
+
+    if (!result.ok) {
+      return res.status(500).json(result);
+    }
+
+    res.json({
+      ok: true,
+      message: "Staffplan erfolgreich importiert",
+      ...result
+    });
+  } catch (e) {
+    console.error("ADMIN STAFFPLAN UPLOAD ERROR:", e);
+    res.status(e.status || 500).json({
+      ok: false,
+      error: e.message || "Upload fehlgeschlagen"
+    });
+  }
+});
+
+// ======================================================
 // START
 // ======================================================
 (async () => {
