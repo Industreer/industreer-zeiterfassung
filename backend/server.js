@@ -14,6 +14,31 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// ======================================================
+// UPLOAD (MULTER)
+// ======================================================
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 20 * 1024 * 1024 // 20 MB Schutz
+  }
+});
+
+function requireCode2012(req) {
+  const code =
+    (req.query.code ||
+     req.body?.code ||
+     req.headers["x-admin-code"] ||
+     "")
+      .toString()
+      .trim();
+
+  if (code !== "2012") {
+    const err = new Error("Falscher Sicherheitscode");
+    err.status = 403;
+    throw err;
+  }
+}
 
 const PORT = process.env.PORT || 10000;
 
