@@ -6,54 +6,17 @@
   <title>Admin – Industreer Zeiterfassung</title>
 
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f4f6f8;
-      padding: 20px;
-    }
-    .box {
-      background: #fff;
-      padding: 20px;
-      border-radius: 10px;
-      max-width: 720px;
-      margin: auto;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    h1 {
-      margin-top: 0;
-      text-align: center;
-    }
-    .section {
-      border: 1px solid #ddd;
-      border-radius: 10px;
-      padding: 15px;
-      margin-top: 20px;
-    }
-    button {
-      padding: 10px 14px;
-      font-size: 16px;
-      border: 0;
-      border-radius: 8px;
-      cursor: pointer;
-      background: #1565c0;
-      color: #fff;
-      margin-top: 10px;
-    }
-    input {
-      width: 100%;
-      margin-top: 10px;
-      padding: 10px;
-    }
-    .msg {
-      margin-top: 10px;
-      white-space: pre-wrap;
-      font-size: 14px;
-    }
-    img {
-      max-width: 220px;
-      display: block;
-      margin: 10px auto;
-    }
+    body { font-family: Arial, sans-serif; background: #f4f6f8; padding: 20px; }
+    .box { background: #fff; padding: 20px; border-radius: 10px; max-width: 720px; margin: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    h1 { margin-top: 0; text-align: center; }
+    .section { border: 1px solid #ddd; border-radius: 10px; padding: 15px; margin-top: 20px; }
+    button { padding: 10px 14px; font-size: 16px; border: 0; border-radius: 8px; cursor: pointer; background: #1565c0; color: #fff; margin-top: 10px; }
+    button.secondary { background:#455a64; }
+    input { width: 100%; margin-top: 10px; padding: 10px; }
+    .msg { margin-top: 10px; white-space: pre-wrap; font-size: 14px; }
+    img { max-width: 220px; display: block; margin: 10px auto; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; }
+    .row button { flex:1; }
   </style>
 </head>
 <body>
@@ -74,12 +37,17 @@
   <div class="section">
     <h3>2) Staffplan importieren (Excel)</h3>
     <p>
-      Erwartet Original-Kundendatei<br>
-      (Datum ab L4, Mitarbeiter Spalte I, Kunde Spalte A,
-      interne PO Spalte B, Kunden-PO Spalte E)
+      Import erkennt die Datumskopfzeile automatisch.<br>
+      Standard-Mapping im Backend: Kunde=A, interne PO=B, Kunden-PO=E, Requester=I, Mitarbeiter=K (Fallback I).<br>
+      <b>Tipp:</b> Wenn du komplett neu laden willst, nutze „Reset+Import“ (löscht vorher staffplan).
     </p>
     <input type="file" id="staffFile" accept=".xlsx,.xls" />
-    <button onclick="importStaffplan()">Staffplan importieren</button>
+
+    <div class="row">
+      <button onclick="importStaffplan(false)">Import</button>
+      <button class="secondary" onclick="importStaffplan(true)">Reset+Import</button>
+    </div>
+
     <div class="msg" id="staffMsg"></div>
   </div>
 </div>
@@ -87,10 +55,7 @@
 <script>
 async function uploadLogo() {
   const f = document.getElementById("logoFile").files[0];
-  if (!f) {
-    alert("Bitte Logo auswählen");
-    return;
-  }
+  if (!f) { alert("Bitte Logo auswählen"); return; }
 
   const fd = new FormData();
   fd.append("file", f);
@@ -98,48 +63,35 @@ async function uploadLogo() {
   document.getElementById("logoMsg").textContent = "⏳ Logo wird hochgeladen …";
 
   try {
-    const r = await fetch("/api/logo", {
-      method: "POST",
-      body: fd
-    });
-
+    const r = await fetch("/api/logo", { method: "POST", body: fd });
     const data = await r.json();
 
     if (!data.ok) {
-      document.getElementById("logoMsg").textContent =
-        "❌ Fehler beim Hochladen";
+      document.getElementById("logoMsg").textContent = "❌ Fehler beim Hochladen";
       return;
     }
 
-    document.getElementById("logoMsg").textContent =
-      "✅ Logo erfolgreich gespeichert";
+    document.getElementById("logoMsg").textContent = "✅ Logo erfolgreich gespeichert";
     setTimeout(() => location.reload(), 800);
 
   } catch (e) {
-    document.getElementById("logoMsg").textContent =
-      "❌ Netzwerkfehler: " + e.message;
+    document.getElementById("logoMsg").textContent = "❌ Netzwerkfehler: " + e.message;
   }
 }
 
-async function importStaffplan() {
+async function importStaffplan(doReset) {
   const f = document.getElementById("staffFile").files[0];
-  if (!f) {
-    alert("Bitte Staffplan auswählen");
-    return;
-  }
+  if (!f) { alert("Bitte Staffplan auswählen"); return; }
 
   const fd = new FormData();
   fd.append("file", f);
 
   document.getElementById("staffMsg").textContent =
-    "⏳ Staffplan wird importiert … bitte warten";
+    (doReset ? "⏳ Reset + Import läuft … bitte warten" : "⏳ Staffplan wird importiert … bitte warten");
 
   try {
-    const r = await fetch("/api/import/staffplan", {
-      method: "POST",
-      body: fd
-    });
-
+    const url = doReset ? "/api/import/staffplan?reset=1" : "/api/import/staffplan";
+    const r = await fetch(url, { method: "POST", body: fd });
     const data = await r.json();
 
     if (!data.ok) {
@@ -149,7 +101,13 @@ async function importStaffplan() {
     }
 
     document.getElementById("staffMsg").textContent =
-      "✅ Import erfolgreich\nImportierte Einträge: " + data.imported;
+      "✅ Import erfolgreich\n" +
+      "Importierte Einträge: " + data.imported + "\n" +
+      "Übersprungen (ohne Mitarbeiter): " + (data.skipped_no_employee_rows || 0) + "\n" +
+      "Header-Zeile: " + data.header_row + "\n" +
+      "Datum von: " + data.date_from + "\n" +
+      "Datum bis: " + data.date_to + "\n" +
+      "Datumsspalten: " + data.date_cols;
 
   } catch (e) {
     document.getElementById("staffMsg").textContent =
