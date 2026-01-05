@@ -5,44 +5,199 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Staffplan Debug</title>
   <style>
-    body { font-family: Arial, sans-serif; padding: 16px; max-width: 900px; margin: 0 auto; }
-    button { padding: 10px 14px; margin-top: 8px; }
-    pre { background: #111; color: #0f0; padding: 12px; overflow: auto; border-radius: 8px; }
-    .hint { color:#444; font-size: 14px; }
+    body { font-family: Arial, sans-serif; padding: 16px; max-width: 980px; margin: 0 auto; background:#f4f6f8; }
+    .card { background:#fff; border:1px solid #ddd; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+    h2 { margin: 0 0 10px 0; }
+    .hint { color:#444; font-size: 14px; line-height:1.35; margin:8px 0 14px; }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px; }
+    .row3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; margin-top:10px; }
+    label { font-size: 13px; color:#333; display:block; margin-bottom:6px; }
+    input[type="file"], input[type="text"], select {
+      width:100%; padding:10px; border-radius:10px; border:1px solid #cfd8dc; font-size:15px; box-sizing:border-box;
+      background:#fff;
+    }
+    button {
+      padding: 10px 14px; border:none; border-radius:10px; cursor:pointer; font-size: 15px; width:100%;
+      background:#1565c0; color:#fff;
+    }
+    button.secondary { background:#455a64; }
+    button.warning { background:#d32f2f; }
+    pre {
+      background: #0b1020; color: #d8e0ff; padding: 12px; overflow: auto; border-radius: 10px;
+      min-height: 180px;
+      font-size: 12px;
+    }
+    .links a { display:block; margin-top:6px; color:#1565c0; text-decoration:none; }
+    .links a:hover { text-decoration:underline; }
+    .pill {
+      display:inline-block; background:#eef3f8; border:1px solid #d0d7e2; padding:2px 8px; border-radius:999px; font-size:12px; color:#333;
+      margin-left:6px;
+    }
   </style>
 </head>
 <body>
-  <h2>Staffplan Debug – Datumszeile prüfen</h2>
-  <p class="hint">
-    Diese Seite lädt keine Daten in die Datenbank. Sie zeigt nur, welche Datumswerte Excel wirklich liefert.
-  </p>
 
-  <input id="file" type="file" accept=".xlsx,.xls" />
-  <br/>
-  <button id="btn">Scan starten</button>
+<div class="card">
+  <h2>Staffplan Debug Tool <span class="pill" id="buildPill">lade…</span></h2>
+  <div class="hint">
+    Dieses Tool lädt <b>deine Excel-Datei</b> hoch und zeigt dir schnell, wo das Problem liegt.<br/>
+    Wähle oben die Aktion:
+    <ul>
+      <li><b>Scan Dates</b>: erkennt Datumszeile & Datumsspalten</li>
+      <li><b>Scan Values</b>: prüft Werte an einem bestimmten Datum (proj/plan)</li>
+      <li><b>Import Dry-Run</b>: zählt Inserts/Updates, schreibt aber NICHT in die DB</li>
+      <li><b>Import Write</b>: schreibt in die DB (optional Reset)</li>
+    </ul>
+  </div>
 
-  <h3>Ergebnis</h3>
-  <pre id="out">Noch kein Scan.</pre>
+  <div class="row3">
+    <div>
+      <label>Excel-Datei</label>
+      <input id="file" type="file" accept=".xlsx,.xls" />
+    </div>
 
-  <script>
-    const out = document.getElementById('out');
-    document.getElementById('btn').onclick = async () => {
-      const f = document.getElementById('file').files[0];
-      if (!f) { out.textContent = "Bitte zuerst eine Excel-Datei auswählen."; return; }
+    <div>
+      <label>Aktion</label>
+      <select id="action">
+        <option value="scan-dates">Scan Dates (Header/Datumsspalten)</option>
+        <option value="scan-values">Scan Values (Werte an target Datum)</option>
+        <option value="dry-run">Import Dry-Run (ohne DB)</option>
+        <option value="write">Import Write (DB schreiben)</option>
+      </select>
+    </div>
 
-      const fd = new FormData();
-      fd.append("file", f);
+    <div>
+      <label>target (für Scan Values)</label>
+      <input id="target" type="text" value="2025-12-27" placeholder="YYYY-MM-DD" />
+    </div>
+  </div>
 
-      out.textContent = "Upload & Scan läuft ...";
+  <div class="row">
+    <div>
+      <label>target_end (für Import)</label>
+      <input id="targetEnd" type="text" value="2025-12-27" placeholder="YYYY-MM-DD" />
+    </div>
+    <div>
+      <label style="margin-top: 26px;">
+        <input id="reset" type="checkbox" />
+        Reset vorher (nur bei Import Write)
+      </label>
+    </div>
+  </div>
 
-     const r = await fetch("/api/debug/scan-values?target=2025-12-27", { method: "POST", body: fd });
+  <div class="row">
+    <button id="btn">Ausführen</button>
+    <button class="secondary" onclick="loadBuild()">Build neu laden</button>
+  </div>
+
+  <h3 style="margin:16px 0 8px;">Ergebnis</h3>
+  <pre id="out">Noch kein Run.</pre>
+
+  <div class="links" style="margin-top:12px;">
+    <h4 style="margin:10px 0 0 0;">Quick Debug Links</h4>
+    <a href="/api/debug/build" target="_blank">/api/debug/build</a>
+    <a href="/api/debug/staffplan-minmax" target="_blank">/api/debug/staffplan-minmax</a>
+    <a href="/api/debug/staffplan-topdates" target="_blank">/api/debug/staffplan-topdates</a>
+    <a href="/api/debug/staffplan-check?date=2025-12-27" target="_blank">/api/debug/staffplan-check?date=2025-12-27</a>
+    <a href="/admin" target="_blank">/admin</a>
+  </div>
+</div>
+
+<script>
+  const out = document.getElementById('out');
+  const actionEl = document.getElementById('action');
+  const targetEl = document.getElementById('target');
+  const targetEndEl = document.getElementById('targetEnd');
+  const resetEl = document.getElementById('reset');
+  const buildPill = document.getElementById('buildPill');
+
+  function pretty(x){
+    try { return JSON.stringify(x, null, 2); } catch { return String(x); }
+  }
+
+  async function loadBuild(){
+    try{
+      const r = await fetch("/api/debug/build?cb=" + Date.now());
+      const j = await r.json();
+      buildPill.textContent = j.ok ? "OK" : "ERR";
+      out.textContent = "Build:\n" + pretty(j);
+    }catch(e){
+      buildPill.textContent = "ERR";
+      out.textContent = "Build laden fehlgeschlagen: " + e.message;
+    }
+  }
+
+  // Auto build
+  loadBuild();
+
+  function requireFile(){
+    const f = document.getElementById('file').files[0];
+    if(!f){ out.textContent="Bitte zuerst eine Excel-Datei auswählen."; return null; }
+    return f;
+  }
+
+  function getVal(id){
+    return document.getElementById(id).value.trim();
+  }
+
+  async function run(){
+    const f = requireFile();
+    if(!f) return;
+
+    const act = actionEl.value;
+    const target = targetEl.value.trim() || "2025-12-27";
+    const targetEnd = targetEndEl.value.trim() || "2025-12-27";
+    const reset = resetEl.checked ? "1" : "0";
+
+    const fd = new FormData();
+    fd.append("file", f);
+
+    let url = "";
+
+    if (act === "scan-dates"){
+      url = "/api/debug/scan-dates";
+    } else if (act === "scan-values"){
+      url = "/api/debug/scan-values?target=" + encodeURIComponent(target);
+    } else if (act === "dry-run"){
+      url = "/api/import/staffplan?dry_run=1&target_end=" + encodeURIComponent(targetEnd);
+    } else if (act === "write"){
+      url = "/api/import/staffplan?reset=" + reset + "&target_end=" + encodeURIComponent(targetEnd);
+    } else {
+      out.textContent = "Unbekannte Aktion.";
+      return;
+    }
+
+    out.textContent = "Läuft…\n" + url;
+
+    try{
+      const r = await fetch(url, { method:"POST", body: fd });
       const txt = await r.text();
-      try {
-        out.textContent = JSON.stringify(JSON.parse(txt), null, 2);
+      try{
+        const j = JSON.parse(txt);
+        out.textContent = pretty({ url, response: j });
       } catch {
         out.textContent = "Server-Antwort ist kein JSON:\n\n" + txt;
       }
-    };
-  </script>
+    } catch(e){
+      out.textContent = "Fehler: " + e.message;
+    }
+  }
+
+  document.getElementById('btn').onclick = run;
+
+  // Kleine UX: Felder abhängig von Aktion “sichtbar/benutzbar” machen
+  function refreshUI(){
+    const act = actionEl.value;
+    const isScanValues = (act === "scan-values");
+    const isImport = (act === "dry-run" || act === "write");
+    targetEl.disabled = !isScanValues;
+    targetEndEl.disabled = !isImport;
+    resetEl.disabled = (act !== "write");
+  }
+
+  actionEl.addEventListener("change", refreshUI);
+  refreshUI();
+</script>
+
 </body>
 </html>
