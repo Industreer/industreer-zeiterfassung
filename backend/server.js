@@ -421,6 +421,124 @@ app.post("/api/debug/scan-dates", upload.single("file"), async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// DEBUG: Scan Values für ein Ziel-Datum (ohne DB-Write)
+// POST /api/debug/scan-values?target=2025-12-27
+// Body: FormData file=<xlsx>
+// ======================================================
+app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
+  try {
+    const targetIso = String(req.query.target || "2025-12-27").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetIso)) {
+      return res.status(400).json({ ok: false, error: "target muss YYYY-MM-DD sein" });
+    }
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+
+    // HeaderRow finden wie Import
+    let headerRow = null;
+    let bestCnt = 0;
+    let bestStartCol = null;
+    let bestEndCol = null;
+
+    for (let rr = 0; rr <= 25; rr++) {
+      let cnt = 0;
+      let first = null;
+      let last = null;
+      for (let c = 0; c <= 450; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: rr, c })];
+        const d = parseExcelDate(cell);
+        if (d) {
+          cnt++;
+          if (first === null) first = c;
+          last = c;
+        }
+      }
+      if (cnt > bestCnt) {
+        bestCnt = cnt;
+        headerRow = rr;
+        bestStartCol = first;
+        bestEndCol = last;
+      }
+    }
+
+    if (headerRow === null || bestCnt < 3 || bestStartCol === null || bestEndCol === null) {
+      return res.json({ ok: false, error: "Keine Datums-Kopfzeile gefunden" });
+    }
+
+    const startCol = bestStartCol;
+    const endCol = bestEndCol;
+
+    // erstes Datum finden
+    let firstDateCol = null;
+    let baseDate = null;
+    for (let c = startCol; c <= endCol; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
+      const d = parseExcelDate(cell);
+      if (d) { firstDateCol = c; baseDate = d; break; }
+    }
+    if (!baseDate || firstDateCol === null) {
+      return res.json({ ok: false, error: "Kein erstes Datum parsebar" });
+    }
+
+    // Wir kennen baseDate bei firstDateCol -> Spalte für target berechnen
+    const baseIso = toIsoDate(baseDate);
+    const base = new Date(baseIso + "T00:00:00.000Z");
+    const target = new Date(targetIso + "T00:00:00.000Z");
+    const diffDays = Math.round((target.getTime() - base.getTime()) / 86400000);
+    const targetCol = firstDateCol + diffDays;
+
+    // Scan ein paar Mitarbeiterblöcke: proj in r, plan in r+1
+    let hits = [];
+    for (let r = 5; r < 500; r += 2) {
+      const empCellK = ws[XLSX.utils.encode_cell({ r, c: 10 })];
+      const empCellI = ws[XLSX.utils.encode_cell({ r, c: 8 })];
+      const empName =
+        (empCellK?.v ? String(empCellK.v).trim() : "") ||
+        (empCellI?.v ? String(empCellI.v).trim() : "");
+      if (!empName) continue;
+
+      const projCell = ws[XLSX.utils.encode_cell({ r, c: targetCol })];
+      const planCell = ws[XLSX.utils.encode_cell({ r: r + 1, c: targetCol })];
+
+      const proj = projCell?.v ?? null;
+      const plan = planCell?.v ?? null;
+
+      if (proj !== null && String(proj).trim() !== "" || (typeof plan === "number" && isFinite(plan))) {
+        hits.push({
+          row: r + 1,
+          employee: empName,
+          proj: projCell?.v ?? null,
+          plan: planCell?.v ?? null,
+        });
+        if (hits.length >= 25) break;
+      }
+    }
+
+    // Header raw am targetCol (falls vorhanden)
+    const headerCell = ws[XLSX.utils.encode_cell({ r: headerRow, c: targetCol })];
+    const headerRaw = headerCell?.w ?? headerCell?.v ?? null;
+
+    return res.json({
+      ok: true,
+      sheet: wb.SheetNames[0],
+      header_row_1based: headerRow + 1,
+      first_date_iso: baseIso,
+      first_date_col: firstDateCol,
+      target: targetIso,
+      target_col: targetCol,
+      target_header_raw: headerRaw,
+      found_rows_with_values: hits.length,
+      sample_hits: hits,
+      note: "Wenn found_rows_with_values=0, sind an diesem Datum in den erwarteten Zellen keine Werte vorhanden (proj/plan).",
+    });
+  } catch (e) {
+    console.error("SCAN VALUES ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ======================================================
 // STAFFPLAN IMPORT (SAFE + UPSERT + EXTEND TARGET END)
