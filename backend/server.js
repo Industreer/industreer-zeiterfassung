@@ -17,12 +17,6 @@ app.use(express.urlencoded({ extended: true }));
 // ======================================================
 // UPLOAD (MULTER)
 // ======================================================
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 20 * 1024 * 1024 // 20 MB Schutz
-  }
-});
 
 function requireCode2012(req) {
   const code =
