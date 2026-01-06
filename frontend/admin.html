@@ -55,8 +55,7 @@
 
   <div style="margin-top:12px">
     <div class="muted small">Aktuelles Logo:</div>
-    <img id="logoPreview" class="logo-preview" src="/api/logo" alt="Kein Logo vorhanden"
-         onerror="this.style.display='none'">
+    <img id="logoPreview" class="logo-preview" src="/api/logo" alt="Kein Logo vorhanden">
   </div>
 </div>
 
@@ -75,7 +74,7 @@
       <option value="manual">Nur manuell</option>
       <option value="used">Mit Daten (staffplan/time/breaks > 0)</option>
     </select>
-    <span id="status" class="muted"></span>
+    <span id="statusTop" class="muted"></span>
   </div>
 </div>
 
@@ -108,7 +107,7 @@
 </div>
 
 <!-- ====================================================== -->
-<!-- RESET (optional, damit JS nicht crasht, falls du es nutzt) -->
+<!-- RESET -->
 <!-- ====================================================== -->
 <div class="card">
   <h3 style="margin:0 0 8px">Tools: Import-Daten zurücksetzen</h3>
@@ -122,6 +121,7 @@
     <span id="resetOut" class="small muted"></span>
   </div>
 </div>
+
 <!-- ====================================================== -->
 <!-- MITARBEITERÜBERSICHT + EDIT (Email + Sprache Auto-Save) -->
 <!-- ====================================================== -->
@@ -147,7 +147,7 @@
     <tbody id="tbody"></tbody>
   </table>
 
-  <div id="status" class="muted small" style="margin-top:10px"></div>
+  <div id="statusBottom" class="muted small" style="margin-top:10px"></div>
 </div>
 
 <script>
@@ -173,7 +173,7 @@
     return j;
   }
 
-  // EU-Sprachen + Türkisch (ISO-ähnliche Codes)
+  // EU-Sprachen + Türkisch
   const LANGS = [
     ["de","Deutsch"],
     ["en","English"],
@@ -205,12 +205,13 @@
     ["tr","Türkçe"],
   ];
 
+  function normalizeLang(v){
+    const s = String(v || "de").trim().toLowerCase();
+    return s.includes("-") ? s.split("-")[0] : s;
+  }
+
   function renderLanguageSelect(employee_id, current){
-    const val = String(current || "de").trim().toLowerCase();
-
-    // falls DB z.B. "DE" oder "de-DE" enthält -> normalisieren
-    const normalized = val.includes("-") ? val.split("-")[0] : val;
-
+    const normalized = normalizeLang(current);
     return `
       <select data-field="language" data-employee-id="${esc(employee_id)}">
         ${LANGS.map(([code,label]) => `
@@ -234,10 +235,27 @@
   }
 
   function renderTable(rows){
+    const q = ($("q")?.value || "").trim().toLowerCase();
+    const filter = $("filter")?.value || "all";
+
+    let out = rows || [];
+
+    if(q){
+      out = out.filter(r =>
+        String(r.employee_id).toLowerCase().includes(q) ||
+        String(r.name||"").toLowerCase().includes(q) ||
+        String(r.email||"").toLowerCase().includes(q)
+      );
+    }
+
+    if(filter === "auto") out = out.filter(r => r.id_source === "auto");
+    if(filter === "manual") out = out.filter(r => r.id_source !== "auto");
+    if(filter === "used") out = out.filter(r => (r.staffplan_rows+r.time_rows+r.break_rows) > 0);
+
     const tb = $("tbody");
     if(!tb) return;
 
-    tb.innerHTML = (rows || []).map(r => `
+    tb.innerHTML = out.map(r => `
       <tr>
         <td class="mono">${esc(r.employee_id)}</td>
         <td>${esc(r.name)}</td>
@@ -254,28 +272,52 @@
       </tr>
     `).join("");
 
-    const st = $("status");
-    if(st) st.textContent = `Zeilen: ${(rows||[]).length}`;
+    const top = $("statusTop");
+    const bottom = $("statusBottom");
+    const txt = `Zeilen: ${out.length} (gesamt: ${(rows||[]).length})`;
+    if(top) top.textContent = txt;
+    if(bottom) bottom.textContent = txt;
   }
 
-  async function loadEmployees(){
+  function fillAutoDropdown(rows){
+    const autos = (rows || [])
+      .filter(r => r.id_source === "auto")
+      .sort((a,b)=> (b.staffplan_rows+b.time_rows+b.break_rows) - (a.staffplan_rows+a.time_rows+a.break_rows));
+
+    const sel = $("oldId");
+    if(!sel) return;
+
+    sel.innerHTML = autos.map(r => {
+      const used = r.staffplan_rows+r.time_rows+r.break_rows;
+      const label = `${r.employee_id} — ${r.name} (Daten: ${used})`;
+      return `<option value="${esc(r.employee_id)}">${esc(label)}</option>`;
+    }).join("");
+
+    if(!autos.length){
+      sel.innerHTML = `<option value="">Keine AUTO_* Einträge gefunden</option>`;
+    }
+  }
+
+  async function load(){
+    const st = $("statusTop");
+    if(st) st.textContent = "Lade…";
     const j = await api("/api/admin/employees");
     allRows = j.rows || [];
     renderTable(allRows);
+    fillAutoDropdown(allRows);
   }
 
-  // ✅ Auto-Save: Sprache + Email (change + blur)
+  // ---------------- AUTO SAVE (Email + Sprache) ----------------
   async function saveField(el){
-    const employee_id = el.dataset.employeeId; // aus data-employee-id
+    const employee_id = el.dataset.employeeId;
     const field = el.dataset.field;
-
     if(!employee_id || !field) return;
 
     const payload = { employee_id };
     payload[field] = (field === "language") ? el.value : el.value.trim();
 
-    el.disabled = true;
     const prevOutline = el.style.outline;
+    el.disabled = true;
 
     try{
       await api("/api/admin/employees", {
@@ -286,9 +328,8 @@
       el.style.outline = "2px solid #0a7b2e";
       setTimeout(()=> el.style.outline = prevOutline, 700);
 
-      // Optional: einmal neu laden, damit du IMMER den DB-Stand siehst
-      await loadEmployees();
-
+      // Optional: reload, damit du garantiert DB-Stand siehst
+      await load();
     }catch(err){
       el.style.outline = "2px solid #b10000";
       setTimeout(()=> el.style.outline = prevOutline, 1200);
@@ -300,8 +341,8 @@
 
   document.addEventListener("change", (e) => {
     const el = e.target;
-    if(!el || !el.matches("[data-field][data-employee-id]")) return;
-    if(el.dataset.field === "language") saveField(el);
+    if(!el || !el.matches("select[data-field='language'][data-employee-id]")) return;
+    saveField(el);
   });
 
   document.addEventListener("blur", (e) => {
@@ -310,12 +351,7 @@
     saveField(el);
   }, true);
 
-  loadEmployees().catch(e=>{
-    const st = $("status");
-    if(st) st.innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
-  });
-</script>
-  // ---------------- LOGO UPLOAD ----------------
+  // ---------------- LOGO ----------------
   async function uploadLogo(){
     const fileEl = $("logoFile");
     const out = $("logoOut");
@@ -352,8 +388,11 @@
       out.className = "small ok";
       out.textContent = "✅ Logo erfolgreich gespeichert";
 
-      img.style.display = "inline-block";
-      img.src = "/api/logo?ts=" + Date.now();
+      // Preview neu laden (Cache umgehen)
+      if(img){
+        img.style.display = "inline-block";
+        img.src = "/api/logo?ts=" + Date.now();
+      }
       fileEl.value = "";
     }catch(e){
       out.className = "small bad";
@@ -361,177 +400,34 @@
     }
   }
 
-  // ---------------- EMPLOYEES TABLE ----------------
-  function renderTable(rows){
-    const q = ($("q")?.value || "").trim().toLowerCase();
-    const filter = $("filter")?.value || "all";
-
-    let out = rows;
-
-    if(q){
-      out = out.filter(r =>
-        String(r.employee_id).toLowerCase().includes(q) ||
-        String(r.name||"").toLowerCase().includes(q) ||
-        String(r.email||"").toLowerCase().includes(q)
-      );
-    }
-
-    if(filter === "auto") out = out.filter(r => r.id_source === "auto");
-    if(filter === "manual") out = out.filter(r => r.id_source !== "auto");
-    if(filter === "used") out = out.filter(r => (r.staffplan_rows+r.time_rows+r.break_rows) > 0);
-
-    const tb = $("tbody");
-    tb.innerHTML = out.map(r => {
-      const emailVal = r.email || "";
-      const langVal = r.language || "de";
-
-      return `
-        <tr data-employee-id="${esc(r.employee_id)}">
-          <td class="mono">${esc(r.employee_id)}</td>
-          <td>${esc(r.name)}</td>
-
-          <td>
-            <input type="text" data-field="email" value="${esc(emailVal)}" placeholder="email@firma.de" style="min-width:220px"/>
-          </td>
-
-<td>
-  <select data-field="language"
-          data-employee-id="${esc(r.employee_id)}"
-          class="lang-select">
-    <option value="de">Deutsch</option>
-    <option value="en">Englisch</option>
-    <option value="fr">Französisch</option>
-    <option value="it">Italienisch</option>
-    <option value="es">Spanisch</option>
-    <option value="pt">Portugiesisch</option>
-    <option value="nl">Niederländisch</option>
-    <option value="pl">Polnisch</option>
-    <option value="cs">Tschechisch</option>
-    <option value="sk">Slowakisch</option>
-    <option value="hu">Ungarisch</option>
-    <option value="ro">Rumänisch</option>
-    <option value="bg">Bulgarisch</option>
-    <option value="hr">Kroatisch</option>
-    <option value="sl">Slowenisch</option>
-    <option value="el">Griechisch</option>
-    <option value="da">Dänisch</option>
-    <option value="sv">Schwedisch</option>
-    <option value="fi">Finnisch</option>
-    <option value="et">Estnisch</option>
-    <option value="lv">Lettisch</option>
-    <option value="lt">Litauisch</option>
-    <option value="mt">Maltesisch</option>
-    <option value="tr">Türkisch</option>
-  </select>
-</td>
-          <td>
-            <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
-              ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
-            </span>
-          </td>
-          <td>${esc(r.staffplan_rows)}</td>
-          <td>${esc(r.time_rows)}</td>
-          <td>${esc(r.break_rows)}</td>
-
-          <td>
-            <button class="btnSave" type="button">Speichern</button>
-            <div class="small muted saveOut"></div>
-          </td>
-        </tr>
-      `;
-    }).join("");
-
-    $("status").textContent = `Zeilen: ${out.length} (gesamt: ${rows.length})`;
-  }
-
-  function fillAutoDropdown(rows){
-    const autos = rows
-      .filter(r => r.id_source === "auto")
-      .sort((a,b)=> (b.staffplan_rows+b.time_rows+b.break_rows) - (a.staffplan_rows+a.time_rows+a.break_rows));
-
-    const sel = $("oldId");
-    sel.innerHTML = autos.map(r => {
-      const used = r.staffplan_rows+r.time_rows+r.break_rows;
-      const label = `${r.employee_id} — ${r.name} (Daten: ${used})`;
-      return `<option value="${esc(r.employee_id)}">${esc(label)}</option>`;
-    }).join("");
-
-    if(!autos.length){
-      sel.innerHTML = `<option value="">Keine AUTO_* Einträge gefunden</option>`;
-    }
-  }
-
-  async function load(){
-    $("moveResult").innerHTML = "";
-    $("status").textContent = "Lade…";
-    const j = await api("/api/admin/employees");
-    allRows = j.rows || [];
-    renderTable(allRows);
-    fillAutoDropdown(allRows);
-    wireSaveButtons();
-  }
-
-  function wireSaveButtons(){
-    document.querySelectorAll("#tbody tr").forEach(tr => {
-      const btn = tr.querySelector(".btnSave");
-      if(!btn) return;
-
-      btn.addEventListener("click", async () => {
-        const employee_id = tr.getAttribute("data-employee-id");
-        const email = tr.querySelector('[data-field="email"]')?.value?.trim() ?? "";
-        const language = tr.querySelector('[data-field="language"]')?.value ?? "de";
-        const out = tr.querySelector(".saveOut");
-
-        out.className = "small muted saveOut";
-        out.textContent = "Speichere…";
-
-        try{
-          await api("/api/admin/employees", {
-            method: "PATCH",
-            body: JSON.stringify({
-              employee_id,
-              email: email === "" ? null : email,
-              language
-            })
-          });
-
-          out.className = "small ok saveOut";
-          out.textContent = "✅ gespeichert";
-
-          // optional: lokal updaten, damit nach Filter/Reload korrekt
-          const idx = allRows.findIndex(x => x.employee_id === employee_id);
-          if(idx >= 0){
-            allRows[idx].email = (email === "" ? null : email);
-            allRows[idx].language = language;
-          }
-        }catch(e){
-          out.className = "small bad saveOut";
-          out.textContent = "❌ " + e.message;
-        }
-      });
-    });
+  // Logo preview: bei 404 ausblenden, bei load einblenden
+  const logoImg = $("logoPreview");
+  if(logoImg){
+    logoImg.addEventListener("error", ()=> { logoImg.style.display = "none"; });
+    logoImg.addEventListener("load", ()=> { logoImg.style.display = "inline-block"; });
   }
 
   // ---------------- MOVE AUTO ID ----------------
   async function move(){
-    const old_employee_id = $("oldId").value;
-    const new_employee_id = $("newId").value.trim();
-    const merge = $("merge").value;
+    const old_employee_id = $("oldId")?.value || "";
+    const new_employee_id = ($("newId")?.value || "").trim();
+    const merge = $("merge")?.value || "keep_new";
+    const out = $("moveResult");
 
     if(!old_employee_id){
-      $("moveResult").innerHTML = `<span class="bad">Bitte eine alte AUTO_* ID wählen.</span>`;
+      if(out) out.innerHTML = `<span class="bad">Bitte eine alte AUTO_* ID wählen.</span>`;
       return;
     }
     if(!new_employee_id){
-      $("moveResult").innerHTML = `<span class="bad">Bitte neue ID eingeben (z.B. 0815).</span>`;
+      if(out) out.innerHTML = `<span class="bad">Bitte neue ID eingeben (z.B. 0815).</span>`;
       return;
     }
     if(new_employee_id.startsWith("AUTO_")){
-      $("moveResult").innerHTML = `<span class="bad">Neue ID darf nicht mit AUTO_ beginnen.</span>`;
+      if(out) out.innerHTML = `<span class="bad">Neue ID darf nicht mit AUTO_ beginnen.</span>`;
       return;
     }
 
-    $("moveResult").innerHTML = `<span class="muted">Umhängen läuft…</span>`;
+    if(out) out.innerHTML = `<span class="muted">Umhängen läuft…</span>`;
 
     try{
       const j = await api("/api/admin/employee-id", {
@@ -539,57 +435,67 @@
         body: JSON.stringify({ old_employee_id, new_employee_id, merge })
       });
 
-      $("moveResult").innerHTML = `
-        <div class="ok"><b>✅ Erfolgreich umgehängt</b></div>
-        <div class="small">
-          <div>Alt: <span class="mono">${esc(j.old_employee_id)}</span> → Neu: <span class="mono">${esc(j.new_employee_id)}</span></div>
-          <div>Aktualisiert: staffplan=${esc(j.updated?.staffplan)}, time_entries=${esc(j.updated?.time_entries)}, breaks=${esc(j.updated?.breaks)}</div>
-          <div class="muted">Merge-Modus: ${esc(j.merge_mode)}</div>
-        </div>
-      `;
+      if(out){
+        out.innerHTML = `
+          <div class="ok"><b>✅ Erfolgreich umgehängt</b></div>
+          <div class="small">
+            <div>Alt: <span class="mono">${esc(j.old_employee_id)}</span> → Neu: <span class="mono">${esc(j.new_employee_id)}</span></div>
+            <div>Aktualisiert: staffplan=${esc(j.updated?.staffplan)}, time_entries=${esc(j.updated?.time_entries)}, breaks=${esc(j.updated?.breaks)}</div>
+            <div class="muted">Merge-Modus: ${esc(j.merge_mode)}</div>
+          </div>
+        `;
+      }
 
       await load();
-      $("newId").value = "";
+      const newEl = $("newId"); if(newEl) newEl.value = "";
     }catch(e){
-      $("moveResult").innerHTML = `<span class="bad">❌ Fehler: ${esc(e.message)}</span>`;
+      if(out) out.innerHTML = `<span class="bad">❌ Fehler: ${esc(e.message)}</span>`;
     }
   }
 
   // ---------------- RESET ----------------
   async function doReset(){
     const out = $("resetOut");
-    out.className = "small muted";
-    out.textContent = "Reset läuft…";
+    if(out){
+      out.className = "small muted";
+      out.textContent = "Reset läuft…";
+    }
 
     try {
-      const confirm = $("resetConfirm").value.trim();
+      const confirm = ($("resetConfirm")?.value || "").trim();
       const j = await api("/api/admin/reset", {
         method: "POST",
         body: JSON.stringify({ confirm })
       });
-      out.className = "small ok";
-      out.textContent = "✅ " + (j.note || "Reset erfolgreich");
+
+      if(out){
+        out.className = "small ok";
+        out.textContent = "✅ " + (j.note || "Reset erfolgreich");
+      }
+
       await load();
-      $("resetConfirm").value = "";
+      const c = $("resetConfirm"); if(c) c.value = "";
     } catch (e) {
-      out.className = "small bad";
-      out.textContent = "❌ " + e.message;
+      if(out){
+        out.className = "small bad";
+        out.textContent = "❌ " + e.message;
+      }
     }
   }
 
   // ---------------- EVENTS ----------------
   $("btnUploadLogo")?.addEventListener("click", uploadLogo);
-
   $("btnReload")?.addEventListener("click", load);
   $("btnMove")?.addEventListener("click", move);
+  $("btnResetImport")?.addEventListener("click", doReset);
 
   $("q")?.addEventListener("input", ()=>renderTable(allRows));
   $("filter")?.addEventListener("change", ()=>renderTable(allRows));
 
-  $("btnResetImport")?.addEventListener("click", doReset);
-
+  // Init
   load().catch(e=>{
-    $("status").innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
+    const top = $("statusTop");
+    if(top) top.innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
   });
 </script>
 
