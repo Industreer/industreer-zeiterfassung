@@ -26,6 +26,20 @@
     .tag{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid #ddd}
     .tag.auto{border-color:#f0b4b4;background:#fff5f5}
     .tag.manual{border-color:#b4d6f0;background:#f5fbff}
+
+    /* Abwesenheiten / Status */
+    tr.is-sick td{ background: rgba(255,0,0,0.10); }
+    tr.is-sick td:first-child{ border-left: 4px solid rgba(255,0,0,0.55); }
+
+    .pill{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid #ddd}
+    .pill.sick{border-color:rgba(255,0,0,0.35);background:rgba(255,0,0,0.10)}
+    .pill.ok{border-color:rgba(0,0,0,0.12);background:#fff}
+
+    .btnSmall{padding:6px 10px;font-size:12px}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .absRow{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .absList{margin-top:10px}
+    .absItem{border:1px solid #eee;border-radius:10px;padding:10px;margin:8px 0;background:#fff}
   </style>
 </head>
 
@@ -129,6 +143,8 @@
   <h3 style="margin:0 0 8px">Mitarbeiterübersicht</h3>
   <div class="muted small">
     Email & Sprache sind editierbar. Änderungen werden automatisch gespeichert.
+    <br/>
+    Status wird rot markiert, wenn der Mitarbeiter <b>heute krank</b> ist.
   </div>
 
   <table>
@@ -138,16 +154,61 @@
         <th>Name</th>
         <th>Email</th>
         <th>Sprache</th>
+        <th>Status</th>
         <th>Quelle</th>
         <th>Staffplan</th>
         <th>Zeiten</th>
         <th>Pausen</th>
+        <th>Abwesenheiten</th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
   </table>
 
   <div id="statusBottom" class="muted small" style="margin-top:10px"></div>
+</div>
+
+<!-- ====================================================== -->
+<!-- ABSENCES CARD -->
+<!-- ====================================================== -->
+<div id="absCard" class="card" style="display:none">
+  <h3 style="margin:0 0 8px">Abwesenheiten</h3>
+  <div class="muted small" id="absHeader"></div>
+
+  <div class="grid2" style="margin-top:10px">
+    <div class="card" style="margin:0">
+      <h4 style="margin:0 0 8px">Neu anlegen</h4>
+
+      <div class="absRow">
+        <label class="muted">Typ:</label>
+        <select id="absType">
+          <option value="sick">Krank</option>
+          <option value="vacation">Urlaub</option>
+        </select>
+
+        <label class="muted">Von:</label>
+        <input id="absFrom" type="date"/>
+
+        <label class="muted">Bis:</label>
+        <input id="absTo" type="date"/>
+      </div>
+
+      <div class="absRow" style="margin-top:8px">
+        <input id="absNote" type="text" placeholder="Notiz (optional)" style="min-width:360px"/>
+        <button id="btnAbsCreate">Speichern</button>
+        <button id="btnAbsClose" class="btnSmall">Schließen</button>
+        <span id="absOut" class="small muted"></span>
+      </div>
+    </div>
+
+    <div class="card" style="margin:0">
+      <h4 style="margin:0 0 8px">Aktive Abwesenheiten</h4>
+      <div id="absList" class="absList"></div>
+      <div class="muted small">
+        Tipp: „Cancel“ setzt status=cancelled (bleibt in DB), „Löschen“ entfernt den Eintrag komplett.
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -158,9 +219,13 @@
     return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   }
 
+  // Admin API helper (mit Admin-Code Header -> Variante B)
   async function api(url, options){
     const r = await fetch(url, {
-      headers: { "Content-Type":"application/json" },
+      headers: {
+        "Content-Type":"application/json",
+        "x-admin-code":"2012"
+      },
       ...options
     });
     const t = await r.text();
@@ -175,34 +240,11 @@
 
   // EU-Sprachen + Türkisch
   const LANGS = [
-    ["de","Deutsch"],
-    ["en","English"],
-    ["fr","Français"],
-    ["it","Italiano"],
-    ["es","Español"],
-    ["pt","Português"],
-    ["nl","Nederlands"],
-    ["da","Dansk"],
-    ["sv","Svenska"],
-    ["no","Norsk"],
-    ["fi","Suomi"],
-    ["is","Íslenska"],
-    ["ga","Gaeilge"],
-    ["mt","Malti"],
-    ["lb","Lëtzebuergesch"],
-    ["et","Eesti"],
-    ["lv","Latviešu"],
-    ["lt","Lietuvių"],
-    ["pl","Polski"],
-    ["cs","Čeština"],
-    ["sk","Slovenčina"],
-    ["hu","Magyar"],
-    ["sl","Slovenščina"],
-    ["hr","Hrvatski"],
-    ["ro","Română"],
-    ["bg","Български"],
-    ["el","Ελληνικά"],
-    ["tr","Türkçe"],
+    ["de","Deutsch"],["en","English"],["fr","Français"],["it","Italiano"],["es","Español"],["pt","Português"],
+    ["nl","Nederlands"],["da","Dansk"],["sv","Svenska"],["no","Norsk"],["fi","Suomi"],["is","Íslenska"],
+    ["ga","Gaeilge"],["mt","Malti"],["lb","Lëtzebuergesch"],["et","Eesti"],["lv","Latviešu"],["lt","Lietuvių"],
+    ["pl","Polski"],["cs","Čeština"],["sk","Slovenčina"],["hu","Magyar"],["sl","Slovenščina"],["hr","Hrvatski"],
+    ["ro","Română"],["bg","Български"],["el","Ελληνικά"],["tr","Türkçe"],
   ];
 
   function normalizeLang(v){
@@ -234,6 +276,22 @@
     `;
   }
 
+  function formatDateCell(v){
+    if(!v) return "";
+    // server liefert DATE typischerweise als "YYYY-MM-DD"
+    return String(v).slice(0,10);
+  }
+
+  function renderStatusPill(r){
+    // Erwartet Felder aus /api/admin/employees:
+    // is_sick_today (bool), sick_to (optional)
+    if(r.is_sick_today){
+      const to = r.sick_to ? formatDateCell(r.sick_to) : "";
+      return `<span class="pill sick">Krank${to ? " bis " + esc(to) : ""}</span>`;
+    }
+    return `<span class="pill ok">OK</span>`;
+  }
+
   function renderTable(rows){
     const q = ($("q")?.value || "").trim().toLowerCase();
     const filter = $("filter")?.value || "all";
@@ -256,11 +314,12 @@
     if(!tb) return;
 
     tb.innerHTML = out.map(r => `
-      <tr>
+      <tr class="${r.is_sick_today ? "is-sick" : ""}">
         <td class="mono">${esc(r.employee_id)}</td>
         <td>${esc(r.name)}</td>
         <td>${renderEmailInput(r.employee_id, r.email)}</td>
         <td>${renderLanguageSelect(r.employee_id, r.language)}</td>
+        <td>${renderStatusPill(r)}</td>
         <td>
           <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
             ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
@@ -269,6 +328,14 @@
         <td>${esc(r.staffplan_rows)}</td>
         <td>${esc(r.time_rows)}</td>
         <td>${esc(r.break_rows)}</td>
+        <td>
+          <button class="btnSmall"
+                  data-action="absences"
+                  data-employee-id="${esc(r.employee_id)}"
+                  data-employee-name="${esc(r.name)}">
+            Verwalten
+          </button>
+        </td>
       </tr>
     `).join("");
 
@@ -307,7 +374,151 @@
     fillAutoDropdown(allRows);
   }
 
-  // ---------------- AUTO SAVE (Email + Sprache) ----------------
+  // ======================================================
+  // ABSENCES (Block 3)
+  // ======================================================
+  let absEmployeeId = null;
+  let absEmployeeName = null;
+
+  function todayIso(){
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,"0");
+    const da = String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${da}`;
+  }
+
+  function setAbsOutput(text, ok){
+    const el = $("absOut");
+    if(!el) return;
+    el.className = "small " + (ok ? "ok" : (ok===false ? "bad" : "muted"));
+    el.textContent = text || "";
+  }
+
+  function renderAbsList(rows){
+    const list = $("absList");
+    if(!list) return;
+
+    const active = (rows||[]).filter(a => a.status === "active");
+    if(!active.length){
+      list.innerHTML = `<div class="muted small">Keine aktiven Abwesenheiten.</div>`;
+      return;
+    }
+
+    list.innerHTML = active.map(a => {
+      const from = formatDateCell(a.date_from);
+      const to = formatDateCell(a.date_to);
+      const typeLabel = a.type === "sick" ? "Krank" : "Urlaub";
+      return `
+        <div class="absItem">
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <b>${esc(typeLabel)}</b>
+              <span class="muted small">(${esc(from)} → ${esc(to)})</span>
+              ${a.note ? `<div class="small">${esc(a.note)}</div>` : ``}
+            </div>
+            <div class="row">
+              <button class="btnSmall" data-action="abs-cancel" data-id="${esc(a.id)}">Cancel</button>
+              <button class="btnSmall" data-action="abs-del" data-id="${esc(a.id)}">Löschen</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  async function refreshAbsences(){
+    if(!absEmployeeId) return;
+    setAbsOutput("Lade…", null);
+    const j = await api(`/api/admin/absences?employee_id=${encodeURIComponent(absEmployeeId)}&status=active`);
+    renderAbsList(j.rows || []);
+    setAbsOutput("", null);
+  }
+
+  async function openAbsences(employee_id, employee_name){
+    absEmployeeId = employee_id;
+    absEmployeeName = employee_name;
+
+    const card = $("absCard");
+    const header = $("absHeader");
+    if(card) card.style.display = "block";
+    if(header) header.innerHTML = `Mitarbeiter: <b>${esc(employee_name)}</b> <span class="mono">${esc(employee_id)}</span>`;
+
+    const t = todayIso();
+    if($("absFrom")) $("absFrom").value = t;
+    if($("absTo")) $("absTo").value = t;
+    if($("absNote")) $("absNote").value = "";
+
+    await refreshAbsences();
+    setAbsOutput("", null);
+  }
+
+  function closeAbsences(){
+    const card = $("absCard");
+    if(card) card.style.display = "none";
+    absEmployeeId = null;
+    absEmployeeName = null;
+  }
+
+  async function createAbsence(){
+    if(!absEmployeeId) return;
+
+    const type = $("absType")?.value || "sick";
+    const date_from = $("absFrom")?.value || "";
+    const date_to = $("absTo")?.value || "";
+    const note = ($("absNote")?.value || "").trim();
+
+    if(!date_from || !date_to){
+      setAbsOutput("Bitte von/bis setzen.", false);
+      return;
+    }
+
+    try{
+      setAbsOutput("Speichern…", null);
+      await api("/api/admin/absences", {
+        method: "POST",
+        body: JSON.stringify({ employee_id: absEmployeeId, type, date_from, date_to, note })
+      });
+
+      setAbsOutput("✅ Gespeichert", true);
+      await refreshAbsences();
+      await load(); // rot-Status sofort aktualisieren
+    }catch(e){
+      setAbsOutput("❌ " + e.message, false);
+    }
+  }
+
+  async function cancelAbsence(id){
+    try{
+      setAbsOutput("Cancel…", null);
+      await api(`/api/admin/absences/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "cancelled" })
+      });
+      await refreshAbsences();
+      await load();
+      setAbsOutput("✅ Abwesenheit gecancelt", true);
+    }catch(e){
+      setAbsOutput("❌ " + e.message, false);
+    }
+  }
+
+  async function deleteAbsence(id){
+    if(!confirm("Wirklich löschen?")) return;
+    try{
+      setAbsOutput("Löschen…", null);
+      await api(`/api/admin/absences/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await refreshAbsences();
+      await load();
+      setAbsOutput("✅ Gelöscht", true);
+    }catch(e){
+      setAbsOutput("❌ " + e.message, false);
+    }
+  }
+
+  // ======================================================
+  // AUTO SAVE (Email + Sprache)
+  // ======================================================
   async function saveField(el){
     const employee_id = el.dataset.employeeId;
     const field = el.dataset.field;
@@ -328,7 +539,6 @@
       el.style.outline = "2px solid #0a7b2e";
       setTimeout(()=> el.style.outline = prevOutline, 700);
 
-      // Optional: reload, damit du garantiert DB-Stand siehst
       await load();
     }catch(err){
       el.style.outline = "2px solid #b10000";
@@ -341,8 +551,17 @@
 
   document.addEventListener("change", (e) => {
     const el = e.target;
-    if(!el || !el.matches("select[data-field='language'][data-employee-id]")) return;
-    saveField(el);
+    if(!el) return;
+
+    if(el.matches("select[data-field='language'][data-employee-id]")){
+      saveField(el);
+      return;
+    }
+
+    if(el.matches("#filter")){
+      renderTable(allRows);
+      return;
+    }
   });
 
   document.addEventListener("blur", (e) => {
@@ -351,7 +570,9 @@
     saveField(el);
   }, true);
 
-  // ---------------- LOGO ----------------
+  // ======================================================
+  // LOGO
+  // ======================================================
   async function uploadLogo(){
     const fileEl = $("logoFile");
     const out = $("logoOut");
@@ -377,6 +598,7 @@
       const fd = new FormData();
       fd.append("file", f);
 
+      // Logo-Route ist NICHT /api/admin => kein Header notwendig
       const r = await fetch("/api/logo", { method: "POST", body: fd });
       const t = await r.text();
       let j; try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
@@ -388,7 +610,6 @@
       out.className = "small ok";
       out.textContent = "✅ Logo erfolgreich gespeichert";
 
-      // Preview neu laden (Cache umgehen)
       if(img){
         img.style.display = "inline-block";
         img.src = "/api/logo?ts=" + Date.now();
@@ -400,14 +621,15 @@
     }
   }
 
-  // Logo preview: bei 404 ausblenden, bei load einblenden
   const logoImg = $("logoPreview");
   if(logoImg){
     logoImg.addEventListener("error", ()=> { logoImg.style.display = "none"; });
     logoImg.addEventListener("load", ()=> { logoImg.style.display = "inline-block"; });
   }
 
-  // ---------------- MOVE AUTO ID ----------------
+  // ======================================================
+  // MOVE AUTO ID
+  // ======================================================
   async function move(){
     const old_employee_id = $("oldId")?.value || "";
     const new_employee_id = ($("newId")?.value || "").trim();
@@ -453,7 +675,9 @@
     }
   }
 
-  // ---------------- RESET ----------------
+  // ======================================================
+  // RESET
+  // ======================================================
   async function doReset(){
     const out = $("resetOut");
     if(out){
@@ -483,14 +707,39 @@
     }
   }
 
-  // ---------------- EVENTS ----------------
+  // ======================================================
+  // EVENTS (inkl. Absences Block 4)
+  // ======================================================
   $("btnUploadLogo")?.addEventListener("click", uploadLogo);
   $("btnReload")?.addEventListener("click", load);
   $("btnMove")?.addEventListener("click", move);
   $("btnResetImport")?.addEventListener("click", doReset);
 
   $("q")?.addEventListener("input", ()=>renderTable(allRows));
-  $("filter")?.addEventListener("change", ()=>renderTable(allRows));
+
+  $("btnAbsCreate")?.addEventListener("click", createAbsence);
+  $("btnAbsClose")?.addEventListener("click", closeAbsences);
+
+  document.addEventListener("click", (e) => {
+    const el = e.target;
+    if(!el) return;
+
+    if(el.matches("button[data-action='absences'][data-employee-id]")){
+      openAbsences(el.dataset.employeeId, el.dataset.employeeName || el.dataset.employeeId)
+        .catch(err => alert("❌ " + err.message));
+      return;
+    }
+
+    if(el.matches("button[data-action='abs-cancel'][data-id]")){
+      cancelAbsence(el.dataset.id);
+      return;
+    }
+
+    if(el.matches("button[data-action='abs-del'][data-id]")){
+      deleteAbsence(el.dataset.id);
+      return;
+    }
+  });
 
   // Init
   load().catch(e=>{
