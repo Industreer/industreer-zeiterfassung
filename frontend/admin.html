@@ -4,6 +4,7 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Admin – Mitarbeiter IDs</title>
+
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:1200px}
     h1{margin:0 0 10px}
@@ -13,419 +14,111 @@
     button{cursor:pointer}
     .card{border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0}
     .muted{color:#666}
-    table{border-collapse:collapse;width:100%;margin-top:10px}
-    th,td{border-bottom:1px solid #eee;padding:10px;text-align:left;vertical-align:top}
-    th{background:#fafafa}
-    .tag{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid #ddd}
-    .tag.auto{border-color:#f0b4b4;background:#fff5f5}
-    .tag.manual{border-color:#b4d6f0;background:#f5fbff}
     .ok{color:#0a7b2e}
     .bad{color:#b10000}
-    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
     .small{font-size:12px}
+    img.logo-preview{max-height:80px;border:1px solid #ddd;padding:6px;border-radius:6px;background:#fff}
   </style>
 </head>
+
 <body>
-  <h1>Admin – Mitarbeiter IDs (Hybrid)</h1>
-  <div class="muted">Ziel: AUTO_* IDs auf echte Mitarbeiter-IDs umhängen (inkl. Staffplan/Zeiten/Pausen).</div>
 
-  <div class="card">
-    <div class="row">
-      <button id="btnReload">Neu laden</button>
-      <label class="muted">Suche:</label>
-      <input id="q" type="text" placeholder="Name oder ID (z.B. Damir, AUTO_, 0815)"/>
-      <label class="muted">Filter:</label>
-      <select id="filter">
-        <option value="all">Alle</option>
-        <option value="auto">Nur AUTO_* (id_source=auto)</option>
-        <option value="manual">Nur manuell</option>
-        <option value="used">Mit Daten (staffplan/time/breaks > 0)</option>
-      </select>
-      <span id="status" class="muted"></span>
-    </div>
+<h1>Admin – Mitarbeiter IDs (Hybrid)</h1>
+<div class="muted">
+  Ziel: AUTO_* IDs auf echte Mitarbeiter-IDs umhängen (inkl. Staffplan/Zeiten/Pausen).
+</div>
+
+<!-- ====================================================== -->
+<!-- LOGO UPLOAD -->
+<!-- ====================================================== -->
+<div class="card">
+  <h3 style="margin:0 0 8px">Firmenlogo</h3>
+
+  <div class="muted small" style="margin-bottom:10px">
+    Das Logo wird z.B. für PDFs / Reports verwendet.  
+    Empfohlen: <b>PNG mit transparentem Hintergrund</b>.
   </div>
 
-  <div class="card">
-    <h3 style="margin:0 0 8px">AUTO_* umhängen</h3>
-    <div class="muted small" style="margin-bottom:10px">
-      Vorgehen: <b>alte AUTO_…</b> auswählen → <b>neue echte ID</b> eingeben → „Umhängen“.
-      Wenn die neue ID schon existiert, wird zusammengeführt (optional „alte Daten übernehmen“).
-    </div>
-
-    <div class="row">
-      <label>Alte ID (AUTO_*):</label>
-      <select id="oldId"></select>
-
-      <label>Neue ID:</label>
-      <input id="newId" type="text" placeholder="z.B. 0815"/>
-
-      <label class="muted">Merge-Modus:</label>
-      <select id="merge">
-        <option value="keep_new">keep_new (bestehende neue Daten behalten)</option>
-        <option value="keep_old">keep_old (Name/Email/Sprache von alt übernehmen)</option>
-      </select>
-
-      <button id="btnMove">Umhängen</button>
-    </div>
-
-    <div id="moveResult" class="small" style="margin-top:10px"></div>
+  <div class="row">
+    <input id="logoFile" type="file" accept="image/png"/>
+    <button id="btnUploadLogo">Logo hochladen</button>
+    <span id="logoOut" class="small muted"></span>
   </div>
 
-  <!-- ✅ Reset-Tools (damit dein vorhandenes JS nicht crasht) -->
-  <div class="card" id="resetTools">
-    <h3 style="margin:0 0 8px">Tools: Import-Daten zurücksetzen</h3>
-    <div class="muted small" style="margin-bottom:10px">
-      Löscht Import-Daten/Zuordnungen serverseitig (je nach Implementierung). Bitte vorsichtig benutzen.
-    </div>
-    <div class="row">
-      <label class="muted">Bestätigung:</label>
-      <input id="resetConfirm" type="text" placeholder="z.B. RESET oder Code (je nach Backend)"/>
-      <button id="btnResetImport">Reset ausführen</button>
-      <span id="resetOut" class="small muted"></span>
-    </div>
+  <div style="margin-top:12px">
+    <div class="muted small">Aktuelles Logo:</div>
+    <img id="logoPreview" class="logo-preview" src="/api/logo" alt="Kein Logo vorhanden"
+         onerror="this.style.display='none'">
   </div>
+</div>
 
-  <!-- ✅ Staffplan Tools (sichtbar: Download + Upload) -->
-  <div class="card" id="staffplanTools">
-    <h3 style="margin:0 0 8px">Staffplan Tools</h3>
-    <div class="muted small" style="margin-bottom:10px">
-      Fallback, falls SharePoint/Graph gerade nicht läuft: Download manuell triggern oder Excel hochladen.
-      Aktionen erfordern den Code <b>2012</b>.
-    </div>
-
-    <div class="row">
-      <button id="btnDownloadStaffplan">📥 Staffplan manuell herunterladen</button>
-
-      <input id="staffplanFile" type="file"
-             accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>
-
-      <button id="btnUploadStaffplan">⬆️ Staffplan Excel hochladen</button>
-
-      <span id="dlOut" class="small muted"></span>
-    </div>
-
-    <div id="uploadOut" class="small" style="margin-top:10px"></div>
+<!-- ====================================================== -->
+<!-- HINWEIS -->
+<!-- ====================================================== -->
+<div class="card">
+  <div class="muted small">
+    ✔ Upload speichert das Logo serverseitig<br>
+    ✔ Wird sofort aktiv (kein Neustart nötig)
   </div>
-
-  <div class="card">
-    <h3 style="margin:0 0 8px">Mitarbeiterübersicht</h3>
-    <div class="muted small">Hinweis: In der Liste siehst du auch Dubletten (gleicher Name, unterschiedliche IDs). Das ist normal – genau dafür ist das Umhängen da.</div>
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Name</th>
-          <th>Email</th>
-          <th>Sprache</th>
-          <th>Quelle</th>
-          <th>Staffplan</th>
-          <th>Zeiten</th>
-          <th>Pausen</th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
-    </table>
-  </div>
+</div>
 
 <script>
   const $ = (id)=>document.getElementById(id);
 
-  let allRows = [];
+  async function uploadLogo(){
+    const fileEl = $("logoFile");
+    const out = $("logoOut");
+    const img = $("logoPreview");
 
-  function esc(s){
-    return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  }
-
-  async function api(url, options){
-    const r = await fetch(url, {
-      headers: { "Content-Type":"application/json" },
-      ...options
-    });
-    const t = await r.text();
-    let j;
-    try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
-    if(!r.ok || j.ok === false) {
-      const msg = j.error || j.message || t || ("HTTP " + r.status);
-      throw new Error(msg);
-    }
-    return j;
-  }
-
-  function renderTable(rows){
-    const qEl = $("q");
-    const filterEl = $("filter");
-    const q = (qEl ? qEl.value : "").trim().toLowerCase();
-    const filter = filterEl ? filterEl.value : "all";
-
-    let out = rows;
-
-    if(q){
-      out = out.filter(r =>
-        String(r.employee_id).toLowerCase().includes(q) ||
-        String(r.name||"").toLowerCase().includes(q) ||
-        String(r.email||"").toLowerCase().includes(q)
-      );
-    }
-
-    if(filter === "auto") out = out.filter(r => r.id_source === "auto");
-    if(filter === "manual") out = out.filter(r => r.id_source !== "auto");
-    if(filter === "used") out = out.filter(r => (r.staffplan_rows+r.time_rows+r.break_rows) > 0);
-
-    const tb = $("tbody");
-    if(tb){
-      tb.innerHTML = out.map(r => `
-        <tr>
-          <td class="mono">${esc(r.employee_id)}</td>
-          <td>${esc(r.name)}</td>
-          <td>${r.email ? esc(r.email) : '<span class="muted">–</span>'}</td>
-          <td>${esc(r.language || 'de')}</td>
-          <td>
-            <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
-              ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
-            </span>
-          </td>
-          <td>${esc(r.staffplan_rows)}</td>
-          <td>${esc(r.time_rows)}</td>
-          <td>${esc(r.break_rows)}</td>
-        </tr>
-      `).join("");
-    }
-
-    const st = $("status");
-    if(st) st.textContent = `Zeilen: ${out.length} (gesamt: ${rows.length})`;
-  }
-
-  function fillAutoDropdown(rows){
-    const autos = rows
-      .filter(r => r.id_source === "auto")
-      .sort((a,b)=> (b.staffplan_rows+b.time_rows+b.break_rows) - (a.staffplan_rows+a.time_rows+a.break_rows));
-
-    const sel = $("oldId");
-    if(!sel) return;
-
-    sel.innerHTML = autos.map(r => {
-      const used = r.staffplan_rows+r.time_rows+r.break_rows;
-      const label = `${r.employee_id} — ${r.name} (Daten: ${used})`;
-      return `<option value="${esc(r.employee_id)}">${esc(label)}</option>`;
-    }).join("");
-
-    if(!autos.length){
-      sel.innerHTML = `<option value="">Keine AUTO_* Einträge gefunden</option>`;
-    }
-  }
-
-  async function load(){
-    const mr = $("moveResult");
-    if(mr) mr.innerHTML = "";
-
-    const st = $("status");
-    if(st) st.textContent = "Lade…";
-
-    const j = await api("/api/admin/employees");
-    allRows = j.rows || [];
-    renderTable(allRows);
-    fillAutoDropdown(allRows);
-  }
-
-  async function move(){
-    const oldIdEl = $("oldId");
-    const newIdEl = $("newId");
-    const mergeEl = $("merge");
-    const resEl = $("moveResult");
-
-    const old_employee_id = oldIdEl ? oldIdEl.value : "";
-    const new_employee_id = newIdEl ? newIdEl.value.trim() : "";
-    const merge = mergeEl ? mergeEl.value : "keep_new";
-
-    if(!old_employee_id){
-      if(resEl) resEl.innerHTML = `<span class="bad">Bitte eine alte AUTO_* ID wählen.</span>`;
-      return;
-    }
-    if(!new_employee_id){
-      if(resEl) resEl.innerHTML = `<span class="bad">Bitte neue ID eingeben (z.B. 0815).</span>`;
-      return;
-    }
-    if(new_employee_id.startsWith("AUTO_")){
-      if(resEl) resEl.innerHTML = `<span class="bad">Neue ID darf nicht mit AUTO_ beginnen.</span>`;
+    if(!fileEl.files || !fileEl.files[0]){
+      out.className = "small bad";
+      out.textContent = "❌ Bitte eine PNG-Datei auswählen.";
       return;
     }
 
-    if(resEl) resEl.innerHTML = `<span class="muted">Umhängen läuft…</span>`;
-
-    try{
-      const j = await api("/api/admin/employee-id", {
-        method:"POST",
-        body: JSON.stringify({ old_employee_id, new_employee_id, merge })
-      });
-
-      if(resEl){
-        resEl.innerHTML = `
-          <div class="ok"><b>✅ Erfolgreich umgehängt</b></div>
-          <div class="small">
-            <div>Alt: <span class="mono">${esc(j.old_employee_id)}</span> → Neu: <span class="mono">${esc(j.new_employee_id)}</span></div>
-            <div>Aktualisiert: staffplan=${esc(j.updated?.staffplan)}, time_entries=${esc(j.updated?.time_entries)}, breaks=${esc(j.updated?.breaks)}</div>
-            <div class="muted">Merge-Modus: ${esc(j.merge_mode)}</div>
-          </div>
-        `;
-      }
-
-      await load();
-      if(newIdEl) newIdEl.value = "";
-    }catch(e){
-      if(resEl) resEl.innerHTML = `<span class="bad">❌ Fehler: ${esc(e.message)}</span>`;
-    }
-  }
-
-  // ===== Tools: Reset Import-Daten =====
-  async function doReset(){
-    const out = $("resetOut");
-    if(out){
-      out.className = "small muted";
-      out.textContent = "Reset läuft…";
-    }
-
-    try {
-      const confirmEl = $("resetConfirm");
-      const confirm = confirmEl ? confirmEl.value.trim() : "";
-      const j = await api("/api/admin/reset", {
-        method: "POST",
-        body: JSON.stringify({ confirm })
-      });
-
-      if(out){
-        out.className = "small ok";
-        out.textContent = "✅ " + (j.note || "Reset erfolgreich");
-      }
-
-      await load();
-      if(confirmEl) confirmEl.value = "";
-    } catch (e) {
-      if(out){
-        out.className = "small bad";
-        out.textContent = "❌ " + e.message;
-      }
-    }
-  }
-
-  // ===== Tools: Staffplan Download (Code 2012) =====
-  async function downloadStaffplan(){
-    const out = $("dlOut");
-    if(out){
-      out.className = "small muted";
-      out.textContent = "";
-    }
-
-    const code = prompt("Bestätigungscode eingeben (2012):");
-    if (!code) return;
-
-    if (code.trim() !== "2012") {
-      if(out){
-        out.className = "small bad";
-        out.textContent = "❌ Falscher Code.";
-      }
+    const f = fileEl.files[0];
+    if(!f.name.toLowerCase().endsWith(".png")){
+      out.className = "small bad";
+      out.textContent = "❌ Nur PNG-Dateien erlaubt.";
       return;
     }
 
-    if(out){
-      out.className = "small muted";
-      out.textContent = "⬇️ Download startet…";
-    }
-
-    // Download im Browser auslösen (dein vorhandener Endpoint)
-    window.location.href = `/api/staffplan/download?code=${encodeURIComponent(code.trim())}`;
-  }
-
-  // ===== Tools: Staffplan Upload (Code 2012) =====
-  async function uploadStaffplan(){
-    const fileEl = $("staffplanFile");
-    const out = $("uploadOut");
-    const dlOut = $("dlOut");
-
-    if(out){
-      out.className = "small muted";
-      out.textContent = "";
-    }
-
-    if(!fileEl || !fileEl.files || !fileEl.files[0]){
-      if(out){
-        out.className = "small bad";
-        out.textContent = "❌ Bitte zuerst eine .xlsx Datei auswählen.";
-      }
-      return;
-    }
-
-    const code = prompt("Bestätigungscode eingeben (2012):");
-    if (!code) return;
-
-    if (code.trim() !== "2012") {
-      if(out){
-        out.className = "small bad";
-        out.textContent = "❌ Falscher Code.";
-      }
-      return;
-    }
-
-    if(dlOut){
-      dlOut.className = "small muted";
-      dlOut.textContent = "⬆️ Upload läuft…";
-    }
+    out.className = "small muted";
+    out.textContent = "⬆️ Upload läuft…";
 
     try{
       const fd = new FormData();
-      fd.append("file", fileEl.files[0]);
-      fd.append("code", code.trim());
-      // Erwarteter Backend-Endpoint (multipart/form-data)
-      const r = await fetch(`/api/admin/staffplan/upload?code=${encodeURIComponent(code.trim())}`, { method:"POST", body: fd });
+      fd.append("file", f);
+
+      const r = await fetch("/api/logo", {
+        method: "POST",
+        body: fd
+      });
+
       const t = await r.text();
-      let j; try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
+      let j;
+      try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
 
       if(!r.ok || j.ok === false){
-        throw new Error(j.error || j.message || t || ("HTTP " + r.status));
+        throw new Error(j.error || j.message || t);
       }
 
-      if(out){
-        out.className = "small ok";
-        out.textContent = "✅ " + (j.message || "Upload/Import gestartet");
-      }
-      if(dlOut) dlOut.textContent = "";
+      out.className = "small ok";
+      out.textContent = "✅ Logo erfolgreich gespeichert";
 
-      await load();
+      // Preview neu laden (Cache umgehen)
+      img.style.display = "inline-block";
+      img.src = "/api/logo?ts=" + Date.now();
+
       fileEl.value = "";
     }catch(e){
-      if(out){
-        out.className = "small bad";
-        out.textContent = "❌ " + e.message;
-      }
-      if(dlOut) dlOut.textContent = "";
+      out.className = "small bad";
+      out.textContent = "❌ " + e.message;
     }
   }
 
-  // ===== Sichere Event-Bindings (kein Crash, auch wenn Elemente fehlen) =====
-  const btnReload = $("btnReload");
-  if(btnReload) btnReload.addEventListener("click", load);
-
-  const btnMove = $("btnMove");
-  if(btnMove) btnMove.addEventListener("click", move);
-
-  const qEl = $("q");
-  if(qEl) qEl.addEventListener("input", ()=>renderTable(allRows));
-
-  const filterEl = $("filter");
-  if(filterEl) filterEl.addEventListener("change", ()=>renderTable(allRows));
-
-  const btnReset = $("btnResetImport");
-  if(btnReset) btnReset.addEventListener("click", doReset);
-
-  const btnDl = $("btnDownloadStaffplan");
-  if(btnDl) btnDl.addEventListener("click", downloadStaffplan);
-
-  const btnUp = $("btnUploadStaffplan");
-  if(btnUp) btnUp.addEventListener("click", uploadStaffplan);
-
-  load().catch(e=>{
-    const st = $("status");
-    if(st) st.innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
-  });
+  $("btnUploadLogo").addEventListener("click", uploadLogo);
 </script>
+
 </body>
 </html>
