@@ -1251,7 +1251,62 @@ app.post("/api/import/staffplan/sharepoint", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// ADMIN: STAFFPLAN + ABSENCES OVERLAY  (Phase 1B)
+// GET /api/admin/staffplan/with-absences?from=YYYY-MM-DD&to=YYYY-MM-DD
+// returns staffplan rows + absence_type (sick|vacation|null)
+// ======================================================
+app.get("/api/admin/staffplan/with-absences", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
 
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({ ok: false, error: "from fehlt oder ungültig (YYYY-MM-DD)" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "to fehlt oder ungültig (YYYY-MM-DD)" });
+    }
+    if (to < from) {
+      return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+    }
+
+    const r = await pool.query(
+      `
+      SELECT
+        sp.*,
+        CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM employee_absences ea
+            WHERE ea.employee_id = sp.employee_id
+              AND ea.status='active'
+              AND ea.type='sick'
+              AND sp.work_date BETWEEN ea.date_from AND ea.date_to
+          ) THEN 'sick'
+          WHEN EXISTS (
+            SELECT 1
+            FROM employee_absences ea
+            WHERE ea.employee_id = sp.employee_id
+              AND ea.status='active'
+              AND ea.type='vacation'
+              AND sp.work_date BETWEEN ea.date_from AND ea.date_to
+          ) THEN 'vacation'
+          ELSE NULL
+        END AS absence_type
+      FROM staffplan sp
+      WHERE sp.work_date BETWEEN $1::date AND $2::date
+      ORDER BY sp.work_date ASC, sp.employee_name ASC, sp.customer_po ASC, sp.internal_po ASC
+      `,
+      [from, to]
+    );
+
+    res.json({ ok: true, from, to, rows: r.rows });
+  } catch (e) {
+    console.error("STAFFPLAN WITH ABSENCES ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 // ======================================================
 // DEBUG: Staffplan basics
 // ======================================================
