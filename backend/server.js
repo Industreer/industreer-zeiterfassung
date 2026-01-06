@@ -226,31 +226,33 @@ async function migrate() {
       planned_hours NUMERIC
     );
   `);
-await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
-// --- staffplan unique index (NULL-sicher) ---
-// erst später, nachdem Duplikate gelöscht wurden
-try {
-  await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
 
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq2
-    ON staffplan (
-      employee_id,
-      work_date,
-      COALESCE(customer_po,''),
-      COALESCE(internal_po,''),
-      COALESCE(project_short,'')
+  // --- staffplan unique index (NULL-sicher) ---
+  // Achtung: kann fehlschlagen, wenn Duplikate existieren -> dann NICHT crashen
+  try {
+    await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
+
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq2
+      ON staffplan (
+        employee_id,
+        work_date,
+        COALESCE(customer_po,''),
+        COALESCE(internal_po,''),
+        COALESCE(project_short,'')
+      );
+    `);
+
+    console.log("✅ staffplan_uniq2 aktiv");
+  } catch (e) {
+    console.warn(
+      "⚠️ staffplan_uniq2 konnte nicht erstellt werden (Duplikate vorhanden).",
+      e.code || e.message
     );
-  `);
-
-  console.log("✅ staffplan_uniq2 aktiv");
-} catch (e) {
-  console.warn("⚠️ staffplan_uniq2 konnte nicht erstellt werden (Duplikate vorhanden).", e.code || e.message);
-  console.warn("⚠️ Bitte /api/admin/staffplan/dedupe?code=2012 aufrufen und danach neu deployen.");
-}
-
-`);
-
+    console.warn(
+      "⚠️ Bitte zuerst Duplikate entfernen (z.B. /api/admin/staffplan/dedupe?code=2012) und danach neu deployen."
+    );
+  }
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS staffplan_by_date
@@ -259,6 +261,12 @@ try {
     CREATE INDEX IF NOT EXISTS staffplan_by_date_emp
     ON staffplan (work_date, employee_id);
   `);
+
+  // ... hier geht dein migrate() normal weiter (import_runs, app_settings, employee_absences, usw.)
+
+  console.log("✅ DB migrate finished");
+}
+
 
   // ===== Import History tables =====
   await pool.query(`
