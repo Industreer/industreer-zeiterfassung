@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Admin – Mitarbeiter IDs</title>
+  <title>Admin – Mitarbeiter + Abwesenheiten</title>
 
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:1200px}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:1300px}
     h1{margin:0 0 10px}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
     input,select,button{padding:10px 12px;font-size:14px}
-    input[type="text"]{min-width:260px}
+    input[type="text"], input[type="date"]{min-width:220px}
     button{cursor:pointer}
     .card{border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0}
     .muted{color:#666}
@@ -22,32 +22,42 @@
 
     table{border-collapse:collapse;width:100%;margin-top:10px}
     th,td{border-bottom:1px solid #eee;padding:10px;text-align:left;vertical-align:top}
-    th{background:#fafafa}
+    th{background:#fafafa;position:sticky;top:0;z-index:1}
     .tag{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid #ddd}
     .tag.auto{border-color:#f0b4b4;background:#fff5f5}
     .tag.manual{border-color:#b4d6f0;background:#f5fbff}
 
-    /* Abwesenheiten / Status */
-    tr.is-sick td{ background: rgba(255,0,0,0.10); }
-    tr.is-sick td:first-child{ border-left: 4px solid rgba(255,0,0,0.55); }
+    .btn{border:1px solid #ddd;border-radius:8px;background:#fff}
+    .btn.primary{border-color:#b4d6f0;background:#f5fbff}
+    .btn.danger{border-color:#f0b4b4;background:#fff5f5}
 
-    .pill{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid #ddd}
-    .pill.sick{border-color:rgba(255,0,0,0.35);background:rgba(255,0,0,0.10)}
-    .pill.ok{border-color:rgba(0,0,0,0.12);background:#fff}
+    /* Status colors */
+    tr.sick{background:#fff1f1}
+    tr.sick td{border-bottom-color:#f3c3c3}
 
-    .btnSmall{padding:6px 10px;font-size:12px}
-    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    .absRow{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .absList{margin-top:10px}
-    .absItem{border:1px solid #eee;border-radius:10px;padding:10px;margin:8px 0;background:#fff}
+    .pill{
+      display:inline-block;
+      padding:3px 8px;
+      border-radius:999px;
+      font-size:12px;
+      border:1px solid #ddd;
+      background:#fff;
+      white-space:nowrap;
+    }
+    .pill.sick{border-color:#f0b4b4;background:#fff5f5}
+    .pill.vac{border-color:#ffe1a6;background:#fff9e6}
+
+    /* Absences panel */
+    #absCard{display:none}
+    #absList td{vertical-align:middle}
   </style>
 </head>
 
 <body>
 
-<h1>Admin – Mitarbeiter IDs (Hybrid)</h1>
+<h1>Admin – Mitarbeiter + Abwesenheiten</h1>
 <div class="muted">
-  Ziel: AUTO_* IDs auf echte Mitarbeiter-IDs umhängen (inkl. Staffplan/Zeiten/Pausen).
+  Ziel: Mitarbeiter verwalten + Abwesenheiten (Krank/Urlaub von/bis).
 </div>
 
 <!-- ====================================================== -->
@@ -63,7 +73,7 @@
 
   <div class="row">
     <input id="logoFile" type="file" accept="image/png"/>
-    <button id="btnUploadLogo">Logo hochladen</button>
+    <button id="btnUploadLogo" class="btn primary">Logo hochladen</button>
     <span id="logoOut" class="small muted"></span>
   </div>
 
@@ -78,16 +88,20 @@
 <!-- ====================================================== -->
 <div class="card">
   <div class="row">
-    <button id="btnReload">Neu laden</button>
+    <button id="btnReload" class="btn primary">Neu laden</button>
+
     <label class="muted">Suche:</label>
     <input id="q" type="text" placeholder="Name oder ID (z.B. Damir, AUTO_, 0815)"/>
+
     <label class="muted">Filter:</label>
     <select id="filter">
       <option value="all">Alle</option>
       <option value="auto">Nur AUTO_* (id_source=auto)</option>
       <option value="manual">Nur manuell</option>
       <option value="used">Mit Daten (staffplan/time/breaks > 0)</option>
+      <option value="sick">Heute krank (rot)</option>
     </select>
+
     <span id="statusTop" class="muted"></span>
   </div>
 </div>
@@ -114,7 +128,7 @@
       <option value="keep_old">keep_old (Name/Email/Sprache von alt übernehmen)</option>
     </select>
 
-    <button id="btnMove">Umhängen</button>
+    <button id="btnMove" class="btn primary">Umhängen</button>
   </div>
 
   <div id="moveResult" class="small" style="margin-top:10px"></div>
@@ -131,30 +145,82 @@
   <div class="row">
     <label class="muted">Bestätigung:</label>
     <input id="resetConfirm" type="text" placeholder='RESET-ALL-IMPORT-DATA'/>
-    <button id="btnResetImport">Reset ausführen</button>
+    <button id="btnResetImport" class="btn danger">Reset ausführen</button>
     <span id="resetOut" class="small muted"></span>
   </div>
 </div>
 
 <!-- ====================================================== -->
-<!-- MITARBEITERÜBERSICHT + EDIT (Email + Sprache Auto-Save) -->
+<!-- ABSENCES PANEL -->
+<!-- ====================================================== -->
+<div id="absCard" class="card">
+  <div class="row" style="justify-content:space-between">
+    <div>
+      <h3 id="absHeader" style="margin:0 0 8px">Abwesenheiten</h3>
+      <div class="muted small">Abwesenheiten sind <b>von/bis inklusive</b>.</div>
+    </div>
+    <div class="row">
+      <button id="btnAbsClose" class="btn">Schließen</button>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:10px">
+    <label class="muted">Typ:</label>
+    <select id="absType">
+      <option value="sick">Krank</option>
+      <option value="vacation">Urlaub</option>
+    </select>
+
+    <label class="muted">von:</label>
+    <input id="absFrom" type="date"/>
+
+    <label class="muted">bis:</label>
+    <input id="absTo" type="date"/>
+
+    <label class="muted">Notiz:</label>
+    <input id="absNote" type="text" placeholder="optional"/>
+
+    <button id="btnAbsCreate" class="btn primary">Speichern</button>
+
+    <span id="absOut" class="small muted"></span>
+  </div>
+
+  <div style="margin-top:14px">
+    <div class="muted small">Aktive Abwesenheiten:</div>
+    <table style="margin-top:8px">
+      <thead>
+        <tr>
+          <th>Typ</th>
+          <th>von</th>
+          <th>bis</th>
+          <th>Notiz</th>
+          <th>Status</th>
+          <th>Aktion</th>
+        </tr>
+      </thead>
+      <tbody id="absList"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ====================================================== -->
+<!-- MITARBEITERÜBERSICHT -->
 <!-- ====================================================== -->
 <div class="card">
   <h3 style="margin:0 0 8px">Mitarbeiterübersicht</h3>
   <div class="muted small">
     Email & Sprache sind editierbar. Änderungen werden automatisch gespeichert.
-    <br/>
-    Status wird rot markiert, wenn der Mitarbeiter <b>heute krank</b> ist.
+    <span class="mono">Rot</span> = heute krank.
   </div>
 
   <table>
     <thead>
       <tr>
+        <th>Status</th>
         <th>ID</th>
         <th>Name</th>
         <th>Email</th>
         <th>Sprache</th>
-        <th>Status</th>
         <th>Quelle</th>
         <th>Staffplan</th>
         <th>Zeiten</th>
@@ -168,82 +234,47 @@
   <div id="statusBottom" class="muted small" style="margin-top:10px"></div>
 </div>
 
-<!-- ====================================================== -->
-<!-- ABSENCES CARD -->
-<!-- ====================================================== -->
-<div id="absCard" class="card" style="display:none">
-  <h3 style="margin:0 0 8px">Abwesenheiten</h3>
-  <div class="muted small" id="absHeader"></div>
-
-  <div class="grid2" style="margin-top:10px">
-    <div class="card" style="margin:0">
-      <h4 style="margin:0 0 8px">Neu anlegen</h4>
-
-      <div class="absRow">
-        <label class="muted">Typ:</label>
-        <select id="absType">
-          <option value="sick">Krank</option>
-          <option value="vacation">Urlaub</option>
-        </select>
-
-        <label class="muted">Von:</label>
-        <input id="absFrom" type="date"/>
-
-        <label class="muted">Bis:</label>
-        <input id="absTo" type="date"/>
-      </div>
-
-      <div class="absRow" style="margin-top:8px">
-        <input id="absNote" type="text" placeholder="Notiz (optional)" style="min-width:360px"/>
-        <button id="btnAbsCreate">Speichern</button>
-        <button id="btnAbsClose" class="btnSmall">Schließen</button>
-        <span id="absOut" class="small muted"></span>
-      </div>
-    </div>
-
-    <div class="card" style="margin:0">
-      <h4 style="margin:0 0 8px">Aktive Abwesenheiten</h4>
-      <div id="absList" class="absList"></div>
-      <div class="muted small">
-        Tipp: „Cancel“ setzt status=cancelled (bleibt in DB), „Löschen“ entfernt den Eintrag komplett.
-      </div>
-    </div>
-  </div>
-</div>
-
 <script>
   const $ = (id)=>document.getElementById(id);
   let allRows = [];
+
+  // Absences state
+  let absEmployeeId = null;
+  let absEmployeeName = null;
 
   function esc(s){
     return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   }
 
-  // Admin API helper (mit Admin-Code Header -> Variante B)
-const ADMIN_CODE = "2012";
-
-async function api(url, options){
-  const headers = {
-    "Content-Type": "application/json",
-    "x-admin-code": ADMIN_CODE,
-    ...(options?.headers || {})
-  };
-
-  const r = await fetch(url, {
-    ...options,
-    headers
-  });
-
-  const t = await r.text();
-  let j;
-  try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
-  if(!r.ok || j.ok === false) {
-    const msg = j.error || j.message || t || ("HTTP " + r.status);
-    throw new Error(msg);
+  // Berlin today ISO YYYY-MM-DD (for date inputs and comparisons)
+  function todayIso(){
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Berlin",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    return fmt.format(new Date());
   }
-  return j;
-}
 
+  // Admin code header for /api/admin/*
+  async function api(url, options){
+    const r = await fetch(url, {
+      headers: {
+        "Content-Type":"application/json",
+        "x-admin-code":"2012"
+      },
+      ...options
+    });
+    const t = await r.text();
+    let j;
+    try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
+    if(!r.ok || j.ok === false) {
+      const msg = j.error || j.message || t || ("HTTP " + r.status);
+      throw new Error(msg);
+    }
+    return j;
+  }
 
   // EU-Sprachen + Türkisch
   const LANGS = [
@@ -283,20 +314,10 @@ async function api(url, options){
     `;
   }
 
-  function formatDateCell(v){
-    if(!v) return "";
-    // server liefert DATE typischerweise als "YYYY-MM-DD"
-    return String(v).slice(0,10);
-  }
-
-  function renderStatusPill(r){
-    // Erwartet Felder aus /api/admin/employees:
-    // is_sick_today (bool), sick_to (optional)
-    if(r.is_sick_today){
-      const to = r.sick_to ? formatDateCell(r.sick_to) : "";
-      return `<span class="pill sick">Krank${to ? " bis " + esc(to) : ""}</span>`;
-    }
-    return `<span class="pill ok">OK</span>`;
+  function statusPill(status){
+    if(status === "sick") return `<span class="pill sick">Krank (heute)</span>`;
+    if(status === "vacation") return `<span class="pill vac">Urlaub (heute)</span>`;
+    return `<span class="muted small">–</span>`;
   }
 
   function renderTable(rows){
@@ -316,17 +337,18 @@ async function api(url, options){
     if(filter === "auto") out = out.filter(r => r.id_source === "auto");
     if(filter === "manual") out = out.filter(r => r.id_source !== "auto");
     if(filter === "used") out = out.filter(r => (r.staffplan_rows+r.time_rows+r.break_rows) > 0);
+    if(filter === "sick") out = out.filter(r => r.__todayStatus === "sick");
 
     const tb = $("tbody");
     if(!tb) return;
 
     tb.innerHTML = out.map(r => `
-      <tr class="${r.is_sick_today ? "is-sick" : ""}">
+      <tr class="${r.__todayStatus === 'sick' ? 'sick' : ''}">
+        <td>${statusPill(r.__todayStatus)}</td>
         <td class="mono">${esc(r.employee_id)}</td>
         <td>${esc(r.name)}</td>
         <td>${renderEmailInput(r.employee_id, r.email)}</td>
         <td>${renderLanguageSelect(r.employee_id, r.language)}</td>
-        <td>${renderStatusPill(r)}</td>
         <td>
           <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
             ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
@@ -336,12 +358,12 @@ async function api(url, options){
         <td>${esc(r.time_rows)}</td>
         <td>${esc(r.break_rows)}</td>
         <td>
-          <button class="btnSmall"
-                  data-action="absences"
-                  data-employee-id="${esc(r.employee_id)}"
-                  data-employee-name="${esc(r.name)}">
-            Verwalten
-          </button>
+          <button
+            class="btn"
+            data-action="absences"
+            data-employee-id="${esc(r.employee_id)}"
+            data-employee-name="${esc(r.name)}"
+          >Verwalten</button>
         </td>
       </tr>
     `).join("");
@@ -372,74 +394,36 @@ async function api(url, options){
     }
   }
 
-  async function load(){
-    const st = $("statusTop");
-    if(st) st.textContent = "Lade…";
-    const j = await api("/api/admin/employees");
-    allRows = j.rows || [];
-    renderTable(allRows);
-    fillAutoDropdown(allRows);
-  }
-
-  // ======================================================
-  // ABSENCES (Block 3)
-  // ======================================================
-  let absEmployeeId = null;
-  let absEmployeeName = null;
-
-  function todayIso(){
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth()+1).padStart(2,"0");
-    const da = String(d.getDate()).padStart(2,"0");
-    return `${y}-${m}-${da}`;
-  }
-
-  function setAbsOutput(text, ok){
-    const el = $("absOut");
-    if(!el) return;
-    el.className = "small " + (ok ? "ok" : (ok===false ? "bad" : "muted"));
-    el.textContent = text || "";
+  // ================= Absences UI =================
+  function setAbsOutput(msg, ok){
+    const out = $("absOut");
+    if(!out) return;
+    out.className = "small " + (ok === true ? "ok" : ok === false ? "bad" : "muted");
+    out.textContent = msg || "";
   }
 
   function renderAbsList(rows){
-    const list = $("absList");
-    if(!list) return;
+    const tb = $("absList");
+    if(!tb) return;
 
-    const active = (rows||[]).filter(a => a.status === "active");
-    if(!active.length){
-      list.innerHTML = `<div class="muted small">Keine aktiven Abwesenheiten.</div>`;
+    if(!rows.length){
+      tb.innerHTML = `<tr><td colspan="6" class="muted small">Keine aktiven Abwesenheiten.</td></tr>`;
       return;
     }
 
-    list.innerHTML = active.map(a => {
-      const from = formatDateCell(a.date_from);
-      const to = formatDateCell(a.date_to);
-      const typeLabel = a.type === "sick" ? "Krank" : "Urlaub";
-      return `
-        <div class="absItem">
-          <div class="row" style="justify-content:space-between">
-            <div>
-              <b>${esc(typeLabel)}</b>
-              <span class="muted small">(${esc(from)} → ${esc(to)})</span>
-              ${a.note ? `<div class="small">${esc(a.note)}</div>` : ``}
-            </div>
-            <div class="row">
-              <button class="btnSmall" data-action="abs-cancel" data-id="${esc(a.id)}">Cancel</button>
-              <button class="btnSmall" data-action="abs-del" data-id="${esc(a.id)}">Löschen</button>
-            </div>
-          </div>
-        </div>
-      `;
-    }).join("");
-  }
-
-  async function refreshAbsences(){
-    if(!absEmployeeId) return;
-    setAbsOutput("Lade…", null);
-    const j = await api(`/api/admin/absences?employee_id=${encodeURIComponent(absEmployeeId)}&status=active`);
-    renderAbsList(j.rows || []);
-    setAbsOutput("", null);
+    tb.innerHTML = rows.map(r => `
+      <tr>
+        <td>${r.type === "sick" ? `<span class="pill sick">Krank</span>` : `<span class="pill vac">Urlaub</span>`}</td>
+        <td class="mono">${esc(r.date_from)}</td>
+        <td class="mono">${esc(r.date_to)}</td>
+        <td>${esc(r.note || "")}</td>
+        <td>${esc(r.status)}</td>
+        <td class="row" style="gap:8px">
+          <button class="btn" data-action="abs-cancel" data-id="${esc(r.id)}">Cancel</button>
+          <button class="btn danger" data-action="abs-del" data-id="${esc(r.id)}">Delete</button>
+        </td>
+      </tr>
+    `).join("");
   }
 
   async function openAbsences(employee_id, employee_name){
@@ -449,12 +433,13 @@ async function api(url, options){
     const card = $("absCard");
     const header = $("absHeader");
     if(card) card.style.display = "block";
-    if(header) header.innerHTML = `Mitarbeiter: <b>${esc(employee_name)}</b> <span class="mono">${esc(employee_id)}</span>`;
+    if(header) header.innerHTML = `Abwesenheiten – <b>${esc(employee_name)}</b> <span class="mono">${esc(employee_id)}</span>`;
 
     const t = todayIso();
     if($("absFrom")) $("absFrom").value = t;
     if($("absTo")) $("absTo").value = t;
     if($("absNote")) $("absNote").value = "";
+    if($("absType")) $("absType").value = "sick";
 
     await refreshAbsences();
     setAbsOutput("", null);
@@ -465,6 +450,14 @@ async function api(url, options){
     if(card) card.style.display = "none";
     absEmployeeId = null;
     absEmployeeName = null;
+  }
+
+  async function refreshAbsences(){
+    if(!absEmployeeId) return;
+    setAbsOutput("Lade…", null);
+    const j = await api(`/api/admin/absences?employee_id=${encodeURIComponent(absEmployeeId)}&status=active`);
+    renderAbsList(j.rows || []);
+    setAbsOutput("", null);
   }
 
   async function createAbsence(){
@@ -479,6 +472,10 @@ async function api(url, options){
       setAbsOutput("Bitte von/bis setzen.", false);
       return;
     }
+    if(date_to < date_from){
+      setAbsOutput("bis darf nicht vor von liegen.", false);
+      return;
+    }
 
     try{
       setAbsOutput("Speichern…", null);
@@ -489,7 +486,9 @@ async function api(url, options){
 
       setAbsOutput("✅ Gespeichert", true);
       await refreshAbsences();
-      await load(); // rot-Status sofort aktualisieren
+
+      // reload employees so sick-status updates
+      await load();
     }catch(e){
       setAbsOutput("❌ " + e.message, false);
     }
@@ -523,9 +522,69 @@ async function api(url, options){
     }
   }
 
-  // ======================================================
-  // AUTO SAVE (Email + Sprache)
-  // ======================================================
+  // ================= Today Status (red logic) =================
+  function isoInRange(iso, fromIso, toIso){
+    // all YYYY-MM-DD lexicographic comparable
+    return iso >= fromIso && iso <= toIso;
+  }
+
+  async function fetchTodayStatusForEmployee(employee_id){
+    // Determine if today is within any ACTIVE absence for employee
+    // Priority: sick > vacation
+    const j = await api(`/api/admin/absences?employee_id=${encodeURIComponent(employee_id)}&status=active`);
+    const rows = j.rows || [];
+    const t = todayIso();
+
+    let hasVacation = false;
+    for(const a of rows){
+      const fromIso = String(a.date_from || "");
+      const toIso = String(a.date_to || "");
+      if(!fromIso || !toIso) continue;
+      if(!isoInRange(t, fromIso, toIso)) continue;
+
+      if(a.type === "sick") return "sick";
+      if(a.type === "vacation") hasVacation = true;
+    }
+    return hasVacation ? "vacation" : null;
+  }
+
+  async function enrichRowsWithTodayStatus(rows){
+    // Concurrency limit so we don't spam the server
+    const limit = 8;
+    let idx = 0;
+
+    const workers = new Array(limit).fill(0).map(async () => {
+      while(idx < rows.length){
+        const i = idx++;
+        const r = rows[i];
+        try{
+          r.__todayStatus = await fetchTodayStatusForEmployee(r.employee_id);
+        }catch{
+          r.__todayStatus = null;
+        }
+      }
+    });
+
+    await Promise.all(workers);
+    return rows;
+  }
+
+  // ================= Load =================
+  async function load(){
+    const st = $("statusTop");
+    if(st) st.textContent = "Lade…";
+
+    const j = await api("/api/admin/employees");
+    allRows = j.rows || [];
+
+    // add today status (sick/vacation)
+    await enrichRowsWithTodayStatus(allRows);
+
+    renderTable(allRows);
+    fillAutoDropdown(allRows);
+  }
+
+  // ---------------- AUTO SAVE (Email + Sprache) ----------------
   async function saveField(el){
     const employee_id = el.dataset.employeeId;
     const field = el.dataset.field;
@@ -558,17 +617,8 @@ async function api(url, options){
 
   document.addEventListener("change", (e) => {
     const el = e.target;
-    if(!el) return;
-
-    if(el.matches("select[data-field='language'][data-employee-id]")){
-      saveField(el);
-      return;
-    }
-
-    if(el.matches("#filter")){
-      renderTable(allRows);
-      return;
-    }
+    if(!el || !el.matches("select[data-field='language'][data-employee-id]")) return;
+    saveField(el);
   });
 
   document.addEventListener("blur", (e) => {
@@ -577,9 +627,7 @@ async function api(url, options){
     saveField(el);
   }, true);
 
-  // ======================================================
-  // LOGO
-  // ======================================================
+  // ---------------- LOGO ----------------
   async function uploadLogo(){
     const fileEl = $("logoFile");
     const out = $("logoOut");
@@ -605,7 +653,6 @@ async function api(url, options){
       const fd = new FormData();
       fd.append("file", f);
 
-      // Logo-Route ist NICHT /api/admin => kein Header notwendig
       const r = await fetch("/api/logo", { method: "POST", body: fd });
       const t = await r.text();
       let j; try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
@@ -634,9 +681,7 @@ async function api(url, options){
     logoImg.addEventListener("load", ()=> { logoImg.style.display = "inline-block"; });
   }
 
-  // ======================================================
-  // MOVE AUTO ID
-  // ======================================================
+  // ---------------- MOVE AUTO ID ----------------
   async function move(){
     const old_employee_id = $("oldId")?.value || "";
     const new_employee_id = ($("newId")?.value || "").trim();
@@ -682,9 +727,7 @@ async function api(url, options){
     }
   }
 
-  // ======================================================
-  // RESET
-  // ======================================================
+  // ---------------- RESET ----------------
   async function doReset(){
     const out = $("resetOut");
     if(out){
@@ -714,18 +757,17 @@ async function api(url, options){
     }
   }
 
-  // ======================================================
-  // EVENTS (inkl. Absences Block 4)
-  // ======================================================
+  // ---------------- EVENTS ----------------
   $("btnUploadLogo")?.addEventListener("click", uploadLogo);
   $("btnReload")?.addEventListener("click", load);
   $("btnMove")?.addEventListener("click", move);
   $("btnResetImport")?.addEventListener("click", doReset);
 
-  $("q")?.addEventListener("input", ()=>renderTable(allRows));
-
   $("btnAbsCreate")?.addEventListener("click", createAbsence);
   $("btnAbsClose")?.addEventListener("click", closeAbsences);
+
+  $("q")?.addEventListener("input", ()=>renderTable(allRows));
+  $("filter")?.addEventListener("change", ()=>renderTable(allRows));
 
   document.addEventListener("click", (e) => {
     const el = e.target;
