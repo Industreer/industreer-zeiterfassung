@@ -1,4 +1,4 @@
-console.log("🔥🔥🔥 SERVER.JS + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS + SHAREPOINT 🔥🔥🔥");
+console.log("🔥🔥🔥 SERVER.JS + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS + SHAREPOINT + ABSENCES 🔥🔥🔥");
 
 const path = require("path");
 const fs = require("fs");
@@ -11,9 +11,33 @@ const { Pool } = require("pg");
 const { downloadExcelFromShareLink } = require("./sharepoint");
 
 const app = express();
+
+// ======================================================
+// BASE MIDDLEWARES (einmalig!)
+// ======================================================
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// ======================================================
+// SECURITY: Admin Code
+// ======================================================
+function requireCode2012(req) {
+  const code =
+    (req.query.code ||
+      req.body?.code ||
+      req.headers["x-admin-code"] ||
+      "")
+      .toString()
+      .trim();
+
+  if (code !== "2012") {
+    const err = new Error("Falscher Sicherheitscode");
+    err.status = 403;
+    throw err;
+  }
+}
+
 // ======================================================
 // ADMIN ROUTE GUARD (VARIANTE B)
 // schützt automatisch alle /api/admin/* Endpunkte
@@ -25,31 +49,15 @@ app.use("/api/admin", (req, res, next) => {
   } catch (e) {
     res.status(e.status || 403).json({
       ok: false,
-      error: e.message || "Admin-Zugriff verweigert"
+      error: e.message || "Admin-Zugriff verweigert",
     });
   }
 });
 console.log("🔐 Admin Route Guard aktiv");
+
 // ======================================================
-// UPLOAD (MULTER)
+// CONFIG
 // ======================================================
-
-function requireCode2012(req) {
-  const code =
-    (req.query.code ||
-     req.body?.code ||
-     req.headers["x-admin-code"] ||
-     "")
-      .toString()
-      .trim();
-
-  if (code !== "2012") {
-    const err = new Error("Falscher Sicherheitscode");
-    err.status = 403;
-    throw err;
-  }
-}
-
 const PORT = process.env.PORT || 10000;
 
 // ======================================================
@@ -83,6 +91,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 function toIsoDate(d) {
   return d.toISOString().slice(0, 10);
 }
+
 function todayIsoBerlin() {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Berlin",
@@ -90,8 +99,7 @@ function todayIsoBerlin() {
     month: "2-digit",
     day: "2-digit",
   });
-  // en-CA => YYYY-MM-DD
-  return fmt.format(new Date());
+  return fmt.format(new Date()); // YYYY-MM-DD
 }
 
 function getISOWeek(date) {
@@ -169,21 +177,6 @@ function parseExcelDate(cell) {
   }
 
   return null;
-}
-
-async function ensureColumn(table, column, typeSql) {
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name='${table}' AND column_name='${column}'
-      ) THEN
-        ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql};
-      END IF;
-    END $$;
-  `);
 }
 
 // -------- Settings helpers --------
@@ -297,7 +290,7 @@ async function migrate() {
     ON staffplan_changes (run_id, change_id);
   `);
 
-  // ===== App Settings (SharePoint link + last hash etc.) =====
+  // ===== App Settings =====
   await pool.query(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
@@ -306,8 +299,6 @@ async function migrate() {
     );
   `);
 
-  console.log("✅ DB migrate finished");
-}
   // ======================================================
   // EMPLOYEE ABSENCES (sick / vacation)
   // ======================================================
@@ -337,13 +328,13 @@ async function migrate() {
     WHERE status='active';
   `);
 
+  console.log("✅ DB migrate finished");
+}
+
 // ======================================================
 // STATIC
 // ======================================================
 app.use(express.static(FRONTEND_DIR));
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.get("/", (req, res) => res.redirect("/admin"));
 app.get("/admin", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "admin.html")));
 app.get("/debug.html", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "debug.html")));
@@ -356,15 +347,17 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/api/debug/build", (req, res) => {
   res.json({
     ok: true,
-    build: "server.js + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS + SHAREPOINT",
+    build: "server.js + IMPORT HISTORY + ROLLBACK + DRY-RUN + STATS + SHAREPOINT + ABSENCES",
     node: process.version,
     now: new Date().toISOString(),
   });
 });
+
 // ✅ Beweis-Endpunkt: zeigt sicher, ob diese server.js wirklich deployed ist
 app.get("/api/debug/has-logo-route", (req, res) => {
   res.json({ ok: true, hasLogoRoute: true });
 });
+
 // ======================================================
 // LOGO
 // ======================================================
@@ -1298,16 +1291,15 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
     total_on_date: totalOnDate.rows[0].cnt
   });
 });
+
 // ======================================================
 // ADMIN: Mitarbeiter-IDs (Hybrid AUTO_* -> echte ID)
 // ======================================================
-
 function isAutoEmployeeId(id) {
   return String(id || "").startsWith("AUTO_");
 }
 
-// (Optional aber hilfreich) einfacher Employees-GET Endpunkt
-// Damit du auch /api/employees nutzen kannst, falls du ihn brauchst.
+// (Optional) einfacher Employees-GET Endpunkt
 app.get("/api/employees", async (req, res) => {
   try {
     const r = await pool.query(`SELECT employee_id, name, email, language FROM employees ORDER BY name`);
@@ -1318,9 +1310,11 @@ app.get("/api/employees", async (req, res) => {
   }
 });
 
-// Admin: Übersicht + Usage Counts
+// Admin: Übersicht + Usage Counts + Absent-Status (heute)
 app.get("/api/admin/employees", async (req, res) => {
   try {
+    const today = todayIsoBerlin();
+
     const r = await pool.query(`
       SELECT
         e.employee_id,
@@ -1330,7 +1324,14 @@ app.get("/api/admin/employees", async (req, res) => {
         CASE WHEN e.employee_id LIKE 'AUTO\\_%' THEN 'auto' ELSE 'manual' END AS id_source,
         COALESCE(sp.cnt, 0)::int AS staffplan_rows,
         COALESCE(te.cnt, 0)::int AS time_rows,
-        COALESCE(br.cnt, 0)::int AS break_rows
+        COALESCE(br.cnt, 0)::int AS break_rows,
+        EXISTS (
+          SELECT 1
+          FROM employee_absences a
+          WHERE a.employee_id = e.employee_id
+            AND a.status = 'active'
+            AND $1::date BETWEEN a.date_from AND a.date_to
+        ) AS is_absent_today
       FROM employees e
       LEFT JOIN (SELECT employee_id, COUNT(*) AS cnt FROM staffplan GROUP BY employee_id) sp
         ON sp.employee_id = e.employee_id
@@ -1339,7 +1340,7 @@ app.get("/api/admin/employees", async (req, res) => {
       LEFT JOIN (SELECT employee_id, COUNT(*) AS cnt FROM breaks GROUP BY employee_id) br
         ON br.employee_id = e.employee_id
       ORDER BY (CASE WHEN e.employee_id LIKE 'AUTO\\_%' THEN 1 ELSE 0 END) ASC, e.name ASC
-    `);
+    `, [today]);
 
     res.json({ ok: true, rows: r.rows });
   } catch (e) {
@@ -1508,6 +1509,127 @@ app.delete("/api/admin/employees", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// ======================================================
+// ADMIN: ABSENCES API
+// ======================================================
+
+// GET /api/admin/absences?employee_id=...&status=active|all
+app.get("/api/admin/absences", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "").trim();
+    const status = String(req.query.status || "active").trim(); // active|all|cancelled
+
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    let where = `WHERE employee_id=$1`;
+    const params = [employee_id];
+
+    if (status === "active") where += ` AND status='active'`;
+    else if (status === "cancelled") where += ` AND status='cancelled'`;
+    // all => keine Zusatzfilter
+
+    const r = await pool.query(
+      `
+      SELECT id, employee_id, type, date_from, date_to, note, status, created_at, updated_at
+      FROM employee_absences
+      ${where}
+      ORDER BY date_from DESC, id DESC
+      `,
+      params
+    );
+
+    res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("ADMIN ABSENCES GET ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/admin/absences
+app.post("/api/admin/absences", async (req, res) => {
+  try {
+    const employee_id = String(req.body.employee_id || "").trim();
+    const type = String(req.body.type || "sick").trim(); // sick|vacation
+    const date_from = String(req.body.date_from || "").trim();
+    const date_to = String(req.body.date_to || "").trim();
+    const note = req.body.note != null ? String(req.body.note).trim() : null;
+
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    if (!["sick", "vacation"].includes(type)) return res.status(400).json({ ok: false, error: "type ungültig" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date_from)) return res.status(400).json({ ok: false, error: "date_from ungültig" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date_to)) return res.status(400).json({ ok: false, error: "date_to ungültig" });
+
+    const df = new Date(date_from + "T00:00:00.000Z");
+    const dt = new Date(date_to + "T00:00:00.000Z");
+    if (dt.getTime() < df.getTime()) {
+      return res.status(400).json({ ok: false, error: "date_to muss >= date_from sein" });
+    }
+
+    // ensure employee exists
+    const emp = await pool.query(`SELECT employee_id FROM employees WHERE employee_id=$1`, [employee_id]);
+    if (!emp.rowCount) return res.status(404).json({ ok: false, error: "employee_id nicht gefunden" });
+
+    const ins = await pool.query(
+      `
+      INSERT INTO employee_absences (employee_id, type, date_from, date_to, note, status, created_at, updated_at)
+      VALUES ($1,$2,$3::date,$4::date,$5,'active',NOW(),NOW())
+      RETURNING id
+      `,
+      [employee_id, type, date_from, date_to, note]
+    );
+
+    res.json({ ok: true, id: ins.rows[0].id });
+  } catch (e) {
+    console.error("ADMIN ABSENCES POST ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// PATCH /api/admin/absences/:id  body: { status: "cancelled"|"active" }
+app.patch("/api/admin/absences/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    const status = String(req.body.status || "").trim(); // active|cancelled
+    if (!id) return res.status(400).json({ ok: false, error: "id fehlt" });
+    if (!["active", "cancelled"].includes(status)) {
+      return res.status(400).json({ ok: false, error: "status ungültig" });
+    }
+
+    const upd = await pool.query(
+      `
+      UPDATE employee_absences
+      SET status=$2,
+          updated_at=NOW()
+      WHERE id=$1::bigint
+      `,
+      [id, status]
+    );
+    if (!upd.rowCount) return res.status(404).json({ ok: false, error: "id nicht gefunden" });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("ADMIN ABSENCES PATCH ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// DELETE /api/admin/absences/:id
+app.delete("/api/admin/absences/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ ok: false, error: "id fehlt" });
+
+    const del = await pool.query(`DELETE FROM employee_absences WHERE id=$1::bigint`, [id]);
+    if (!del.rowCount) return res.status(404).json({ ok: false, error: "id nicht gefunden" });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("ADMIN ABSENCES DELETE ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ======================================================
 // ADMIN: RESET IMPORT DATA (SAFE RESET)
 // POST /api/admin/reset
@@ -1550,11 +1672,10 @@ app.post("/api/admin/reset", async (req, res) => {
     client.release();
   }
 });
+
 // ======================================================
 // MANUAL STAFFPLAN DOWNLOAD (SharePoint) - protected by code=2012
 // GET /api/staffplan/download?code=2012
-// Lädt die Datei von SharePoint (URL aus app_settings)
-// Key: sharepoint_staffplan_url
 // ======================================================
 app.get("/api/staffplan/download", async (req, res) => {
   const code = String(req.query.code || "").trim();
@@ -1562,7 +1683,6 @@ app.get("/api/staffplan/download", async (req, res) => {
     return res.status(403).json({ ok: false, error: "Code falsch oder fehlt (code=2012)" });
   }
 
-  // SharePoint-URL aus app_settings lesen
   const s = await pool.query(`SELECT value FROM app_settings WHERE key='sharepoint_staffplan_url' LIMIT 1`);
   const url = s.rowCount ? s.rows[0].value : null;
 
@@ -1574,7 +1694,6 @@ app.get("/api/staffplan/download", async (req, res) => {
   }
 
   try {
-    // downloadExcelFromShareLink soll Buffer zurückgeben (oder {buffer, filename})
     const dl = await downloadExcelFromShareLink(url);
 
     let buffer, filename;
@@ -1598,17 +1717,15 @@ app.get("/api/staffplan/download", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
-// ADMIN: STAFFPLAN UPLOAD (Code 2012 geschützt)
+// ADMIN: STAFFPLAN UPLOAD (Code 2012 geschützt durch Guard)
 // POST /api/admin/staffplan/upload
 // ======================================================
 app.post("/api/admin/staffplan/upload", upload.single("file"), async (req, res) => {
   try {
-    // Sicherheitscode prüfen (query | body | header)
-    requireCode2012(req);
-
     const dryRun = String(req.query.dry_run || "") === "1";
-    const reset  = String(req.query.reset || "0") === "1";
+    const reset = String(req.query.reset || "0") === "1";
     const targetEndIso = String(req.query.target_end || "").trim() || null;
 
     const actorIp =
