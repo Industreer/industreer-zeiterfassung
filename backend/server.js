@@ -227,16 +227,28 @@ async function migrate() {
     );
   `);
 await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
+// --- staffplan unique index (NULL-sicher) ---
+// erst später, nachdem Duplikate gelöscht wurden
+try {
+  await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
 
-await pool.query(`
-  CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq2
-  ON staffplan (
-    employee_id,
-    work_date,
-    COALESCE(customer_po,''),
-    COALESCE(internal_po,''),
-    COALESCE(project_short,'')
-  );
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq2
+    ON staffplan (
+      employee_id,
+      work_date,
+      COALESCE(customer_po,''),
+      COALESCE(internal_po,''),
+      COALESCE(project_short,'')
+    );
+  `);
+
+  console.log("✅ staffplan_uniq2 aktiv");
+} catch (e) {
+  console.warn("⚠️ staffplan_uniq2 konnte nicht erstellt werden (Duplikate vorhanden).", e.code || e.message);
+  console.warn("⚠️ Bitte /api/admin/staffplan/dedupe?code=2012 aufrufen und danach neu deployen.");
+}
+
 `);
 
 
