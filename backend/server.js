@@ -304,7 +304,10 @@ app.get("/api/debug/build", (req, res) => {
     now: new Date().toISOString(),
   });
 });
-
+// ✅ Beweis-Endpunkt: zeigt sicher, ob diese server.js wirklich deployed ist
+app.get("/api/debug/has-logo-route", (req, res) => {
+  res.json({ ok: true, hasLogoRoute: true });
+});
 // ======================================================
 // LOGO
 // ======================================================
