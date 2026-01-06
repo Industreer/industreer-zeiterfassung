@@ -16,8 +16,16 @@
     .muted{color:#666}
     .ok{color:#0a7b2e}
     .bad{color:#b10000}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
     .small{font-size:12px}
     img.logo-preview{max-height:80px;border:1px solid #ddd;padding:6px;border-radius:6px;background:#fff}
+
+    table{border-collapse:collapse;width:100%;margin-top:10px}
+    th,td{border-bottom:1px solid #eee;padding:10px;text-align:left;vertical-align:top}
+    th{background:#fafafa}
+    .tag{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid #ddd}
+    .tag.auto{border-color:#f0b4b4;background:#fff5f5}
+    .tag.manual{border-color:#b4d6f0;background:#f5fbff}
   </style>
 </head>
 
@@ -35,7 +43,7 @@
   <h3 style="margin:0 0 8px">Firmenlogo</h3>
 
   <div class="muted small" style="margin-bottom:10px">
-    Das Logo wird z.B. für PDFs / Reports verwendet.  
+    Das Logo wird z.B. für PDFs / Reports verwendet.
     Empfohlen: <b>PNG mit transparentem Hintergrund</b>.
   </div>
 
@@ -53,24 +61,125 @@
 </div>
 
 <!-- ====================================================== -->
-<!-- HINWEIS -->
+<!-- CONTROLS -->
 <!-- ====================================================== -->
 <div class="card">
-  <div class="muted small">
-    ✔ Upload speichert das Logo serverseitig<br>
-    ✔ Wird sofort aktiv (kein Neustart nötig)
+  <div class="row">
+    <button id="btnReload">Neu laden</button>
+    <label class="muted">Suche:</label>
+    <input id="q" type="text" placeholder="Name oder ID (z.B. Damir, AUTO_, 0815)"/>
+    <label class="muted">Filter:</label>
+    <select id="filter">
+      <option value="all">Alle</option>
+      <option value="auto">Nur AUTO_* (id_source=auto)</option>
+      <option value="manual">Nur manuell</option>
+      <option value="used">Mit Daten (staffplan/time/breaks > 0)</option>
+    </select>
+    <span id="status" class="muted"></span>
   </div>
+</div>
+
+<!-- ====================================================== -->
+<!-- AUTO_* UMHÄNGEN -->
+<!-- ====================================================== -->
+<div class="card">
+  <h3 style="margin:0 0 8px">AUTO_* umhängen</h3>
+  <div class="muted small" style="margin-bottom:10px">
+    Vorgehen: <b>alte AUTO_…</b> auswählen → <b>neue echte ID</b> eingeben → „Umhängen“.
+  </div>
+
+  <div class="row">
+    <label>Alte ID (AUTO_*):</label>
+    <select id="oldId"></select>
+
+    <label>Neue ID:</label>
+    <input id="newId" type="text" placeholder="z.B. 0815"/>
+
+    <label class="muted">Merge-Modus:</label>
+    <select id="merge">
+      <option value="keep_new">keep_new (bestehende neue Daten behalten)</option>
+      <option value="keep_old">keep_old (Name/Email/Sprache von alt übernehmen)</option>
+    </select>
+
+    <button id="btnMove">Umhängen</button>
+  </div>
+
+  <div id="moveResult" class="small" style="margin-top:10px"></div>
+</div>
+
+<!-- ====================================================== -->
+<!-- RESET (optional, damit JS nicht crasht, falls du es nutzt) -->
+<!-- ====================================================== -->
+<div class="card">
+  <h3 style="margin:0 0 8px">Tools: Import-Daten zurücksetzen</h3>
+  <div class="muted small" style="margin-bottom:10px">
+    Vorsicht: löscht serverseitig Importdaten (nur nutzen, wenn du es wirklich willst).
+  </div>
+  <div class="row">
+    <label class="muted">Bestätigung:</label>
+    <input id="resetConfirm" type="text" placeholder='RESET-ALL-IMPORT-DATA'/>
+    <button id="btnResetImport">Reset ausführen</button>
+    <span id="resetOut" class="small muted"></span>
+  </div>
+</div>
+
+<!-- ====================================================== -->
+<!-- MITARBEITERÜBERSICHT + EDIT -->
+<!-- ====================================================== -->
+<div class="card">
+  <h3 style="margin:0 0 8px">Mitarbeiterübersicht</h3>
+  <div class="muted small">
+    Email & Sprache sind hier editierbar. Nach Änderung pro Zeile „Speichern“ drücken.
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Sprache</th>
+        <th>Quelle</th>
+        <th>Staffplan</th>
+        <th>Zeiten</th>
+        <th>Pausen</th>
+        <th>Aktion</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
 </div>
 
 <script>
   const $ = (id)=>document.getElementById(id);
+  let allRows = [];
 
+  function esc(s){
+    return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  async function api(url, options){
+    const r = await fetch(url, {
+      headers: { "Content-Type":"application/json" },
+      ...options
+    });
+    const t = await r.text();
+    let j;
+    try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
+    if(!r.ok || j.ok === false) {
+      const msg = j.error || j.message || t || ("HTTP " + r.status);
+      throw new Error(msg);
+    }
+    return j;
+  }
+
+  // ---------------- LOGO UPLOAD ----------------
   async function uploadLogo(){
     const fileEl = $("logoFile");
     const out = $("logoOut");
     const img = $("logoPreview");
 
-    if(!fileEl.files || !fileEl.files[0]){
+    if(!fileEl?.files || !fileEl.files[0]){
       out.className = "small bad";
       out.textContent = "❌ Bitte eine PNG-Datei auswählen.";
       return;
@@ -90,14 +199,9 @@
       const fd = new FormData();
       fd.append("file", f);
 
-      const r = await fetch("/api/logo", {
-        method: "POST",
-        body: fd
-      });
-
+      const r = await fetch("/api/logo", { method: "POST", body: fd });
       const t = await r.text();
-      let j;
-      try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
+      let j; try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
 
       if(!r.ok || j.ok === false){
         throw new Error(j.error || j.message || t);
@@ -106,10 +210,8 @@
       out.className = "small ok";
       out.textContent = "✅ Logo erfolgreich gespeichert";
 
-      // Preview neu laden (Cache umgehen)
       img.style.display = "inline-block";
       img.src = "/api/logo?ts=" + Date.now();
-
       fileEl.value = "";
     }catch(e){
       out.className = "small bad";
@@ -117,7 +219,213 @@
     }
   }
 
-  $("btnUploadLogo").addEventListener("click", uploadLogo);
+  // ---------------- EMPLOYEES TABLE ----------------
+  function renderTable(rows){
+    const q = ($("q")?.value || "").trim().toLowerCase();
+    const filter = $("filter")?.value || "all";
+
+    let out = rows;
+
+    if(q){
+      out = out.filter(r =>
+        String(r.employee_id).toLowerCase().includes(q) ||
+        String(r.name||"").toLowerCase().includes(q) ||
+        String(r.email||"").toLowerCase().includes(q)
+      );
+    }
+
+    if(filter === "auto") out = out.filter(r => r.id_source === "auto");
+    if(filter === "manual") out = out.filter(r => r.id_source !== "auto");
+    if(filter === "used") out = out.filter(r => (r.staffplan_rows+r.time_rows+r.break_rows) > 0);
+
+    const tb = $("tbody");
+    tb.innerHTML = out.map(r => {
+      const emailVal = r.email || "";
+      const langVal = r.language || "de";
+
+      return `
+        <tr data-employee-id="${esc(r.employee_id)}">
+          <td class="mono">${esc(r.employee_id)}</td>
+          <td>${esc(r.name)}</td>
+
+          <td>
+            <input type="text" data-field="email" value="${esc(emailVal)}" placeholder="email@firma.de" style="min-width:220px"/>
+          </td>
+
+          <td>
+            <select data-field="language">
+              <option value="de" ${langVal==="de"?"selected":""}>de</option>
+              <option value="en" ${langVal==="en"?"selected":""}>en</option>
+            </select>
+          </td>
+
+          <td>
+            <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
+              ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
+            </span>
+          </td>
+          <td>${esc(r.staffplan_rows)}</td>
+          <td>${esc(r.time_rows)}</td>
+          <td>${esc(r.break_rows)}</td>
+
+          <td>
+            <button class="btnSave" type="button">Speichern</button>
+            <div class="small muted saveOut"></div>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    $("status").textContent = `Zeilen: ${out.length} (gesamt: ${rows.length})`;
+  }
+
+  function fillAutoDropdown(rows){
+    const autos = rows
+      .filter(r => r.id_source === "auto")
+      .sort((a,b)=> (b.staffplan_rows+b.time_rows+b.break_rows) - (a.staffplan_rows+a.time_rows+a.break_rows));
+
+    const sel = $("oldId");
+    sel.innerHTML = autos.map(r => {
+      const used = r.staffplan_rows+r.time_rows+r.break_rows;
+      const label = `${r.employee_id} — ${r.name} (Daten: ${used})`;
+      return `<option value="${esc(r.employee_id)}">${esc(label)}</option>`;
+    }).join("");
+
+    if(!autos.length){
+      sel.innerHTML = `<option value="">Keine AUTO_* Einträge gefunden</option>`;
+    }
+  }
+
+  async function load(){
+    $("moveResult").innerHTML = "";
+    $("status").textContent = "Lade…";
+    const j = await api("/api/admin/employees");
+    allRows = j.rows || [];
+    renderTable(allRows);
+    fillAutoDropdown(allRows);
+    wireSaveButtons();
+  }
+
+  function wireSaveButtons(){
+    document.querySelectorAll("#tbody tr").forEach(tr => {
+      const btn = tr.querySelector(".btnSave");
+      if(!btn) return;
+
+      btn.addEventListener("click", async () => {
+        const employee_id = tr.getAttribute("data-employee-id");
+        const email = tr.querySelector('[data-field="email"]')?.value?.trim() ?? "";
+        const language = tr.querySelector('[data-field="language"]')?.value ?? "de";
+        const out = tr.querySelector(".saveOut");
+
+        out.className = "small muted saveOut";
+        out.textContent = "Speichere…";
+
+        try{
+          await api("/api/admin/employees", {
+            method: "PATCH",
+            body: JSON.stringify({
+              employee_id,
+              email: email === "" ? null : email,
+              language
+            })
+          });
+
+          out.className = "small ok saveOut";
+          out.textContent = "✅ gespeichert";
+
+          // optional: lokal updaten, damit nach Filter/Reload korrekt
+          const idx = allRows.findIndex(x => x.employee_id === employee_id);
+          if(idx >= 0){
+            allRows[idx].email = (email === "" ? null : email);
+            allRows[idx].language = language;
+          }
+        }catch(e){
+          out.className = "small bad saveOut";
+          out.textContent = "❌ " + e.message;
+        }
+      });
+    });
+  }
+
+  // ---------------- MOVE AUTO ID ----------------
+  async function move(){
+    const old_employee_id = $("oldId").value;
+    const new_employee_id = $("newId").value.trim();
+    const merge = $("merge").value;
+
+    if(!old_employee_id){
+      $("moveResult").innerHTML = `<span class="bad">Bitte eine alte AUTO_* ID wählen.</span>`;
+      return;
+    }
+    if(!new_employee_id){
+      $("moveResult").innerHTML = `<span class="bad">Bitte neue ID eingeben (z.B. 0815).</span>`;
+      return;
+    }
+    if(new_employee_id.startsWith("AUTO_")){
+      $("moveResult").innerHTML = `<span class="bad">Neue ID darf nicht mit AUTO_ beginnen.</span>`;
+      return;
+    }
+
+    $("moveResult").innerHTML = `<span class="muted">Umhängen läuft…</span>`;
+
+    try{
+      const j = await api("/api/admin/employee-id", {
+        method:"POST",
+        body: JSON.stringify({ old_employee_id, new_employee_id, merge })
+      });
+
+      $("moveResult").innerHTML = `
+        <div class="ok"><b>✅ Erfolgreich umgehängt</b></div>
+        <div class="small">
+          <div>Alt: <span class="mono">${esc(j.old_employee_id)}</span> → Neu: <span class="mono">${esc(j.new_employee_id)}</span></div>
+          <div>Aktualisiert: staffplan=${esc(j.updated?.staffplan)}, time_entries=${esc(j.updated?.time_entries)}, breaks=${esc(j.updated?.breaks)}</div>
+          <div class="muted">Merge-Modus: ${esc(j.merge_mode)}</div>
+        </div>
+      `;
+
+      await load();
+      $("newId").value = "";
+    }catch(e){
+      $("moveResult").innerHTML = `<span class="bad">❌ Fehler: ${esc(e.message)}</span>`;
+    }
+  }
+
+  // ---------------- RESET ----------------
+  async function doReset(){
+    const out = $("resetOut");
+    out.className = "small muted";
+    out.textContent = "Reset läuft…";
+
+    try {
+      const confirm = $("resetConfirm").value.trim();
+      const j = await api("/api/admin/reset", {
+        method: "POST",
+        body: JSON.stringify({ confirm })
+      });
+      out.className = "small ok";
+      out.textContent = "✅ " + (j.note || "Reset erfolgreich");
+      await load();
+      $("resetConfirm").value = "";
+    } catch (e) {
+      out.className = "small bad";
+      out.textContent = "❌ " + e.message;
+    }
+  }
+
+  // ---------------- EVENTS ----------------
+  $("btnUploadLogo")?.addEventListener("click", uploadLogo);
+
+  $("btnReload")?.addEventListener("click", load);
+  $("btnMove")?.addEventListener("click", move);
+
+  $("q")?.addEventListener("input", ()=>renderTable(allRows));
+  $("filter")?.addEventListener("change", ()=>renderTable(allRows));
+
+  $("btnResetImport")?.addEventListener("click", doReset);
+
+  load().catch(e=>{
+    $("status").innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
+  });
 </script>
 
 </body>
