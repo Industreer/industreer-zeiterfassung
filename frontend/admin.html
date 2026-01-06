@@ -122,14 +122,13 @@
     <span id="resetOut" class="small muted"></span>
   </div>
 </div>
-
 <!-- ====================================================== -->
-<!-- MITARBEITERÜBERSICHT + EDIT (1:1 TAUSCH – FERTIG) -->
+<!-- MITARBEITERÜBERSICHT + EDIT (Email + Sprache Auto-Save) -->
 <!-- ====================================================== -->
 <div class="card">
   <h3 style="margin:0 0 8px">Mitarbeiterübersicht</h3>
   <div class="muted small">
-    Email & Sprache sind hier editierbar. Email: direkt editieren → „Speichern“ je Zeile. Sprache: Auto-Save (sofort).
+    Email & Sprache sind editierbar. Änderungen werden automatisch gespeichert.
   </div>
 
   <table>
@@ -143,11 +142,12 @@
         <th>Staffplan</th>
         <th>Zeiten</th>
         <th>Pausen</th>
-        <th>Aktion</th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
   </table>
+
+  <div id="status" class="muted small" style="margin-top:10px"></div>
 </div>
 
 <script>
@@ -173,14 +173,13 @@
     return j;
   }
 
-  // ===== Sprachliste: Europa + Türkisch =====
-  // (Du kannst jederzeit weitere Codes hinzufügen)
+  // EU-Sprachen + Türkisch (ISO-ähnliche Codes)
   const LANGS = [
     ["de","Deutsch"],
     ["en","English"],
     ["fr","Français"],
-    ["es","Español"],
     ["it","Italiano"],
+    ["es","Español"],
     ["pt","Português"],
     ["nl","Nederlands"],
     ["da","Dansk"],
@@ -189,84 +188,74 @@
     ["fi","Suomi"],
     ["is","Íslenska"],
     ["ga","Gaeilge"],
-    ["cy","Cymraeg"],
     ["mt","Malti"],
     ["lb","Lëtzebuergesch"],
-
-    ["pl","Polski"],
-    ["cs","Čeština"],
-    ["sk","Slovenčina"],
-    ["sl","Slovenščina"],
-    ["hu","Magyar"],
-    ["ro","Română"],
-    ["bg","Български"],
-    ["hr","Hrvatski"],
-    ["sr","Српски"],
-    ["bs","Bosanski"],
-    ["mk","Македонски"],
-    ["sq","Shqip"],
-    ["el","Ελληνικά"],
-    ["tr","Türkçe"],
-
     ["et","Eesti"],
     ["lv","Latviešu"],
     ["lt","Lietuvių"],
-    ["uk","Українська"],
-    ["ru","Русский"],
-    ["be","Беларуская"],
-    ["hy","Հայերեն"],
-    ["ka","ქართული"],
-    ["az","Azərbaycanca"]
+    ["pl","Polski"],
+    ["cs","Čeština"],
+    ["sk","Slovenčina"],
+    ["hu","Magyar"],
+    ["sl","Slovenščina"],
+    ["hr","Hrvatski"],
+    ["ro","Română"],
+    ["bg","Български"],
+    ["el","Ελληνικά"],
+    ["tr","Türkçe"],
   ];
 
-  function languageSelectHTML(employee_id, current){
-    const cur = (current || "de").toString().trim().toLowerCase();
-    const opts = LANGS.map(([val,label]) => {
-      const sel = (val === cur) ? "selected" : "";
-      return `<option value="${esc(val)}" ${sel}>${esc(label)}</option>`;
-    }).join("");
-    return `<select data-field="language" data-employee-id="${esc(employee_id)}">${opts}</select>`;
+  function renderLanguageSelect(employee_id, current){
+    const val = String(current || "de").trim().toLowerCase();
+
+    // falls DB z.B. "DE" oder "de-DE" enthält -> normalisieren
+    const normalized = val.includes("-") ? val.split("-")[0] : val;
+
+    return `
+      <select data-field="language" data-employee-id="${esc(employee_id)}">
+        ${LANGS.map(([code,label]) => `
+          <option value="${esc(code)}" ${code===normalized ? "selected" : ""}>${esc(label)}</option>
+        `).join("")}
+      </select>
+    `;
+  }
+
+  function renderEmailInput(employee_id, current){
+    return `
+      <input
+        type="text"
+        style="min-width:240px"
+        data-field="email"
+        data-employee-id="${esc(employee_id)}"
+        value="${esc(current || "")}"
+        placeholder="name@firma.de"
+      />
+    `;
   }
 
   function renderTable(rows){
     const tb = $("tbody");
     if(!tb) return;
 
-    tb.innerHTML = (rows || []).map(r => {
-      const id_source = r.id_source === "auto" ? "AUTO" : "manuell";
-      const tagClass = r.id_source === "auto" ? "auto" : "manual";
-      const emailVal = r.email ? String(r.email) : "";
+    tb.innerHTML = (rows || []).map(r => `
+      <tr>
+        <td class="mono">${esc(r.employee_id)}</td>
+        <td>${esc(r.name)}</td>
+        <td>${renderEmailInput(r.employee_id, r.email)}</td>
+        <td>${renderLanguageSelect(r.employee_id, r.language)}</td>
+        <td>
+          <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
+            ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
+          </span>
+        </td>
+        <td>${esc(r.staffplan_rows)}</td>
+        <td>${esc(r.time_rows)}</td>
+        <td>${esc(r.break_rows)}</td>
+      </tr>
+    `).join("");
 
-      return `
-        <tr data-row-employee-id="${esc(r.employee_id)}">
-          <td class="mono">${esc(r.employee_id)}</td>
-          <td>${esc(r.name)}</td>
-          <td>
-            <input type="text"
-                   value="${esc(emailVal)}"
-                   placeholder="email@domain.tld"
-                   data-field="email"
-                   data-employee-id="${esc(r.employee_id)}"
-                   style="min-width:220px"/>
-          </td>
-          <td>
-            ${languageSelectHTML(r.employee_id, r.language)}
-          </td>
-          <td>
-            <span class="tag ${tagClass}">${id_source}</span>
-          </td>
-          <td>${esc(r.staffplan_rows)}</td>
-          <td>${esc(r.time_rows)}</td>
-          <td>${esc(r.break_rows)}</td>
-          <td>
-            <button type="button"
-                    data-action="save"
-                    data-employee-id="${esc(r.employee_id)}">Speichern</button>
-            <span class="small muted" data-save-out="${esc(r.employee_id)}"></span>
-          </td>
-        </tr>
-      `;
-    }).join("");
+    const st = $("status");
+    if(st) st.textContent = `Zeilen: ${(rows||[]).length}`;
   }
 
   async function loadEmployees(){
@@ -275,89 +264,55 @@
     renderTable(allRows);
   }
 
-  // ✅ Auto-Save: Sprache speichern (Change auf Select)
-  document.addEventListener("change", async (e) => {
-    const sel = e.target;
-    if (!sel || !sel.matches("select[data-field='language']")) return;
+  // ✅ Auto-Save: Sprache + Email (change + blur)
+  async function saveField(el){
+    const employee_id = el.dataset.employeeId; // aus data-employee-id
+    const field = el.dataset.field;
 
-    const employee_id = sel.dataset.employeeId;
-    const language = sel.value;
+    if(!employee_id || !field) return;
 
-    if (!employee_id) {
-      console.warn("Kein data-employee-id am Select gefunden");
-      return;
-    }
+    const payload = { employee_id };
+    payload[field] = (field === "language") ? el.value : el.value.trim();
 
-    sel.disabled = true;
+    el.disabled = true;
+    const prevOutline = el.style.outline;
 
-    try {
+    try{
       await api("/api/admin/employees", {
         method: "PATCH",
-        body: JSON.stringify({ employee_id, language })
+        body: JSON.stringify(payload)
       });
 
-      sel.style.outline = "2px solid #0a7b2e";
-      setTimeout(() => (sel.style.outline = ""), 700);
-    } catch (err) {
-      sel.style.outline = "2px solid #b10000";
-      setTimeout(() => (sel.style.outline = ""), 1200);
-      alert("❌ Sprache konnte nicht gespeichert werden: " + err.message);
-    } finally {
-      sel.disabled = false;
+      el.style.outline = "2px solid #0a7b2e";
+      setTimeout(()=> el.style.outline = prevOutline, 700);
+
+      // Optional: einmal neu laden, damit du IMMER den DB-Stand siehst
+      await loadEmployees();
+
+    }catch(err){
+      el.style.outline = "2px solid #b10000";
+      setTimeout(()=> el.style.outline = prevOutline, 1200);
+      alert("❌ Konnte nicht speichern: " + err.message);
+    }finally{
+      el.disabled = false;
     }
+  }
+
+  document.addEventListener("change", (e) => {
+    const el = e.target;
+    if(!el || !el.matches("[data-field][data-employee-id]")) return;
+    if(el.dataset.field === "language") saveField(el);
   });
 
-  // ✅ Save-Button je Zeile: Email speichern (und optional Sprache nochmal mitsenden)
-  document.addEventListener("click", async (e) => {
-    const btn = e.target;
-    if (!btn || !btn.matches("button[data-action='save']")) return;
+  document.addEventListener("blur", (e) => {
+    const el = e.target;
+    if(!el || !el.matches("input[data-field='email'][data-employee-id]")) return;
+    saveField(el);
+  }, true);
 
-    const employee_id = btn.dataset.employeeId;
-    if (!employee_id) return;
-
-    const emailEl = document.querySelector(`input[data-field="email"][data-employee-id="${CSS.escape(employee_id)}"]`);
-    const langEl  = document.querySelector(`select[data-field="language"][data-employee-id="${CSS.escape(employee_id)}"]`);
-    const outEl   = document.querySelector(`[data-save-out="${CSS.escape(employee_id)}"]`);
-
-    const email = emailEl ? emailEl.value.trim() : null;
-    const language = langEl ? langEl.value : null;
-
-    if (outEl) {
-      outEl.className = "small muted";
-      outEl.textContent = "speichere…";
-    }
-
-    btn.disabled = true;
-    try {
-      await api("/api/admin/employees", {
-        method: "PATCH",
-        body: JSON.stringify({ employee_id, email: email || null, language })
-      });
-
-      if (outEl) {
-        outEl.className = "small ok";
-        outEl.textContent = "✅ gespeichert";
-        setTimeout(()=>{ outEl.textContent=""; outEl.className="small muted"; }, 1200);
-      }
-
-      btn.style.outline = "2px solid #0a7b2e";
-      setTimeout(() => (btn.style.outline = ""), 700);
-    } catch (err) {
-      if (outEl) {
-        outEl.className = "small bad";
-        outEl.textContent = "❌ " + err.message;
-      }
-      btn.style.outline = "2px solid #b10000";
-      setTimeout(() => (btn.style.outline = ""), 1200);
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  // initial load
-  loadEmployees().catch(e => {
-    console.error(e);
-    alert("Fehler beim Laden: " + e.message);
+  loadEmployees().catch(e=>{
+    const st = $("status");
+    if(st) st.innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
   });
 </script>
   // ---------------- LOGO UPLOAD ----------------
