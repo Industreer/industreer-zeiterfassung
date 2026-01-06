@@ -227,11 +227,37 @@ async function migrate() {
     );
   `);
 
-  // --- staffplan unique index (NULL-sicher) ---
-  // Achtung: kann fehlschlagen, wenn Duplikate existieren -> dann NICHT crashen
+  // ===== STAFFPLAN: Duplikate entfernen + NULL-sicheren Unique Index setzen =====
   try {
+    // alten Index entfernen (falls vorhanden)
     await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
 
+    // 1) Duplikate entfernen (behält jeweils die Zeile mit größter id)
+    const dedupe = await pool.query(`
+      WITH ranked AS (
+        SELECT
+          id,
+          ROW_NUMBER() OVER (
+            PARTITION BY
+              employee_id,
+              work_date,
+              COALESCE(customer_po,''),
+              COALESCE(internal_po,''),
+              COALESCE(project_short,'')
+            ORDER BY id DESC
+          ) AS rn
+        FROM staffplan
+      )
+      DELETE FROM staffplan s
+      USING ranked r
+      WHERE s.id = r.id
+        AND r.rn > 1
+      RETURNING s.id;
+    `);
+
+    console.log("🧹 staffplan dedupe deleted:", dedupe.rowCount);
+
+    // 2) NULL-sicheren Unique Index erstellen
     await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq2
       ON staffplan (
@@ -245,15 +271,11 @@ async function migrate() {
 
     console.log("✅ staffplan_uniq2 aktiv");
   } catch (e) {
-    console.warn(
-      "⚠️ staffplan_uniq2 konnte nicht erstellt werden (Duplikate vorhanden).",
-      e.code || e.message
-    );
-    console.warn(
-      "⚠️ Bitte zuerst Duplikate entfernen (z.B. /api/admin/staffplan/dedupe?code=2012) und danach neu deployen."
-    );
+    console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);
+    // NICHT throwen, sonst startet der Server nicht
   }
 
+  // normale Indizes
   await pool.query(`
     CREATE INDEX IF NOT EXISTS staffplan_by_date
     ON staffplan (work_date);
@@ -261,6 +283,7 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS staffplan_by_date_emp
     ON staffplan (work_date, employee_id);
   `);
+
 
   // ... hier geht dein migrate() normal weiter (import_runs, app_settings, employee_absences, usw.)
 
