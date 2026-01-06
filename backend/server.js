@@ -1365,6 +1365,64 @@ app.get("/api/admin/staffplan/with-absences", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// ======================================================
+// ADMIN: STAFFPLAN EDIT (planned_hours)
+// PATCH /api/admin/staffplan/planned-hours
+// Body: { employee_id, work_date, customer_po, internal_po, project_short, planned_hours }
+// ======================================================
+app.patch("/api/admin/staffplan/planned-hours", async (req, res) => {
+  try {
+    const employee_id = String(req.body?.employee_id || "").trim();
+    const work_date = String(req.body?.work_date || "").trim();
+
+    const customer_po = req.body?.customer_po != null ? String(req.body.customer_po).trim() : null;
+    const internal_po = req.body?.internal_po != null ? String(req.body.internal_po).trim() : null;
+    const project_short = req.body?.project_short != null ? String(req.body.project_short).trim() : null;
+
+    const planned_hours_raw = req.body?.planned_hours;
+
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(work_date)) {
+      return res.status(400).json({ ok: false, error: "work_date ungültig (YYYY-MM-DD)" });
+    }
+
+    let planned_hours = null;
+    if (planned_hours_raw !== null && planned_hours_raw !== undefined && String(planned_hours_raw).trim() !== "") {
+      const n = Number(planned_hours_raw);
+      if (!isFinite(n) || n < 0) {
+        return res.status(400).json({ ok: false, error: "planned_hours ungültig" });
+      }
+      planned_hours = n;
+    }
+
+    const r = await pool.query(
+      `
+      UPDATE staffplan
+      SET planned_hours = $1
+      WHERE employee_id = $2
+        AND work_date = $3::date
+        AND COALESCE(customer_po,'') = COALESCE($4,'')
+        AND COALESCE(internal_po,'') = COALESCE($5,'')
+        AND COALESCE(project_short,'') = COALESCE($6,'')
+      `,
+      [planned_hours, employee_id, work_date, customer_po, internal_po, project_short]
+    );
+
+    if (!r.rowCount) {
+      return res.status(404).json({
+        ok: false,
+        error: "Staffplan-Zeile nicht gefunden (Key passt nicht)."
+      });
+    }
+
+    res.json({ ok: true, updated: r.rowCount });
+  } catch (e) {
+    console.error("STAFFPLAN PLANNED-HOURS PATCH ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ======================================================
 // DEBUG: Staffplan basics
 // ======================================================
