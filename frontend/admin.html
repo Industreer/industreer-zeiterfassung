@@ -124,12 +124,12 @@
 </div>
 
 <!-- ====================================================== -->
-<!-- MITARBEITERÜBERSICHT + EDIT -->
+<!-- MITARBEITERÜBERSICHT + EDIT (1:1 TAUSCH – FERTIG) -->
 <!-- ====================================================== -->
 <div class="card">
   <h3 style="margin:0 0 8px">Mitarbeiterübersicht</h3>
   <div class="muted small">
-    Email & Sprache sind hier editierbar. Nach Änderung pro Zeile „Speichern“ drücken.
+    Email & Sprache sind hier editierbar. Email: direkt editieren → „Speichern“ je Zeile. Sprache: Auto-Save (sofort).
   </div>
 
   <table>
@@ -173,6 +173,193 @@
     return j;
   }
 
+  // ===== Sprachliste: Europa + Türkisch =====
+  // (Du kannst jederzeit weitere Codes hinzufügen)
+  const LANGS = [
+    ["de","Deutsch"],
+    ["en","English"],
+    ["fr","Français"],
+    ["es","Español"],
+    ["it","Italiano"],
+    ["pt","Português"],
+    ["nl","Nederlands"],
+    ["da","Dansk"],
+    ["sv","Svenska"],
+    ["no","Norsk"],
+    ["fi","Suomi"],
+    ["is","Íslenska"],
+    ["ga","Gaeilge"],
+    ["cy","Cymraeg"],
+    ["mt","Malti"],
+    ["lb","Lëtzebuergesch"],
+
+    ["pl","Polski"],
+    ["cs","Čeština"],
+    ["sk","Slovenčina"],
+    ["sl","Slovenščina"],
+    ["hu","Magyar"],
+    ["ro","Română"],
+    ["bg","Български"],
+    ["hr","Hrvatski"],
+    ["sr","Српски"],
+    ["bs","Bosanski"],
+    ["mk","Македонски"],
+    ["sq","Shqip"],
+    ["el","Ελληνικά"],
+    ["tr","Türkçe"],
+
+    ["et","Eesti"],
+    ["lv","Latviešu"],
+    ["lt","Lietuvių"],
+    ["uk","Українська"],
+    ["ru","Русский"],
+    ["be","Беларуская"],
+    ["hy","Հայերեն"],
+    ["ka","ქართული"],
+    ["az","Azərbaycanca"]
+  ];
+
+  function languageSelectHTML(employee_id, current){
+    const cur = (current || "de").toString().trim().toLowerCase();
+    const opts = LANGS.map(([val,label]) => {
+      const sel = (val === cur) ? "selected" : "";
+      return `<option value="${esc(val)}" ${sel}>${esc(label)}</option>`;
+    }).join("");
+    return `<select data-field="language" data-employee-id="${esc(employee_id)}">${opts}</select>`;
+  }
+
+  function renderTable(rows){
+    const tb = $("tbody");
+    if(!tb) return;
+
+    tb.innerHTML = (rows || []).map(r => {
+      const id_source = r.id_source === "auto" ? "AUTO" : "manuell";
+      const tagClass = r.id_source === "auto" ? "auto" : "manual";
+      const emailVal = r.email ? String(r.email) : "";
+
+      return `
+        <tr data-row-employee-id="${esc(r.employee_id)}">
+          <td class="mono">${esc(r.employee_id)}</td>
+          <td>${esc(r.name)}</td>
+          <td>
+            <input type="text"
+                   value="${esc(emailVal)}"
+                   placeholder="email@domain.tld"
+                   data-field="email"
+                   data-employee-id="${esc(r.employee_id)}"
+                   style="min-width:220px"/>
+          </td>
+          <td>
+            ${languageSelectHTML(r.employee_id, r.language)}
+          </td>
+          <td>
+            <span class="tag ${tagClass}">${id_source}</span>
+          </td>
+          <td>${esc(r.staffplan_rows)}</td>
+          <td>${esc(r.time_rows)}</td>
+          <td>${esc(r.break_rows)}</td>
+          <td>
+            <button type="button"
+                    data-action="save"
+                    data-employee-id="${esc(r.employee_id)}">Speichern</button>
+            <span class="small muted" data-save-out="${esc(r.employee_id)}"></span>
+          </td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  async function loadEmployees(){
+    const j = await api("/api/admin/employees");
+    allRows = j.rows || [];
+    renderTable(allRows);
+  }
+
+  // ✅ Auto-Save: Sprache speichern (Change auf Select)
+  document.addEventListener("change", async (e) => {
+    const sel = e.target;
+    if (!sel || !sel.matches("select[data-field='language']")) return;
+
+    const employee_id = sel.dataset.employeeId;
+    const language = sel.value;
+
+    if (!employee_id) {
+      console.warn("Kein data-employee-id am Select gefunden");
+      return;
+    }
+
+    sel.disabled = true;
+
+    try {
+      await api("/api/admin/employees", {
+        method: "PATCH",
+        body: JSON.stringify({ employee_id, language })
+      });
+
+      sel.style.outline = "2px solid #0a7b2e";
+      setTimeout(() => (sel.style.outline = ""), 700);
+    } catch (err) {
+      sel.style.outline = "2px solid #b10000";
+      setTimeout(() => (sel.style.outline = ""), 1200);
+      alert("❌ Sprache konnte nicht gespeichert werden: " + err.message);
+    } finally {
+      sel.disabled = false;
+    }
+  });
+
+  // ✅ Save-Button je Zeile: Email speichern (und optional Sprache nochmal mitsenden)
+  document.addEventListener("click", async (e) => {
+    const btn = e.target;
+    if (!btn || !btn.matches("button[data-action='save']")) return;
+
+    const employee_id = btn.dataset.employeeId;
+    if (!employee_id) return;
+
+    const emailEl = document.querySelector(`input[data-field="email"][data-employee-id="${CSS.escape(employee_id)}"]`);
+    const langEl  = document.querySelector(`select[data-field="language"][data-employee-id="${CSS.escape(employee_id)}"]`);
+    const outEl   = document.querySelector(`[data-save-out="${CSS.escape(employee_id)}"]`);
+
+    const email = emailEl ? emailEl.value.trim() : null;
+    const language = langEl ? langEl.value : null;
+
+    if (outEl) {
+      outEl.className = "small muted";
+      outEl.textContent = "speichere…";
+    }
+
+    btn.disabled = true;
+    try {
+      await api("/api/admin/employees", {
+        method: "PATCH",
+        body: JSON.stringify({ employee_id, email: email || null, language })
+      });
+
+      if (outEl) {
+        outEl.className = "small ok";
+        outEl.textContent = "✅ gespeichert";
+        setTimeout(()=>{ outEl.textContent=""; outEl.className="small muted"; }, 1200);
+      }
+
+      btn.style.outline = "2px solid #0a7b2e";
+      setTimeout(() => (btn.style.outline = ""), 700);
+    } catch (err) {
+      if (outEl) {
+        outEl.className = "small bad";
+        outEl.textContent = "❌ " + err.message;
+      }
+      btn.style.outline = "2px solid #b10000";
+      setTimeout(() => (btn.style.outline = ""), 1200);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // initial load
+  loadEmployees().catch(e => {
+    console.error(e);
+    alert("Fehler beim Laden: " + e.message);
+  });
+</script>
   // ---------------- LOGO UPLOAD ----------------
   async function uploadLogo(){
     const fileEl = $("logoFile");
@@ -252,39 +439,36 @@
             <input type="text" data-field="email" value="${esc(emailVal)}" placeholder="email@firma.de" style="min-width:220px"/>
           </td>
 
-          <td>
-<select data-field="language">
-  <option value="de">Deutsch</option>
-  <option value="en">English</option>
-  <option value="fr">Français</option>
-  <option value="it">Italiano</option>
-  <option value="es">Español</option>
-  <option value="pt">Português</option>
-  <option value="nl">Nederlands</option>
-  <option value="da">Dansk</option>
-  <option value="sv">Svenska</option>
-  <option value="no">Norsk</option>
-  <option value="fi">Suomi</option>
-  <option value="pl">Polski</option>
-  <option value="cs">Čeština</option>
-  <option value="sk">Slovenčina</option>
-  <option value="hu">Magyar</option>
-  <option value="ro">Română</option>
-  <option value="bg">Български</option>
-  <option value="hr">Hrvatski</option>
-  <option value="sl">Slovenščina</option>
-  <option value="sr">Srpski</option>
-  <option value="el">Ελληνικά</option>
-  <option value="et">Eesti</option>
-  <option value="lv">Latviešu</option>
-  <option value="lt">Lietuvių</option>
-  <option value="ga">Gaeilge</option>
-  <option value="mt">Malti</option>
-  <option value="tr">Türkçe</option>
-</select>
-
-          </td>
-
+<td>
+  <select data-field="language"
+          data-employee-id="${esc(r.employee_id)}"
+          class="lang-select">
+    <option value="de">Deutsch</option>
+    <option value="en">Englisch</option>
+    <option value="fr">Französisch</option>
+    <option value="it">Italienisch</option>
+    <option value="es">Spanisch</option>
+    <option value="pt">Portugiesisch</option>
+    <option value="nl">Niederländisch</option>
+    <option value="pl">Polnisch</option>
+    <option value="cs">Tschechisch</option>
+    <option value="sk">Slowakisch</option>
+    <option value="hu">Ungarisch</option>
+    <option value="ro">Rumänisch</option>
+    <option value="bg">Bulgarisch</option>
+    <option value="hr">Kroatisch</option>
+    <option value="sl">Slowenisch</option>
+    <option value="el">Griechisch</option>
+    <option value="da">Dänisch</option>
+    <option value="sv">Schwedisch</option>
+    <option value="fi">Finnisch</option>
+    <option value="et">Estnisch</option>
+    <option value="lv">Lettisch</option>
+    <option value="lt">Litauisch</option>
+    <option value="mt">Maltesisch</option>
+    <option value="tr">Türkisch</option>
+  </select>
+</td>
           <td>
             <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
               ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
