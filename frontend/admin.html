@@ -220,23 +220,30 @@
   }
 
   // Admin API helper (mit Admin-Code Header -> Variante B)
-  async function api(url, options){
-    const r = await fetch(url, {
-      headers: {
-        "Content-Type":"application/json",
-        "x-admin-code":"2012"
-      },
-      ...options
-    });
-    const t = await r.text();
-    let j;
-    try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
-    if(!r.ok || j.ok === false) {
-      const msg = j.error || j.message || t || ("HTTP " + r.status);
-      throw new Error(msg);
-    }
-    return j;
+const ADMIN_CODE = "2012";
+
+async function api(url, options){
+  const headers = {
+    "Content-Type": "application/json",
+    "x-admin-code": ADMIN_CODE,
+    ...(options?.headers || {})
+  };
+
+  const r = await fetch(url, {
+    ...options,
+    headers
+  });
+
+  const t = await r.text();
+  let j;
+  try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
+  if(!r.ok || j.ok === false) {
+    const msg = j.error || j.message || t || ("HTTP " + r.status);
+    throw new Error(msg);
   }
+  return j;
+}
+
 
   // EU-Sprachen + Türkisch
   const LANGS = [
