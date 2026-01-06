@@ -15,6 +15,22 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 // ======================================================
+// ADMIN ROUTE GUARD (VARIANTE B)
+// schützt automatisch alle /api/admin/* Endpunkte
+// ======================================================
+app.use("/api/admin", (req, res, next) => {
+  try {
+    requireCode2012(req);
+    next();
+  } catch (e) {
+    res.status(e.status || 403).json({
+      ok: false,
+      error: e.message || "Admin-Zugriff verweigert"
+    });
+  }
+});
+console.log("🔐 Admin Route Guard aktiv");
+// ======================================================
 // UPLOAD (MULTER)
 // ======================================================
 
@@ -66,6 +82,16 @@ const upload = multer({ storage: multer.memoryStorage() });
 // ======================================================
 function toIsoDate(d) {
   return d.toISOString().slice(0, 10);
+}
+function todayIsoBerlin() {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Berlin",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  // en-CA => YYYY-MM-DD
+  return fmt.format(new Date());
 }
 
 function getISOWeek(date) {
@@ -282,11 +308,42 @@ async function migrate() {
 
   console.log("✅ DB migrate finished");
 }
+  // ======================================================
+  // EMPLOYEE ABSENCES (sick / vacation)
+  // ======================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS employee_absences (
+      id BIGSERIAL PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(employee_id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK (type IN ('sick','vacation')),
+      date_from DATE NOT NULL,
+      date_to   DATE NOT NULL,
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','cancelled')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS employee_absences_by_emp_dates
+    ON employee_absences (employee_id, date_from, date_to);
+
+    CREATE INDEX IF NOT EXISTS employee_absences_by_type_dates
+    ON employee_absences (type, date_from, date_to);
+
+    CREATE INDEX IF NOT EXISTS employee_absences_active
+    ON employee_absences (employee_id)
+    WHERE status='active';
+  `);
 
 // ======================================================
 // STATIC
 // ======================================================
 app.use(express.static(FRONTEND_DIR));
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.get("/", (req, res) => res.redirect("/admin"));
 app.get("/admin", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "admin.html")));
 app.get("/debug.html", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "debug.html")));
