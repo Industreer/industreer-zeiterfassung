@@ -226,11 +226,19 @@ async function migrate() {
       planned_hours NUMERIC
     );
   `);
+await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
 
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq
-    ON staffplan (employee_id, work_date, customer_po, internal_po, project_short);
-  `);
+await pool.query(`
+  CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq2
+  ON staffplan (
+    employee_id,
+    work_date,
+    COALESCE(customer_po,''),
+    COALESCE(internal_po,''),
+    COALESCE(project_short,'')
+  );
+`);
+
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS staffplan_by_date
@@ -1256,6 +1264,46 @@ app.post("/api/import/staffplan/sharepoint", async (req, res) => {
 // GET /api/admin/staffplan/with-absences?from=YYYY-MM-DD&to=YYYY-MM-DD
 // returns staffplan rows + absence_type (sick|vacation|null)
 // ======================================================
+// ======================================================
+// ADMIN: ONE-TIME STAFFPLAN DEDUPLICATION
+// GET /api/admin/staffplan/dedupe?code=2012
+// ⚠️ NUR EINMAL AUSFÜHREN, DANACH LÖSCHEN
+// ======================================================
+app.get("/api/admin/staffplan/dedupe", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      WITH ranked AS (
+        SELECT
+          id,
+          ROW_NUMBER() OVER (
+            PARTITION BY
+              employee_id,
+              work_date,
+              COALESCE(customer_po,''),
+              COALESCE(internal_po,''),
+              COALESCE(project_short,'')
+            ORDER BY id DESC
+          ) AS rn
+        FROM staffplan
+      )
+      DELETE FROM staffplan s
+      USING ranked r
+      WHERE s.id = r.id
+        AND r.rn > 1
+      RETURNING s.id;
+    `);
+
+    res.json({
+      ok: true,
+      deleted_rows: r.rowCount,
+      note: "Duplikate entfernt. Route jetzt bitte wieder löschen."
+    });
+  } catch (e) {
+    console.error("STAFFPLAN DEDUPE ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ======================================================
 // ADMIN: STAFFPLAN EDIT (planned_hours)
 // PATCH /api/admin/staffplan/planned-hours
