@@ -662,7 +662,7 @@ function renderWeeklyHoursInput(employee_id, current){
 
   document.addEventListener("blur", (e) => {
     const el = e.target;
-    if(!el || !el.matches("input[data-field='email'][data-employee-id], input[data-field='weekly_hours'][data-employee-id]")) [data-employee-id]")) return;
+    if(!el || !el.matches("input[data-field='email'][data-employee-id], input[data-field='weekly_hours'][data-employee-id]")) return;
     saveField(el);
   }, true);
 
