@@ -179,6 +179,25 @@ function parseExcelDate(cell) {
   return null;
 }
 
+// ======================================================
+// DB HELPERS
+// ======================================================
+async function ensureColumn(table, column, typeSql) {
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name='${table}'
+          AND column_name='${column}'
+      ) THEN
+        ALTER TABLE ${table}
+        ADD COLUMN ${column} ${typeSql};
+      END IF;
+    END $$;
+  `);
+}
 // -------- Settings helpers --------
 async function getSetting(key) {
   const r = await pool.query(`SELECT value FROM app_settings WHERE key=$1`, [key]);
@@ -208,6 +227,7 @@ async function migrate() {
       name TEXT NOT NULL,
       email TEXT,
       language TEXT DEFAULT 'de'
+      weekly_hours NUMERIC DEFAULT 40
     );
   `);
 
