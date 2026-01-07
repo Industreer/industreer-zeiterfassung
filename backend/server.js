@@ -1392,49 +1392,6 @@ app.patch("/api/admin/staffplan/planned-hours", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
-app.get("/api/admin/staffplan/with-absences", async (req, res) => {
-  try {
-    const from = String(req.query.from || "").trim();
-    const to = String(req.query.to || "").trim();
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
-      return res.status(400).json({ ok: false, error: "from fehlt oder ungültig (YYYY-MM-DD)" });
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-      return res.status(400).json({ ok: false, error: "to fehlt oder ungültig (YYYY-MM-DD)" });
-    }
-    if (to < from) {
-      return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
-    }
-
-    const r = await pool.query(
-      `
-      WITH abs AS (
-        SELECT
-          ea.employee_id,
-          ea.type,
-          ea.date_from,
-          ea.date_to
-        FROM employee_absences ea
-        WHERE ea.status = 'active'
-          AND ea.date_to >= $1::date
-          AND ea.date_from <= $2::date
-      )
-      SELECT
-        s.*,
-        a.type AS absence_type,
-        CASE
-          WHEN a.type = 'sick' THEN 0
-          ELSE COALESCE(s.planned_hours, 0)
-        END AS effective_planned_hours
-      FROM staffplan s
-      LEFT JOIN abs a
-        ON a.employee_id = s.employee_id
-       AND s.work_date BETWEEN a.date_from AND a.date_to
-      WHERE s.work_date BETWEEN $1::date AND $2::date
-      ORDER BY s.work_date ASC, s.employee_name ASC, s.id ASC
-      `,
 app.get("/api/admin/staffplan/with-absences", async (req, res) => {
   try {
     const from = String(req.query.from || "").trim();
