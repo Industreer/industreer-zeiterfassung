@@ -1639,6 +1639,14 @@ app.patch("/api/admin/employees", async (req, res) => {
     const name = req.body.name != null ? String(req.body.name).trim() : null;
     const email = req.body.email != null ? String(req.body.email).trim() : null;
     const language = req.body.language != null ? String(req.body.language).trim() : null;
+const weekly_hours =
+  req.body.weekly_hours != null && String(req.body.weekly_hours).trim() !== ""
+    ? Number(req.body.weekly_hours)
+    : null;
+
+if (weekly_hours !== null && (!isFinite(weekly_hours) || weekly_hours <= 0 || weekly_hours > 80)) {
+  return res.status(400).json({ ok: false, error: "weekly_hours ungültig" });
+}
 
     const exists = await pool.query(`SELECT employee_id FROM employees WHERE employee_id=$1`, [employee_id]);
     if (!exists.rowCount) return res.status(404).json({ ok: false, error: "employee_id nicht gefunden" });
@@ -1646,13 +1654,14 @@ app.patch("/api/admin/employees", async (req, res) => {
     await pool.query(
       `
       UPDATE employees
-      SET name = COALESCE($2, name),
-          email = COALESCE($3, email),
-          language = COALESCE($4, language)
-      WHERE employee_id=$1
-      `,
-      [employee_id, name || null, email || null, language || null]
-    );
+  SET name = COALESCE($2, name),
+      email = COALESCE($3, email),
+      language = COALESCE($4, language),
+      weekly_hours = COALESCE($5, weekly_hours)
+  WHERE employee_id=$1
+  `,
+  [employee_id, name || null, email || null, language || null, weekly_hours]
+);
 
     res.json({ ok: true });
   } catch (e) {
