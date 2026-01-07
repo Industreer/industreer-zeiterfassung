@@ -1056,7 +1056,13 @@ async function doImportStaffplan({
             (employee_id, employee_name, requester_name, work_date, calendar_week,
              customer, internal_po, customer_po, project_short, planned_hours)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-          ON CONFLICT (employee_id, work_date, customer_po, internal_po, project_short)
+ON CONFLICT (
+  employee_id,
+  work_date,
+  COALESCE(customer_po,''),
+  COALESCE(internal_po,''),
+  COALESCE(project_short,'')
+)
           DO UPDATE SET
             employee_name  = EXCLUDED.employee_name,
             requester_name = EXCLUDED.requester_name,
