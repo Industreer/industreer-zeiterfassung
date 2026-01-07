@@ -1435,15 +1435,77 @@ app.get("/api/admin/staffplan/with-absences", async (req, res) => {
       WHERE s.work_date BETWEEN $1::date AND $2::date
       ORDER BY s.work_date ASC, s.employee_name ASC, s.id ASC
       `,
+app.get("/api/admin/staffplan/with-absences", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({ ok: false, error: "from fehlt oder ungültig (YYYY-MM-DD)" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "to fehlt oder ungültig (YYYY-MM-DD)" });
+    }
+    if (to < from) {
+      return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+    }
+
+    const r = await pool.query(
+      `
+      WITH abs AS (
+        SELECT
+          ea.employee_id,
+          ea.type,
+          ea.date_from,
+          ea.date_to,
+          ea.created_at
+        FROM employee_absences ea
+        WHERE ea.status = 'active'
+          AND ea.date_to >= $1::date
+          AND ea.date_from <= $2::date
+      )
+      SELECT
+        s.*,
+        a.absence_type,
+        CASE
+          WHEN a.absence_type = 'sick' THEN 0
+          WHEN a.absence_type = 'vacation' THEN
+            CASE
+              WHEN EXTRACT(ISODOW FROM s.work_date) IN (6,7) THEN 0
+              ELSE COALESCE(e.weekly_hours, 40) / 5.0
+            END
+          ELSE COALESCE(s.planned_hours, 0)
+        END AS effective_planned_hours
+      FROM staffplan s
+      LEFT JOIN employees e
+        ON e.employee_id = s.employee_id
+
+      -- WICHTIG: verhindert Duplikate bei mehrfachen/überlappenden Abwesenheiten:
+      LEFT JOIN LATERAL (
+        SELECT
+          x.type AS absence_type
+        FROM abs x
+        WHERE x.employee_id = s.employee_id
+          AND s.work_date BETWEEN x.date_from AND x.date_to
+        ORDER BY
+          CASE WHEN x.type = 'sick' THEN 2 ELSE 1 END DESC,
+          x.created_at DESC
+        LIMIT 1
+      ) a ON TRUE
+
+      WHERE s.work_date BETWEEN $1::date AND $2::date
+      ORDER BY s.work_date ASC, s.employee_name ASC, s.id ASC
+      `,
       [from, to]
     );
 
     return res.json({ ok: true, from, to, rows: r.rows });
   } catch (e) {
-    console.error("STAFFPLAN WITH ABSENCES ERROR:", e);
+    console.error("WITH-ABSENCES ERROR:", e);
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 
   
 // ======================================================
