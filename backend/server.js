@@ -226,7 +226,7 @@ async function migrate() {
       employee_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT,
-      language TEXT DEFAULT 'de'
+      language TEXT DEFAULT 'de',
       weekly_hours NUMERIC DEFAULT 40
     );
   `);
