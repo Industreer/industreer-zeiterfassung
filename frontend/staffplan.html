@@ -3,69 +3,61 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Staffplan – Abwesenheiten + Edit</title>
-
+  <title>Admin – Staffplan (mit Abwesenheiten)</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:1500px}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:1400px}
     h1{margin:0 0 10px}
     .muted{color:#666}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
     input,select,button{padding:10px 12px;font-size:14px}
-    input[type="date"]{min-width:170px}
-    input[type="number"]{width:110px}
     button{cursor:pointer}
-    .btn{border:1px solid #ddd;border-radius:8px;background:#fff}
-    .btn.primary{border-color:#b4d6f0;background:#f5fbff}
-    .btn.danger{border-color:#f0b4b4;background:#fff5f5}
     .card{border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .small{font-size:12px}
     .ok{color:#0a7b2e}
     .bad{color:#b10000}
-    .small{font-size:12px}
-    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 
     table{border-collapse:collapse;width:100%;margin-top:10px}
     th,td{border-bottom:1px solid #eee;padding:10px;text-align:left;vertical-align:top}
     th{background:#fafafa;position:sticky;top:0;z-index:1}
-
-    .pill{
-      display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid #ddd;background:#fff;white-space:nowrap
-    }
-    .pill.sick{border-color:#f0b4b4;background:#fff5f5}
-    .pill.vac{border-color:#ffe1a6;background:#fff9e6}
-
-    tr.sick{background:#fff1f1}
-    tr.vac{background:#fff9e6}
-    tr.sick td{border-bottom-color:#f3c3c3}
-    tr.vac td{border-bottom-color:#f1e2b8}
-
-    .cell-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    .savehint{color:#666;font-size:12px}
+    td.num{text-align:right;white-space:nowrap}
+    .badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid #ddd;white-space:nowrap}
+    .badge.sick{background:#ffe9e9;border-color:#f0b4b4}
+    .badge.vacation{background:#fff4db;border-color:#f1d59a}
+    .badge.none{background:#f4f6f8;border-color:#e2e6ea;color:#555}
+    tr.sick td{background:#fff5f5}
+    tr.vacation td{background:#fffaf0}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #ddd;font-size:12px}
+    .pill.kpi{background:#f7f7f7}
+    .right{margin-left:auto}
   </style>
 </head>
 <body>
 
-  <div class="row" style="justify-content:space-between;align-items:flex-start">
-    <div>
-      <h1>Staffplan – Abwesenheiten + Edit</h1>
-      <div class="muted">
-        Rot = krank, Gelb = Urlaub. Editierbar: <b>planned_hours</b>.
-      </div>
-      <div class="muted small">
-        Admin-Schutz aktiv (Header <span class="mono">x-admin-code: 2012</span>).
-      </div>
-    </div>
-    <div class="row">
-      <a class="btn" style="text-decoration:none;display:inline-block;padding:10px 12px" href="/admin">← Admin</a>
-    </div>
+  <h1>Staffplan – Abwesenheiten Overlay</h1>
+  <div class="muted">
+    Rot = krank, Gelb = Urlaub. Datenquelle: <span class="mono">/api/admin/staffplan/with-absences</span>
   </div>
 
   <div class="card">
     <div class="row">
-      <label class="muted">von:</label>
-      <input id="from" type="date">
-      <label class="muted">bis:</label>
-      <input id="to" type="date">
-      <button id="btnLoad" class="btn primary">Laden</button>
+      <label class="muted">Von:</label>
+      <input id="from" type="date"/>
+      <label class="muted">Bis:</label>
+      <input id="to" type="date"/>
+
+      <label class="muted">Suche:</label>
+      <input id="q" type="text" placeholder="Name / ID / Kunde / Projekt / PO" style="min-width:320px"/>
+
+      <label class="muted">Sort:</label>
+      <select id="sort">
+        <option value="date_asc">Datum ↑</option>
+        <option value="date_desc">Datum ↓</option>
+        <option value="name_asc">Name ↑</option>
+        <option value="name_desc">Name ↓</option>
+        <option value="hours_desc">Stunden ↓</option>
+        <option value="hours_asc">Stunden ↑</option>
+      </select>
 
       <label class="muted">Filter:</label>
       <select id="filter">
@@ -75,32 +67,50 @@
         <option value="none">Nur ohne Abwesenheit</option>
       </select>
 
-      <input id="q" type="text" placeholder="Suche (Mitarbeiter/Kunde/Projekt)" style="min-width:320px">
-      <span id="status" class="muted"></span>
+      <button id="btnLoad">Laden</button>
+      <button id="btnThisWeek" title="Mo–So (Berlin)">Diese Woche</button>
+      <button id="btnLast7" title="letzte 7 Tage (Berlin)">Letzte 7 Tage</button>
+
+      <div class="right small muted" id="statusTop"></div>
     </div>
 
-    <div class="muted small" style="margin-top:10px">
-      Tipp: Stunden ändern → <b>Speichern</b> drücken.
+    <div class="row small" style="margin-top:10px">
+      <span class="pill kpi" id="kpiRows">Zeilen: 0</span>
+      <span class="pill kpi" id="kpiHours">Stunden gesamt: 0</span>
+      <span class="pill kpi" id="kpiSick">krank: 0</span>
+      <span class="pill kpi" id="kpiVac">Urlaub: 0</span>
+      <span class="pill kpi" id="kpiNone">ohne: 0</span>
+
+      <button id="btnCsv" class="right">CSV Export</button>
     </div>
   </div>
 
   <div class="card">
-    <table>
-      <thead>
-        <tr>
-          <th>Datum</th>
-          <th>Mitarbeiter</th>
-          <th>Kunde</th>
-          <th>POs</th>
-          <th>Projekt</th>
-          <th>Stunden</th>
-          <th>Abwesenheit</th>
-          <th>Aktion</th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
-    </table>
-    <div id="statusBottom" class="muted small" style="margin-top:10px"></div>
+    <div class="muted small">
+      Tipp: Wenn du “Auto-Nullung” (krank = 0h) aktivieren willst, machen wir Phase 1C.2 direkt als nächstes.
+    </div>
+
+    <div style="overflow:auto; max-height:70vh; border:1px solid #eee; border-radius:10px; margin-top:10px">
+      <table>
+        <thead>
+          <tr>
+            <th>Datum</th>
+            <th>KW</th>
+            <th>Mitarbeiter</th>
+            <th>ID</th>
+            <th>Kunde</th>
+            <th>Customer PO</th>
+            <th>Internal PO</th>
+            <th>Projekt</th>
+            <th class="num">Stunden</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="small muted" id="statusBottom" style="margin-top:10px"></div>
   </div>
 
 <script>
@@ -110,17 +120,29 @@
     return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   }
 
-  function todayIso(){
+  // Berlin ISO date
+  function todayIsoBerlin(){
     const fmt = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Europe/Berlin",
-      year: "numeric", month: "2-digit", day: "2-digit",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
     });
-    return fmt.format(new Date());
+    return fmt.format(new Date()); // YYYY-MM-DD
   }
 
   function addDaysIso(iso, days){
     const d = new Date(iso + "T00:00:00.000Z");
     d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0,10);
+  }
+
+  function startOfWeekBerlin(iso){
+    // Monday as start, computed in UTC from iso
+    const d = new Date(iso + "T00:00:00.000Z");
+    const day = d.getUTCDay(); // 0..6, 0=Sun
+    const diff = (day === 0 ? -6 : 1 - day); // move to Monday
+    d.setUTCDate(d.getUTCDate() + diff);
     return d.toISOString().slice(0,10);
   }
 
@@ -142,182 +164,178 @@
     return j;
   }
 
-  function pill(type){
-    if(type === "sick") return `<span class="pill sick">Krank</span>`;
-    if(type === "vacation") return `<span class="pill vac">Urlaub</span>`;
-    return `<span class="muted small">–</span>`;
+  function badge(type){
+    if(type === "sick") return `<span class="badge sick">krank</span>`;
+    if(type === "vacation") return `<span class="badge vacation">Urlaub</span>`;
+    return `<span class="badge none">—</span>`;
   }
 
-  let allRows = [];
-
-  function rowClass(absence_type){
-    if(absence_type === "sick") return "sick";
-    if(absence_type === "vacation") return "vac";
-    return "";
+  function toNumberHours(v){
+    if(v == null) return 0;
+    const n = Number(String(v).replace(",", "."));
+    return Number.isFinite(n) ? n : 0;
   }
 
-  function render(rows){
-    const filter = $("filter")?.value || "all";
+  let rawRows = [];
+
+  function applyFiltersAndRender(){
     const q = ($("q")?.value || "").trim().toLowerCase();
+    const filter = $("filter")?.value || "all";
+    const sort = $("sort")?.value || "date_asc";
 
-    let out = rows || [];
-
-    if(filter === "sick") out = out.filter(r => r.absence_type === "sick");
-    if(filter === "vacation") out = out.filter(r => r.absence_type === "vacation");
-    if(filter === "none") out = out.filter(r => !r.absence_type);
+    let rows = rawRows.slice();
 
     if(q){
-      out = out.filter(r => {
+      rows = rows.filter(r => {
         const hay = [
-          r.employee_name, r.customer, r.project_short,
-          r.customer_po, r.internal_po
-        ].map(x => String(x||"").toLowerCase()).join(" ");
+          r.employee_name, r.employee_id, r.customer, r.customer_po, r.internal_po, r.project_short, r.requester_name
+        ].map(x => String(x||"").toLowerCase()).join(" | ");
         return hay.includes(q);
       });
     }
 
+    if(filter === "sick") rows = rows.filter(r => r.absence_type === "sick");
+    if(filter === "vacation") rows = rows.filter(r => r.absence_type === "vacation");
+    if(filter === "none") rows = rows.filter(r => !r.absence_type);
+
+    // sorting
+    rows.sort((a,b) => {
+      const da = String(a.work_date || "");
+      const db = String(b.work_date || "");
+      const na = String(a.employee_name || "");
+      const nb = String(b.employee_name || "");
+      const ha = toNumberHours(a.planned_hours);
+      const hb = toNumberHours(b.planned_hours);
+
+      switch(sort){
+        case "date_desc": return db.localeCompare(da);
+        case "name_asc": return na.localeCompare(nb);
+        case "name_desc": return nb.localeCompare(na);
+        case "hours_asc": return ha - hb;
+        case "hours_desc": return hb - ha;
+        case "date_asc":
+        default: return da.localeCompare(db);
+      }
+    });
+
+    // KPIs
+    const totalHours = rows.reduce((s,r)=> s + toNumberHours(r.planned_hours), 0);
+    const cntSick = rows.filter(r=>r.absence_type==="sick").length;
+    const cntVac = rows.filter(r=>r.absence_type==="vacation").length;
+    const cntNone = rows.length - cntSick - cntVac;
+
+    $("kpiRows").textContent = `Zeilen: ${rows.length}`;
+    $("kpiHours").textContent = `Stunden gesamt: ${Number(totalHours.toFixed(2))}`;
+    $("kpiSick").textContent = `krank: ${cntSick}`;
+    $("kpiVac").textContent = `Urlaub: ${cntVac}`;
+    $("kpiNone").textContent = `ohne: ${cntNone}`;
+
     const tb = $("tbody");
-    if(!tb) return;
-
-    tb.innerHTML = out.map((r, idx) => {
-      const key = {
-        employee_id: r.employee_id,
-        work_date: (r.work_date ? String(r.work_date).slice(0,10) : ""),
-        customer_po: r.customer_po || "",
-        internal_po: r.internal_po || "",
-        project_short: r.project_short || ""
-      };
-
-      const hrs = (r.planned_hours ?? "");
+    tb.innerHTML = rows.map(r => {
+      const type = r.absence_type || null;
+      const cls = type === "sick" ? "sick" : (type === "vacation" ? "vacation" : "");
+      const dateIso = String(r.work_date || "").slice(0,10); // API returns ISO with Z
       return `
-        <tr class="${rowClass(r.absence_type)}">
-          <td class="mono">${esc(key.work_date)}</td>
-          <td>${esc(r.employee_name || "")}<div class="muted small mono">${esc(r.employee_id)}</div></td>
+        <tr class="${cls}">
+          <td class="mono">${esc(dateIso)}</td>
+          <td>${esc(r.calendar_week || "")}</td>
+          <td>${esc(r.employee_name || "")}</td>
+          <td class="mono">${esc(r.employee_id || "")}</td>
           <td>${esc(r.customer || "")}</td>
-          <td class="small">
-            <div>cust_po: <span class="mono">${esc(r.customer_po || "")}</span></div>
-            <div>int_po: <span class="mono">${esc(r.internal_po || "")}</span></div>
-          </td>
+          <td>${esc(r.customer_po || "")}</td>
+          <td>${esc(r.internal_po || "")}</td>
           <td>${esc(r.project_short || "")}</td>
-          <td>
-            <input
-              type="number" step="0.25" min="0"
-              data-action="hrs"
-              data-idx="${idx}"
-              value="${esc(hrs)}"
-            />
-            <div class="savehint">z.B. 7.5</div>
-          </td>
-          <td>${pill(r.absence_type)}</td>
-          <td>
-            <div class="cell-actions">
-              <button class="btn primary" data-action="save" data-idx="${idx}">Speichern</button>
-              <span class="small muted" data-action="msg" data-idx="${idx}"></span>
-            </div>
-          </td>
+          <td class="num mono">${esc(r.planned_hours ?? "")}</td>
+          <td>${badge(type)}</td>
         </tr>
       `;
     }).join("");
 
-    const txt = `Zeilen: ${out.length} (gesamt: ${(rows||[]).length})`;
-    if($("statusBottom")) $("statusBottom").textContent = txt;
-    if($("status")) $("status").textContent = txt;
-  }
-
-  function setMsg(idx, text, ok){
-    const el = document.querySelector(`span[data-action="msg"][data-idx="${idx}"]`);
-    if(!el) return;
-    el.className = "small " + (ok===true ? "ok" : ok===false ? "bad" : "muted");
-    el.textContent = text || "";
+    const txt = `Zeilen angezeigt: ${rows.length} (gesamt geladen: ${rawRows.length})`;
+    $("statusTop").textContent = txt;
+    $("statusBottom").textContent = txt;
   }
 
   async function load(){
-    const from = $("from")?.value || "";
-    const to = $("to")?.value || "";
+    const from = ($("from")?.value || "").trim();
+    const to = ($("to")?.value || "").trim();
 
-    if(!from || !to){
-      alert("Bitte von/bis setzen.");
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(from)){
+      alert("Bitte 'Von' setzen (YYYY-MM-DD).");
       return;
     }
-    if(to < from){
-      alert("bis darf nicht vor von liegen.");
-      return;
-    }
-
-    if($("status")) $("status").textContent = "Lade…";
-    const j = await api(`/api/admin/staffplan/with-absences?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-    allRows = j.rows || [];
-    render(allRows);
-  }
-
-  async function saveHours(idx){
-    const r = allRows[idx];
-    if(!r){
-      setMsg(idx, "Row fehlt", false);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(to)){
+      alert("Bitte 'Bis' setzen (YYYY-MM-DD).");
       return;
     }
 
-    const inp = document.querySelector(`input[data-action="hrs"][data-idx="${idx}"]`);
-    const planned_hours_raw = inp ? inp.value : "";
-
-    let planned_hours = null;
-    if(String(planned_hours_raw).trim() !== ""){
-      const n = Number(planned_hours_raw);
-      if(!isFinite(n) || n < 0){
-        setMsg(idx, "Ungültige Stunden", false);
-        return;
-      }
-      planned_hours = n;
-    }
-
-    const payload = {
-      employee_id: r.employee_id,
-      work_date: String(r.work_date).slice(0,10),
-      customer_po: r.customer_po || null,
-      internal_po: r.internal_po || null,
-      project_short: r.project_short || null,
-      planned_hours
-    };
+    $("statusTop").textContent = "Lade…";
 
     try{
-      setMsg(idx, "Speichern…", null);
-      await api("/api/admin/staffplan/planned-hours", {
-        method: "PATCH",
-        body: JSON.stringify(payload)
-      });
-      setMsg(idx, "✅ gespeichert", true);
-
-      // local update
-      r.planned_hours = planned_hours;
-
+      const j = await api(`/api/admin/staffplan/with-absences?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      rawRows = j.rows || [];
+      applyFiltersAndRender();
+      $("statusTop").textContent = "✅ geladen";
     }catch(e){
-      setMsg(idx, "❌ " + e.message, false);
+      $("statusTop").innerHTML = `<span class="bad">❌ ${esc(e.message)}</span>`;
+      $("statusBottom").innerHTML = `<span class="bad">❌ ${esc(e.message)}</span>`;
     }
+  }
+
+  function toCsv(rows){
+    const cols = [
+      "work_date","calendar_week","employee_name","employee_id","customer","customer_po","internal_po","project_short","planned_hours","absence_type"
+    ];
+    const head = cols.join(";");
+    const lines = rows.map(r => cols.map(c => {
+      const v = (c==="work_date" ? String(r.work_date||"").slice(0,10) : (r[c] ?? ""));
+      const s = String(v).replace(/"/g,'""');
+      return `"${s}"`;
+    }).join(";"));
+    return [head, ...lines].join("\n");
+  }
+
+  function downloadCsv(){
+    const csv = toCsv(rawRows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    const from = $("from")?.value || "from";
+    const to = $("to")?.value || "to";
+    a.href = URL.createObjectURL(blob);
+    a.download = `staffplan_${from}_${to}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    URL.revokeObjectURL(a.href);
+    a.remove();
+  }
+
+  function presetLast7(){
+    const t = todayIsoBerlin();
+    $("to").value = t;
+    $("from").value = addDaysIso(t, -6);
+  }
+
+  function presetThisWeek(){
+    const t = todayIsoBerlin();
+    const monday = startOfWeekBerlin(t);
+    $("from").value = monday;
+    $("to").value = addDaysIso(monday, 6);
   }
 
   // Events
-  $("btnLoad")?.addEventListener("click", ()=> load().catch(e => alert("❌ " + e.message)));
-  $("filter")?.addEventListener("change", ()=> render(allRows));
-  $("q")?.addEventListener("input", ()=> render(allRows));
+  $("btnLoad")?.addEventListener("click", load);
+  $("btnLast7")?.addEventListener("click", ()=>{ presetLast7(); load(); });
+  $("btnThisWeek")?.addEventListener("click", ()=>{ presetThisWeek(); load(); });
 
-  document.addEventListener("click", (e) => {
-    const el = e.target;
-    if(!el) return;
-    if(el.matches("button[data-action='save'][data-idx]")){
-      const idx = parseInt(el.dataset.idx, 10);
-      saveHours(idx);
-    }
-  });
+  $("q")?.addEventListener("input", applyFiltersAndRender);
+  $("filter")?.addEventListener("change", applyFiltersAndRender);
+  $("sort")?.addEventListener("change", applyFiltersAndRender);
 
-  // Init defaults
-  const t = todayIso();
-  if($("from")) $("from").value = t;
-  if($("to")) $("to").value = addDaysIso(t, 6);
+  $("btnCsv")?.addEventListener("click", downloadCsv);
 
-  // Initial load
-  load().catch(e => {
-    if($("status")) $("status").innerHTML = `<span class="bad">Fehler: ${esc(e.message)}</span>`;
-  });
+  // Init
+  presetLast7();
+  load();
 </script>
 
 </body>
