@@ -1013,7 +1013,7 @@ async function doImportStaffplan({
 
       const customer = ws[XLSX.utils.encode_cell({ r, c: 0 })]?.v || null;
       const internalPo = ws[XLSX.utils.encode_cell({ r, c: 1 })]?.v || null;
-      const customerPo = ws[XLSX.utils.encode_cell({ r, c: 4 })]?.v || null;
+      const customerPo = ws[XLSX.utils.encode_cell({ r, c: 6 })]?.v || null;
 
       for (const d of dates) {
         const proj = ws[XLSX.utils.encode_cell({ r, c: d.col })]?.v || null;
