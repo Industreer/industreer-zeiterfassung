@@ -246,7 +246,11 @@ async function migrate() {
       planned_hours NUMERIC
     );
   `);
-
+  // employees: weekly_hours nachziehen (falls Tabelle schon existiert)
+  await pool.query(`
+    ALTER TABLE employees
+    ADD COLUMN IF NOT EXISTS weekly_hours NUMERIC DEFAULT 40;
+  `);
   // ===== STAFFPLAN: Duplikate entfernen + NULL-sicheren Unique Index setzen =====
   try {
     // alten Index entfernen (falls vorhanden)
