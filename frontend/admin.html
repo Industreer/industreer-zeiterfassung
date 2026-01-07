@@ -259,23 +259,38 @@
   }
 
   // Admin code header for /api/admin/*
-  async function api(url, options){
-    const r = await fetch(url, {
-      headers: {
-        "Content-Type":"application/json",
-        "x-admin-code":"2012"
-      },
-      ...options
-    });
-    const t = await r.text();
-    let j;
-    try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
-    if(!r.ok || j.ok === false) {
-      const msg = j.error || j.message || t || ("HTTP " + r.status);
-      throw new Error(msg);
-    }
-    return j;
+async function api(url, options = {}){
+  const opts = { ...options };
+
+  // Headers sauber zusammenbauen
+  const headers = new Headers(opts.headers || {});
+
+  // Admin-Code immer mitschicken (für /api/admin/*)
+  headers.set("x-admin-code", "2012");
+
+  // Content-Type NUR setzen, wenn wir JSON senden (nicht bei FormData!)
+  const isFormData = (opts.body instanceof FormData);
+  const isJsonBody = opts.body && !isFormData && typeof opts.body === "string";
+
+  if (isJsonBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
+
+  opts.headers = headers;
+
+  const r = await fetch(url, opts);
+  const t = await r.text();
+
+  let j;
+  try { j = JSON.parse(t); } catch { j = { ok: r.ok, raw: t }; }
+
+  if(!r.ok || j.ok === false) {
+    const msg = j.error || j.message || t || ("HTTP " + r.status);
+    throw new Error(msg);
+  }
+  return j;
+}
+
 
   // EU-Sprachen + Türkisch
   const LANGS = [
@@ -677,7 +692,11 @@ function renderWeeklyHoursInput(employee_id, current){
       const fd = new FormData();
       fd.append("file", f);
 
-      const r = await fetch("/api/logo", { method: "POST", body: fd });
+      const r = await fetch("/api/logo", {
+  method: "POST",
+  headers: { "x-admin-code": "2012" }, // schadet nicht, hilft falls du später absicherst
+  body: fd
+});
       const t = await r.text();
       let j; try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
 
