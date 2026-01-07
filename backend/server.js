@@ -273,9 +273,7 @@ async function migrate() {
   } catch (e) {
     console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);
     // NICHT throwen, sonst startet der Server nicht
-  }
-
-  // normale Indizes
+    // normale Indizes
   await pool.query(`
     CREATE INDEX IF NOT EXISTS staffplan_by_date
     ON staffplan (work_date);
