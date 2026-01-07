@@ -1568,6 +1568,7 @@ app.get("/api/admin/employees", async (req, res) => {
         e.name,
         e.email,
         e.language,
+        e.weekly_hours,
         CASE WHEN e.employee_id LIKE 'AUTO\\_%' THEN 'auto' ELSE 'manual' END AS id_source,
         COALESCE(sp.cnt, 0)::int AS staffplan_rows,
         COALESCE(te.cnt, 0)::int AS time_rows,
