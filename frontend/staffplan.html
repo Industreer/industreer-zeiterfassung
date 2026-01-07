@@ -3,160 +3,233 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Admin – Staffplan (mit Abwesenheiten)</title>
+  <title>Staffplan – Planung + Abwesenheiten</title>
+
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:1400px}
-    h1{margin:0 0 10px}
+    h1{margin:0 0 8px}
     .muted{color:#666}
-    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    input,select,button{padding:10px 12px;font-size:14px}
-    button{cursor:pointer}
-    .card{border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0}
-    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-    .small{font-size:12px}
     .ok{color:#0a7b2e}
     .bad{color:#b10000}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .small{font-size:12px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    input,select,button{padding:10px 12px;font-size:14px}
+    input[type="text"]{min-width:220px}
+    input[type="date"]{padding:8px 10px}
+    button{cursor:pointer}
+    .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin:14px 0}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid #ddd;background:#fafafa}
+    .pill.sick{border-color:#f0b4b4;background:#fff5f5}
+    .pill.vac{border-color:#b4d6f0;background:#f5fbff}
 
     table{border-collapse:collapse;width:100%;margin-top:10px}
     th,td{border-bottom:1px solid #eee;padding:10px;text-align:left;vertical-align:top}
     th{background:#fafafa;position:sticky;top:0;z-index:1}
-    td.num{text-align:right;white-space:nowrap}
-    .badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid #ddd;white-space:nowrap}
-    .badge.sick{background:#ffe9e9;border-color:#f0b4b4}
-    .badge.vacation{background:#fff4db;border-color:#f1d59a}
-    .badge.none{background:#f4f6f8;border-color:#e2e6ea;color:#555}
-    tr.sick td{background:#fff5f5}
-    tr.vacation td{background:#fffaf0}
-    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #ddd;font-size:12px}
-    .pill.kpi{background:#f7f7f7}
-    .right{margin-left:auto}
+    .right{text-align:right}
+    .nowrap{white-space:nowrap}
+    .w-hrs{min-width:120px}
+    .w-actions{min-width:120px}
+    .sticky-wrap{max-height:70vh;overflow:auto;border:1px solid #eee;border-radius:12px}
+
+    /* Modal */
+    .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;padding:16px;z-index:999}
+    .modal{background:#fff;border-radius:14px;max-width:780px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,.2);border:1px solid #eee}
+    .modal header{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #eee}
+    .modal header h3{margin:0;font-size:16px}
+    .modal main{padding:16px}
+    .modal footer{padding:14px 16px;border-top:1px solid #eee;display:flex;justify-content:flex-end;gap:10px}
+    .btn{border:1px solid #ddd;background:#fff;border-radius:10px}
+    .btn.primary{border-color:#111;background:#111;color:#fff}
+    .btn.danger{border-color:#b10000;color:#b10000}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .list{margin-top:10px}
+    .list .item{border:1px solid #eee;border-radius:12px;padding:12px;margin:10px 0}
+    .item .top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
   </style>
 </head>
-<body>
 
-  <h1>Staffplan – Abwesenheiten Overlay</h1>
+<body>
+  <h1>Staffplan – Planung + Abwesenheiten</h1>
   <div class="muted">
-    Rot = krank, Gelb = Urlaub. Datenquelle: <span class="mono">/api/admin/staffplan/with-absences</span>
+    Zeigt geplante Stunden und legt <b>effective_planned_hours</b> automatisch auf 0 bei <b>sick</b>.
+    (Zugriff: Admin-Code <span class="mono">2012</span>)
   </div>
 
   <div class="card">
+    <div class="row">
+      <label class="muted">Admin-Code:</label>
+      <input id="code" type="text" placeholder="2012" style="min-width:120px"/>
+      <button id="btnSaveCode" class="btn">Speichern</button>
+      <span id="codeOut" class="small muted"></span>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:14px 0"/>
+
     <div class="row">
       <label class="muted">Von:</label>
       <input id="from" type="date"/>
       <label class="muted">Bis:</label>
       <input id="to" type="date"/>
 
-      <label class="muted">Suche:</label>
-      <input id="q" type="text" placeholder="Name / ID / Kunde / Projekt / PO" style="min-width:320px"/>
+      <button id="btnToday" class="btn">Heute</button>
+      <button id="btnThisWeek" class="btn">Diese Woche</button>
+      <button id="btnNext7" class="btn">+7 Tage</button>
 
-      <label class="muted">Sort:</label>
-      <select id="sort">
-        <option value="date_asc">Datum ↑</option>
-        <option value="date_desc">Datum ↓</option>
-        <option value="name_asc">Name ↑</option>
-        <option value="name_desc">Name ↓</option>
-        <option value="hours_desc">Stunden ↓</option>
-        <option value="hours_asc">Stunden ↑</option>
-      </select>
-
-      <label class="muted">Filter:</label>
-      <select id="filter">
-        <option value="all">Alle</option>
-        <option value="sick">Nur krank</option>
-        <option value="vacation">Nur Urlaub</option>
-        <option value="none">Nur ohne Abwesenheit</option>
-      </select>
-
-      <button id="btnLoad">Laden</button>
-      <button id="btnThisWeek" title="Mo–So (Berlin)">Diese Woche</button>
-      <button id="btnLast7" title="letzte 7 Tage (Berlin)">Letzte 7 Tage</button>
-
-      <div class="right small muted" id="statusTop"></div>
+      <button id="btnLoad" class="btn primary">Laden</button>
+      <span id="statusTop" class="muted small"></span>
     </div>
 
-    <div class="row small" style="margin-top:10px">
-      <span class="pill kpi" id="kpiRows">Zeilen: 0</span>
-      <span class="pill kpi" id="kpiHours">Stunden gesamt: 0</span>
-      <span class="pill kpi" id="kpiSick">krank: 0</span>
-      <span class="pill kpi" id="kpiVac">Urlaub: 0</span>
-      <span class="pill kpi" id="kpiNone">ohne: 0</span>
-
-      <button id="btnCsv" class="right">CSV Export</button>
+    <div class="row" style="margin-top:10px">
+      <label class="muted">Suche:</label>
+      <input id="q" type="text" placeholder="Name / ID / Projekt / PO ..."/>
+      <label class="muted">Filter:</label>
+      <select id="absenceFilter">
+        <option value="all">Alle</option>
+        <option value="sick">Nur sick</option>
+        <option value="vacation">Nur vacation</option>
+        <option value="none">Nur ohne Abwesenheit</option>
+      </select>
+      <label class="muted">Sort:</label>
+      <select id="sort">
+        <option value="date_name">Datum → Name</option>
+        <option value="name_date">Name → Datum</option>
+      </select>
     </div>
   </div>
 
   <div class="card">
     <div class="muted small">
-      Tipp: Wenn du “Auto-Nullung” (krank = 0h) aktivieren willst, machen wir Phase 1C.2 direkt als nächstes.
+      Tipp: <b>planned_hours</b> ändern → Feld verlassen (blur) speichert automatisch.
+      „Abwesenheiten“ öffnet den Editor pro Mitarbeiter.
     </div>
 
-    <div style="overflow:auto; max-height:70vh; border:1px solid #eee; border-radius:10px; margin-top:10px">
+    <div class="sticky-wrap" style="margin-top:10px">
       <table>
         <thead>
           <tr>
-            <th>Datum</th>
-            <th>KW</th>
-            <th>Mitarbeiter</th>
+            <th class="nowrap">Datum</th>
             <th>ID</th>
-            <th>Kunde</th>
+            <th>Name</th>
             <th>Customer PO</th>
             <th>Internal PO</th>
             <th>Projekt</th>
-            <th class="num">Stunden</th>
-            <th>Status</th>
+            <th class="right w-hrs">planned_hours</th>
+            <th class="right w-hrs">effective</th>
+            <th>Abwesenheit</th>
+            <th class="w-actions">Aktionen</th>
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>
 
-    <div class="small muted" id="statusBottom" style="margin-top:10px"></div>
+    <div id="statusBottom" class="muted small" style="margin-top:10px"></div>
+  </div>
+
+  <!-- Absences Modal -->
+  <div id="absBackdrop" class="backdrop">
+    <div class="modal" role="dialog" aria-modal="true">
+      <header>
+        <h3 id="absTitle">Abwesenheiten</h3>
+        <button id="btnAbsCloseX" class="btn">✕</button>
+      </header>
+      <main>
+        <div class="grid">
+          <div>
+            <div class="muted small" style="margin-bottom:6px">Typ</div>
+            <select id="absType" style="width:100%">
+              <option value="sick">sick (Krank)</option>
+              <option value="vacation">vacation (Urlaub)</option>
+            </select>
+          </div>
+          <div>
+            <div class="muted small" style="margin-bottom:6px">Notiz</div>
+            <input id="absNote" type="text" placeholder="z.B. AU, Urlaub, ..." style="width:100%"/>
+          </div>
+          <div>
+            <div class="muted small" style="margin-bottom:6px">Von</div>
+            <input id="absFrom" type="date" style="width:100%"/>
+          </div>
+          <div>
+            <div class="muted small" style="margin-bottom:6px">Bis</div>
+            <input id="absTo" type="date" style="width:100%"/>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:12px">
+          <button id="btnAbsCreate" class="btn primary">Speichern</button>
+          <button id="btnAbsRefresh" class="btn">Neu laden</button>
+          <span id="absOut" class="small muted"></span>
+        </div>
+
+        <div class="list">
+          <div class="muted small" style="margin-top:14px">Aktive Abwesenheiten</div>
+          <div id="absList"></div>
+        </div>
+      </main>
+      <footer>
+        <button id="btnAbsClose" class="btn">Schließen</button>
+      </footer>
+    </div>
   </div>
 
 <script>
   const $ = (id)=>document.getElementById(id);
 
-  function esc(s){
-    return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  }
-
-  // Berlin ISO date
+  // ---------- Dates (Berlin) ----------
   function todayIsoBerlin(){
     const fmt = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Europe/Berlin",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
+      year: "numeric", month:"2-digit", day:"2-digit"
     });
     return fmt.format(new Date()); // YYYY-MM-DD
   }
-
-  function addDaysIso(iso, days){
+  function addDays(iso, days){
     const d = new Date(iso + "T00:00:00.000Z");
     d.setUTCDate(d.getUTCDate() + days);
     return d.toISOString().slice(0,10);
   }
-
-  function startOfWeekBerlin(iso){
-    // Monday as start, computed in UTC from iso
+  function weekRangeBerlin(iso){
+    // iso -> compute Monday..Sunday in UTC based on date value
     const d = new Date(iso + "T00:00:00.000Z");
-    const day = d.getUTCDay(); // 0..6, 0=Sun
-    const diff = (day === 0 ? -6 : 1 - day); // move to Monday
-    d.setUTCDate(d.getUTCDate() + diff);
-    return d.toISOString().slice(0,10);
+    const day = (d.getUTCDay() + 6) % 7; // Mon=0 ... Sun=6
+    const mon = new Date(d);
+    mon.setUTCDate(d.getUTCDate() - day);
+    const sun = new Date(mon);
+    sun.setUTCDate(mon.getUTCDate() + 6);
+    return [mon.toISOString().slice(0,10), sun.toISOString().slice(0,10)];
   }
 
+  // ---------- Escape ----------
+  function esc(s){
+    return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  // ---------- Admin Code handling ----------
+  function getAdminCode(){
+    return (sessionStorage.getItem("admin_code") || $("code")?.value || "").trim();
+  }
+  function setAdminCode(v){
+    sessionStorage.setItem("admin_code", String(v||"").trim());
+  }
+
+  // ---------- API ----------
   async function api(url, options){
-    const r = await fetch(url, {
-      headers: {
-        "Content-Type":"application/json",
-        "x-admin-code":"2012"
-      },
-      ...options
-    });
+    const code = getAdminCode();
+    const headers = options?.headers ? {...options.headers} : {};
+    // JSON only by default
+    if (!headers["Content-Type"] && !(options?.body instanceof FormData)) {
+      headers["Content-Type"] = "application/json";
+    }
+    if (code) headers["x-admin-code"] = code;
+
+    const r = await fetch(url, { ...options, headers });
     const t = await r.text();
     let j;
     try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
+
     if(!r.ok || j.ok === false) {
       const msg = j.error || j.message || t || ("HTTP " + r.status);
       throw new Error(msg);
@@ -164,178 +237,376 @@
     return j;
   }
 
-  function badge(type){
-    if(type === "sick") return `<span class="badge sick">krank</span>`;
-    if(type === "vacation") return `<span class="badge vacation">Urlaub</span>`;
-    return `<span class="badge none">—</span>`;
-  }
+  // ---------- State ----------
+  let allRows = [];
+  let absEmployeeId = null;
+  let absEmployeeName = null;
 
-  function toNumberHours(v){
-    if(v == null) return 0;
-    const n = Number(String(v).replace(",", "."));
-    return Number.isFinite(n) ? n : 0;
-  }
+  // ---------- Render ----------
+  function normalizeStr(s){ return String(s||"").trim().toLowerCase(); }
 
-  let rawRows = [];
+  function renderRows(rows){
+    const q = normalizeStr($("q")?.value);
+    const aFilter = $("absenceFilter")?.value || "all";
+    const sort = $("sort")?.value || "date_name";
 
-  function applyFiltersAndRender(){
-    const q = ($("q")?.value || "").trim().toLowerCase();
-    const filter = $("filter")?.value || "all";
-    const sort = $("sort")?.value || "date_asc";
-
-    let rows = rawRows.slice();
+    let out = (rows || []).slice();
 
     if(q){
-      rows = rows.filter(r => {
-        const hay = [
-          r.employee_name, r.employee_id, r.customer, r.customer_po, r.internal_po, r.project_short, r.requester_name
-        ].map(x => String(x||"").toLowerCase()).join(" | ");
-        return hay.includes(q);
+      out = out.filter(r => {
+        const blob = [
+          r.employee_id, r.employee_name, r.customer_po, r.internal_po, r.project_short, r.customer, r.requester_name
+        ].map(x=>String(x||"")).join(" ").toLowerCase();
+        return blob.includes(q);
       });
     }
 
-    if(filter === "sick") rows = rows.filter(r => r.absence_type === "sick");
-    if(filter === "vacation") rows = rows.filter(r => r.absence_type === "vacation");
-    if(filter === "none") rows = rows.filter(r => !r.absence_type);
+    if(aFilter === "sick") out = out.filter(r => r.absence_type === "sick");
+    if(aFilter === "vacation") out = out.filter(r => r.absence_type === "vacation");
+    if(aFilter === "none") out = out.filter(r => !r.absence_type);
 
-    // sorting
-    rows.sort((a,b) => {
-      const da = String(a.work_date || "");
-      const db = String(b.work_date || "");
-      const na = String(a.employee_name || "");
-      const nb = String(b.employee_name || "");
-      const ha = toNumberHours(a.planned_hours);
-      const hb = toNumberHours(b.planned_hours);
-
-      switch(sort){
-        case "date_desc": return db.localeCompare(da);
-        case "name_asc": return na.localeCompare(nb);
-        case "name_desc": return nb.localeCompare(na);
-        case "hours_asc": return ha - hb;
-        case "hours_desc": return hb - ha;
-        case "date_asc":
-        default: return da.localeCompare(db);
+    out.sort((a,b)=>{
+      const da = String(a.work_date||"");
+      const db = String(b.work_date||"");
+      const na = String(a.employee_name||"");
+      const nb = String(b.employee_name||"");
+      if(sort === "name_date"){
+        if(na !== nb) return na.localeCompare(nb);
+        return da.localeCompare(db);
       }
+      // date_name
+      if(da !== db) return da.localeCompare(db);
+      return na.localeCompare(nb);
     });
 
-    // KPIs
-    const totalHours = rows.reduce((s,r)=> s + toNumberHours(r.planned_hours), 0);
-    const cntSick = rows.filter(r=>r.absence_type==="sick").length;
-    const cntVac = rows.filter(r=>r.absence_type==="vacation").length;
-    const cntNone = rows.length - cntSick - cntVac;
-
-    $("kpiRows").textContent = `Zeilen: ${rows.length}`;
-    $("kpiHours").textContent = `Stunden gesamt: ${Number(totalHours.toFixed(2))}`;
-    $("kpiSick").textContent = `krank: ${cntSick}`;
-    $("kpiVac").textContent = `Urlaub: ${cntVac}`;
-    $("kpiNone").textContent = `ohne: ${cntNone}`;
-
     const tb = $("tbody");
-    tb.innerHTML = rows.map(r => {
-      const type = r.absence_type || null;
-      const cls = type === "sick" ? "sick" : (type === "vacation" ? "vacation" : "");
-      const dateIso = String(r.work_date || "").slice(0,10); // API returns ISO with Z
+    if(!tb) return;
+
+    tb.innerHTML = out.map(r => {
+      const isoDate = String(r.work_date||"").slice(0,10);
+      const absence = r.absence_type;
+      const pill = absence
+        ? `<span class="pill ${absence==='sick'?'sick':'vac'}">${absence}</span>`
+        : `<span class="muted small">—</span>`;
+
+      const key = {
+        employee_id: r.employee_id,
+        work_date: isoDate,
+        customer_po: r.customer_po ?? null,
+        internal_po: r.internal_po ?? null,
+        project_short: r.project_short ?? null
+      };
+
+      const planned = (r.planned_hours ?? "");
+      const effective = (r.effective_planned_hours ?? "");
+
       return `
-        <tr class="${cls}">
-          <td class="mono">${esc(dateIso)}</td>
-          <td>${esc(r.calendar_week || "")}</td>
-          <td>${esc(r.employee_name || "")}</td>
-          <td class="mono">${esc(r.employee_id || "")}</td>
-          <td>${esc(r.customer || "")}</td>
-          <td>${esc(r.customer_po || "")}</td>
-          <td>${esc(r.internal_po || "")}</td>
-          <td>${esc(r.project_short || "")}</td>
-          <td class="num mono">${esc(r.planned_hours ?? "")}</td>
-          <td>${badge(type)}</td>
+        <tr>
+          <td class="nowrap">${esc(isoDate)}</td>
+          <td class="mono">${esc(r.employee_id)}</td>
+          <td>${esc(r.employee_name)}</td>
+          <td>${esc(r.customer_po)}</td>
+          <td>${esc(r.internal_po)}</td>
+          <td>${esc(r.project_short)}</td>
+          <td class="right">
+            <input
+              class="w-hrs"
+              style="text-align:right"
+              type="number" step="0.25" min="0"
+              data-action="edit-planned"
+              data-key='${esc(JSON.stringify(key))}'
+              value="${esc(planned)}"
+              placeholder="—"
+            />
+          </td>
+          <td class="right mono">${esc(effective)}</td>
+          <td>${pill}</td>
+          <td>
+            <button
+              class="btn"
+              data-action="absences"
+              data-employee-id="${esc(r.employee_id)}"
+              data-employee-name="${esc(r.employee_name)}"
+            >Abwesenheiten</button>
+          </td>
         </tr>
       `;
     }).join("");
 
-    const txt = `Zeilen angezeigt: ${rows.length} (gesamt geladen: ${rawRows.length})`;
-    $("statusTop").textContent = txt;
-    $("statusBottom").textContent = txt;
+    const txt = `Zeilen: ${out.length} (gesamt geladen: ${(rows||[]).length})`;
+    if($("statusTop")) $("statusTop").textContent = txt;
+    if($("statusBottom")) $("statusBottom").textContent = txt;
   }
 
-  async function load(){
-    const from = ($("from")?.value || "").trim();
-    const to = ($("to")?.value || "").trim();
+  // ---------- Load staffplan overlay ----------
+  async function loadStaffplan(){
+    const st = $("statusTop");
+    if(st){ st.className = "muted small"; st.textContent = "Lade…"; }
 
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(from)){
-      alert("Bitte 'Von' setzen (YYYY-MM-DD).");
-      return;
+    const from = $("from")?.value || "";
+    const to = $("to")?.value || "";
+
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(from)) throw new Error("Bitte gültiges 'Von' Datum setzen.");
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error("Bitte gültiges 'Bis' Datum setzen.");
+    if(to < from) throw new Error("'Bis' darf nicht vor 'Von' liegen.");
+
+    const j = await api(`/api/admin/staffplan/with-absences?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    allRows = j.rows || [];
+    renderRows(allRows);
+  }
+
+  // ---------- planned_hours update ----------
+  async function savePlannedHours(inputEl){
+    const rawKey = inputEl?.dataset?.key;
+    if(!rawKey) return;
+
+    let key;
+    try { key = JSON.parse(rawKey); } catch { return; }
+
+    const v = String(inputEl.value ?? "").trim();
+    let planned_hours = null;
+    if(v !== ""){
+      const n = Number(v);
+      if(!isFinite(n) || n < 0){
+        inputEl.style.outline = "2px solid #b10000";
+        setTimeout(()=> inputEl.style.outline = "", 1200);
+        alert("❌ planned_hours ungültig");
+        return;
+      }
+      planned_hours = n;
     }
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(to)){
-      alert("Bitte 'Bis' setzen (YYYY-MM-DD).");
-      return;
-    }
 
-    $("statusTop").textContent = "Lade…";
-
+    const prev = inputEl.style.outline;
+    inputEl.disabled = true;
     try{
-      const j = await api(`/api/admin/staffplan/with-absences?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-      rawRows = j.rows || [];
-      applyFiltersAndRender();
-      $("statusTop").textContent = "✅ geladen";
+      await api("/api/admin/staffplan/planned-hours", {
+        method: "PATCH",
+        body: JSON.stringify({ ...key, planned_hours })
+      });
+      inputEl.style.outline = "2px solid #0a7b2e";
+      setTimeout(()=> inputEl.style.outline = prev, 700);
+
+      // reload to recompute effective_planned_hours
+      await loadStaffplan();
     }catch(e){
-      $("statusTop").innerHTML = `<span class="bad">❌ ${esc(e.message)}</span>`;
-      $("statusBottom").innerHTML = `<span class="bad">❌ ${esc(e.message)}</span>`;
+      inputEl.style.outline = "2px solid #b10000";
+      setTimeout(()=> inputEl.style.outline = prev, 1200);
+      alert("❌ Konnte nicht speichern: " + e.message);
+    }finally{
+      inputEl.disabled = false;
     }
   }
 
-  function toCsv(rows){
-    const cols = [
-      "work_date","calendar_week","employee_name","employee_id","customer","customer_po","internal_po","project_short","planned_hours","absence_type"
-    ];
-    const head = cols.join(";");
-    const lines = rows.map(r => cols.map(c => {
-      const v = (c==="work_date" ? String(r.work_date||"").slice(0,10) : (r[c] ?? ""));
-      const s = String(v).replace(/"/g,'""');
-      return `"${s}"`;
-    }).join(";"));
-    return [head, ...lines].join("\n");
+  // ---------- Absences modal ----------
+  function setAbsOutput(msg, ok){
+    const out = $("absOut");
+    if(!out) return;
+    if(ok === true){ out.className = "small ok"; }
+    else if(ok === false){ out.className = "small bad"; }
+    else { out.className = "small muted"; }
+    out.textContent = msg || "";
   }
 
-  function downloadCsv(){
-    const csv = toCsv(rawRows);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const a = document.createElement("a");
-    const from = $("from")?.value || "from";
-    const to = $("to")?.value || "to";
-    a.href = URL.createObjectURL(blob);
-    a.download = `staffplan_${from}_${to}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    URL.revokeObjectURL(a.href);
-    a.remove();
-  }
+  function openAbsences(employee_id, employee_name){
+    absEmployeeId = employee_id;
+    absEmployeeName = employee_name;
 
-  function presetLast7(){
+    $("absTitle").innerHTML = `Abwesenheiten – <b>${esc(employee_name)}</b> <span class="mono">${esc(employee_id)}</span>`;
     const t = todayIsoBerlin();
+    if($("absFrom")) $("absFrom").value = t;
+    if($("absTo")) $("absTo").value = t;
+    if($("absNote")) $("absNote").value = "";
+    if($("absType")) $("absType").value = "sick";
+
+    $("absBackdrop").style.display = "flex";
+    refreshAbsences().catch(e=> setAbsOutput("❌ " + e.message, false));
+  }
+
+  function closeAbsences(){
+    $("absBackdrop").style.display = "none";
+    absEmployeeId = null;
+    absEmployeeName = null;
+    setAbsOutput("", null);
+    if($("absList")) $("absList").innerHTML = "";
+  }
+
+  function renderAbsList(rows){
+    const wrap = $("absList");
+    if(!wrap) return;
+
+    if(!rows.length){
+      wrap.innerHTML = `<div class="muted small" style="margin-top:8px">Keine aktiven Abwesenheiten.</div>`;
+      return;
+    }
+
+    wrap.innerHTML = rows.map(r=>{
+      const from = String(r.date_from||"").slice(0,10);
+      const to = String(r.date_to||"").slice(0,10);
+      const pill = r.type === "sick"
+        ? `<span class="pill sick">sick</span>`
+        : `<span class="pill vac">vacation</span>`;
+
+      return `
+        <div class="item">
+          <div class="top">
+            <div>
+              ${pill}
+              <div class="mono small" style="margin-top:6px">${esc(from)} → ${esc(to)}</div>
+              <div class="muted small" style="margin-top:4px">${esc(r.note || "")}</div>
+            </div>
+            <div class="row" style="justify-content:flex-end">
+              <button class="btn" data-action="abs-cancel" data-id="${esc(r.id)}">Cancel</button>
+              <button class="btn danger" data-action="abs-del" data-id="${esc(r.id)}">Delete</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  async function refreshAbsences(){
+    if(!absEmployeeId) return;
+    setAbsOutput("Lade…", null);
+    const j = await api(`/api/admin/absences?employee_id=${encodeURIComponent(absEmployeeId)}&status=active`);
+    renderAbsList(j.rows || []);
+    setAbsOutput("", null);
+  }
+
+  async function createAbsence(){
+    if(!absEmployeeId) return;
+    const type = $("absType")?.value || "sick";
+    const date_from = $("absFrom")?.value || "";
+    const date_to = $("absTo")?.value || "";
+    const note = ($("absNote")?.value || "").trim();
+
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date_from) || !/^\d{4}-\d{2}-\d{2}$/.test(date_to)){
+      setAbsOutput("Bitte von/bis korrekt setzen.", false);
+      return;
+    }
+    if(date_to < date_from){
+      setAbsOutput("'Bis' darf nicht vor 'Von' liegen.", false);
+      return;
+    }
+
+    setAbsOutput("Speichern…", null);
+    await api("/api/admin/absences", {
+      method: "POST",
+      body: JSON.stringify({ employee_id: absEmployeeId, type, date_from, date_to, note })
+    });
+
+    setAbsOutput("✅ Gespeichert", true);
+    await refreshAbsences();
+    await loadStaffplan(); // overlay neu
+  }
+
+  async function cancelAbsence(id){
+    setAbsOutput("Cancel…", null);
+    await api(`/api/admin/absences/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "cancelled" })
+    });
+    await refreshAbsences();
+    await loadStaffplan();
+    setAbsOutput("✅ Gecancelt", true);
+  }
+
+  async function deleteAbsence(id){
+    if(!confirm("Wirklich löschen?")) return;
+    setAbsOutput("Löschen…", null);
+    await api(`/api/admin/absences/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await refreshAbsences();
+    await loadStaffplan();
+    setAbsOutput("✅ Gelöscht", true);
+  }
+
+  // ---------- Events ----------
+  $("btnSaveCode")?.addEventListener("click", ()=>{
+    const v = ($("code")?.value || "").trim();
+    setAdminCode(v);
+    const out = $("codeOut");
+    if(out){
+      out.className = v ? "small ok" : "small bad";
+      out.textContent = v ? "✅ gespeichert (session)" : "❌ leer";
+    }
+  });
+
+  $("btnToday")?.addEventListener("click", ()=>{
+    const t = todayIsoBerlin();
+    $("from").value = t; $("to").value = t;
+  });
+  $("btnThisWeek")?.addEventListener("click", ()=>{
+    const [a,b] = weekRangeBerlin(todayIsoBerlin());
+    $("from").value = a; $("to").value = b;
+  });
+  $("btnNext7")?.addEventListener("click", ()=>{
+    const a = todayIsoBerlin();
+    $("from").value = a;
+    $("to").value = addDays(a, 7);
+  });
+
+  $("btnLoad")?.addEventListener("click", ()=>{
+    loadStaffplan().catch(e=>{
+      if($("statusTop")){
+        $("statusTop").className = "bad small";
+        $("statusTop").textContent = "❌ " + e.message;
+      }
+    });
+  });
+
+  $("q")?.addEventListener("input", ()=> renderRows(allRows));
+  $("absenceFilter")?.addEventListener("change", ()=> renderRows(allRows));
+  $("sort")?.addEventListener("change", ()=> renderRows(allRows));
+
+  document.addEventListener("blur", (e)=>{
+    const el = e.target;
+    if(!el) return;
+    if(el.matches("input[data-action='edit-planned'][data-key]")){
+      savePlannedHours(el);
+    }
+  }, true);
+
+  document.addEventListener("click", (e)=>{
+    const el = e.target;
+    if(!el) return;
+
+    if(el.matches("button[data-action='absences'][data-employee-id]")){
+      openAbsences(el.dataset.employeeId, el.dataset.employeeName || el.dataset.employeeId);
+      return;
+    }
+    if(el.matches("button[data-action='abs-cancel'][data-id]")){
+      cancelAbsence(el.dataset.id).catch(err=> setAbsOutput("❌ " + err.message, false));
+      return;
+    }
+    if(el.matches("button[data-action='abs-del'][data-id]")){
+      deleteAbsence(el.dataset.id).catch(err=> setAbsOutput("❌ " + err.message, false));
+      return;
+    }
+  });
+
+  $("btnAbsClose")?.addEventListener("click", closeAbsences);
+  $("btnAbsCloseX")?.addEventListener("click", closeAbsences);
+  $("btnAbsRefresh")?.addEventListener("click", ()=> refreshAbsences().catch(e=>setAbsOutput("❌ "+e.message,false)));
+  $("btnAbsCreate")?.addEventListener("click", ()=> createAbsence().catch(e=>setAbsOutput("❌ "+e.message,false)));
+
+  // click outside modal closes
+  $("absBackdrop")?.addEventListener("click", (e)=>{
+    if(e.target === $("absBackdrop")) closeAbsences();
+  });
+
+  // ---------- Init ----------
+  (function init(){
+    // load code from session
+    const saved = sessionStorage.getItem("admin_code") || "";
+    if($("code")) $("code").value = saved;
+
+    // default date range: today
+    const t = todayIsoBerlin();
+    $("from").value = t;
     $("to").value = t;
-    $("from").value = addDaysIso(t, -6);
-  }
 
-  function presetThisWeek(){
-    const t = todayIsoBerlin();
-    const monday = startOfWeekBerlin(t);
-    $("from").value = monday;
-    $("to").value = addDaysIso(monday, 6);
-  }
-
-  // Events
-  $("btnLoad")?.addEventListener("click", load);
-  $("btnLast7")?.addEventListener("click", ()=>{ presetLast7(); load(); });
-  $("btnThisWeek")?.addEventListener("click", ()=>{ presetThisWeek(); load(); });
-
-  $("q")?.addEventListener("input", applyFiltersAndRender);
-  $("filter")?.addEventListener("change", applyFiltersAndRender);
-  $("sort")?.addEventListener("change", applyFiltersAndRender);
-
-  $("btnCsv")?.addEventListener("click", downloadCsv);
-
-  // Init
-  presetLast7();
-  load();
+    // optional initial load
+    // loadStaffplan().catch(()=>{});
+  })();
 </script>
 
 </body>
