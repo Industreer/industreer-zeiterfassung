@@ -1407,7 +1407,7 @@ app.get("/api/admin/staffplan/with-absences", async (req, res) => {
   `,
   [from, to]
 );
-
+});
 
 // ======================================================
 // ADMIN: STAFFPLAN EDIT (planned_hours)
