@@ -1378,36 +1378,43 @@ app.get("/api/admin/staffplan/with-absences", async (req, res) => {
       return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
     }
 
-  const r = await pool.query(
-  `
-  WITH abs AS (
-    SELECT
-      ea.employee_id,
-      ea.type,
-      ea.date_from,
-      ea.date_to
-    FROM employee_absences ea
-    WHERE ea.status = 'active'
-      AND ea.date_to >= $1::date
-      AND ea.date_from <= $2::date
-  )
-  SELECT
-    s.*,
-    a.type AS absence_type,
-    CASE
-      WHEN a.type = 'sick' THEN 0
-      ELSE COALESCE(s.planned_hours, 0)
-    END AS effective_planned_hours
-  FROM staffplan s
-  LEFT JOIN abs a
-    ON a.employee_id = s.employee_id
-   AND s.work_date BETWEEN a.date_from AND a.date_to
-  WHERE s.work_date BETWEEN $1::date AND $2::date
-  ORDER BY s.work_date ASC, s.employee_name ASC, s.id ASC
-  `,
-  [from, to]
+    const r = await pool.query(
+      `
+      WITH abs AS (
+        SELECT
+          ea.employee_id,
+          ea.type,
+          ea.date_from,
+          ea.date_to
+        FROM employee_absences ea
+        WHERE ea.status = 'active'
+          AND ea.date_to >= $1::date
+          AND ea.date_from <= $2::date
+      )
+      SELECT
+        s.*,
+        a.type AS absence_type,
+        CASE
+          WHEN a.type = 'sick' THEN 0
+          ELSE COALESCE(s.planned_hours, 0)
+        END AS effective_planned_hours
+      FROM staffplan s
+      LEFT JOIN abs a
+        ON a.employee_id = s.employee_id
+       AND s.work_date BETWEEN a.date_from AND a.date_to
+      WHERE s.work_date BETWEEN $1::date AND $2::date
+      ORDER BY s.work_date ASC, s.employee_name ASC, s.id ASC
+      `,
+      [from, to]
+    );
 
-      });
+    return res.json({ ok: true, from, to, rows: r.rows });
+  } catch (e) {
+    console.error("STAFFPLAN WITH ABSENCES ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
   
 // ======================================================
 // ADMIN: STAFFPLAN EDIT (planned_hours)
