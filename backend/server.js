@@ -1378,42 +1378,36 @@ app.get("/api/admin/staffplan/with-absences", async (req, res) => {
       return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
     }
 
-    const r = await pool.query(
-      `
-      SELECT
-        sp.*,
-        CASE
-          WHEN EXISTS (
-            SELECT 1
-            FROM employee_absences ea
-            WHERE ea.employee_id = sp.employee_id
-              AND ea.status='active'
-              AND ea.type='sick'
-              AND sp.work_date BETWEEN ea.date_from AND ea.date_to
-          ) THEN 'sick'
-          WHEN EXISTS (
-            SELECT 1
-            FROM employee_absences ea
-            WHERE ea.employee_id = sp.employee_id
-              AND ea.status='active'
-              AND ea.type='vacation'
-              AND sp.work_date BETWEEN ea.date_from AND ea.date_to
-          ) THEN 'vacation'
-          ELSE NULL
-        END AS absence_type
-      FROM staffplan sp
-      WHERE sp.work_date BETWEEN $1::date AND $2::date
-      ORDER BY sp.work_date ASC, sp.employee_name ASC, sp.customer_po ASC, sp.internal_po ASC
-      `,
-      [from, to]
-    );
+  const r = await pool.query(
+  `
+  WITH abs AS (
+    SELECT
+      ea.employee_id,
+      ea.type,
+      ea.date_from,
+      ea.date_to
+    FROM employee_absences ea
+    WHERE ea.status = 'active'
+      AND ea.date_to >= $1::date
+      AND ea.date_from <= $2::date
+  )
+  SELECT
+    s.*,
+    a.type AS absence_type,
+    CASE
+      WHEN a.type = 'sick' THEN 0
+      ELSE COALESCE(s.planned_hours, 0)
+    END AS effective_planned_hours
+  FROM staffplan s
+  LEFT JOIN abs a
+    ON a.employee_id = s.employee_id
+   AND s.work_date BETWEEN a.date_from AND a.date_to
+  WHERE s.work_date BETWEEN $1::date AND $2::date
+  ORDER BY s.work_date ASC, s.employee_name ASC, s.id ASC
+  `,
+  [from, to]
+);
 
-    res.json({ ok: true, from, to, rows: r.rows });
-  } catch (e) {
-    console.error("STAFFPLAN WITH ABSENCES ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
 
 // ======================================================
 // ADMIN: STAFFPLAN EDIT (planned_hours)
