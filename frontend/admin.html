@@ -221,6 +221,7 @@
         <th>Name</th>
         <th>Email</th>
         <th>Sprache</th>
+<th>Wochenstunden</th>
         <th>Quelle</th>
         <th>Staffplan</th>
         <th>Zeiten</th>
@@ -313,7 +314,22 @@
       />
     `;
   }
-
+function renderWeeklyHoursInput(employee_id, current){
+  const v = (current === null || current === undefined) ? "" : String(current);
+  return `
+    <input
+      type="number"
+      step="0.25"
+      min="0"
+      style="width:110px"
+      data-field="weekly_hours"
+      data-employee-id="${esc(employee_id)}"
+      value="${esc(v)}"
+      placeholder="40"
+      title="Vertragliche Wochenstunden (z.B. 40 oder 37.5)"
+    />
+  `;
+}
   function statusPill(status){
     if(status === "sick") return `<span class="pill sick">Krank (heute)</span>`;
     if(status === "vacation") return `<span class="pill vac">Urlaub (heute)</span>`;
@@ -349,6 +365,7 @@
         <td>${esc(r.name)}</td>
         <td>${renderEmailInput(r.employee_id, r.email)}</td>
         <td>${renderLanguageSelect(r.employee_id, r.language)}</td>
+        <td>${renderWeeklyHoursInput(r.employee_id, r.weekly_hours)}</td>        
         <td>
           <span class="tag ${r.id_source === 'auto' ? 'auto':'manual'}">
             ${r.id_source === 'auto' ? 'AUTO' : 'manuell'}
@@ -591,7 +608,14 @@
     if(!employee_id || !field) return;
 
     const payload = { employee_id };
-    payload[field] = (field === "language") ? el.value : el.value.trim();
+    if(field === "language"){
+  payload[field] = el.value;
+} else if(field === "weekly_hours"){
+  const v = String(el.value || "").trim();
+  payload[field] = v === "" ? null : Number(v);
+} else {
+  payload[field] = el.value.trim();
+}
 
     const prevOutline = el.style.outline;
     el.disabled = true;
@@ -623,7 +647,7 @@
 
   document.addEventListener("blur", (e) => {
     const el = e.target;
-    if(!el || !el.matches("input[data-field='email'][data-employee-id]")) return;
+    if(!el || !el.matches("input[data-field='email'][data-employee-id], input[data-field='weekly_hours'][data-employee-id]")) [data-employee-id]")) return;
     saveField(el);
   }, true);
 
