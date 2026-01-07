@@ -1406,9 +1406,9 @@ app.get("/api/admin/staffplan/with-absences", async (req, res) => {
   ORDER BY s.work_date ASC, s.employee_name ASC, s.id ASC
   `,
   [from, to]
-);
-});
 
+      });
+  
 // ======================================================
 // ADMIN: STAFFPLAN EDIT (planned_hours)
 // PATCH /api/admin/staffplan/planned-hours
