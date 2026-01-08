@@ -1973,13 +1973,19 @@ app.get("/api/admin/clamp-preview", async (req, res) => {
     const params = [from, to];
     where.push(`work_date BETWEEN $1::date AND $2::date`);
 
+    // nur echte Einträge
+    where.push(`start_ts IS NOT NULL`);
+    where.push(`end_ts IS NOT NULL`);
+
     if (employee_id) {
       params.push(employee_id);
       where.push(`employee_id = $${params.length}`);
     }
+
+    // WICHTIG: filtert auf mapped_customer_po (aus staffplan), nicht te.customer_po
     if (customer_po) {
       params.push(customer_po);
-      where.push(`customer_po = $${params.length}`);
+      where.push(`mapped_customer_po = $${params.length}`);
     }
 
     const r = await pool.query(
@@ -1987,7 +1993,7 @@ app.get("/api/admin/clamp-preview", async (req, res) => {
       SELECT
         employee_id,
         work_date,
-        customer_po,
+        mapped_customer_po,
         start_ts,
         allowed_start_ts,
         effective_start_ts,
