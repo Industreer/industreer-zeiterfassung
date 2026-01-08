@@ -1451,6 +1451,9 @@ app.get("/api/admin/staffplan/with-absences", async (req, res) => {
       ) a ON TRUE
 
       WHERE s.work_date BETWEEN $1::date AND $2::date
+      AND NOT (
+  a.absence_type = 'vacation'
+)
       ORDER BY s.work_date ASC, s.employee_name ASC, s.id ASC
       `,
       [from, to]
