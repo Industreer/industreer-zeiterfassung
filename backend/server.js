@@ -1844,6 +1844,113 @@ app.get("/api/admin/po-work-rules", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// POST /api/admin/po-work-rules
+// Body: { customer_po, weekday (1..7), start_time ("07:00"), grace_minutes? }
+app.post("/api/admin/po-work-rules", async (req, res) => {
+  try {
+    const customer_po = String(req.body?.customer_po || "").trim();
+    const weekday = Number(req.body?.weekday);
+    const start_time = String(req.body?.start_time || "").trim();
+    const grace_minutes =
+      req.body?.grace_minutes != null && String(req.body.grace_minutes).trim() !== ""
+        ? Number(req.body.grace_minutes)
+        : 0;
+
+    if (!customer_po) return res.status(400).json({ ok: false, error: "customer_po fehlt" });
+    if (!Number.isFinite(weekday) || weekday < 1 || weekday > 7) {
+      return res.status(400).json({ ok: false, error: "weekday muss 1..7 sein (ISO: 1=Mo..7=So)" });
+    }
+    if (!/^\d{2}:\d{2}(:\d{2})?$/.test(start_time)) {
+      return res.status(400).json({ ok: false, error: "start_time ungültig (HH:MM oder HH:MM:SS)" });
+    }
+    if (!Number.isFinite(grace_minutes) || grace_minutes < 0 || grace_minutes > 120) {
+      return res.status(400).json({ ok: false, error: "grace_minutes ungültig (0..120)" });
+    }
+
+    const r = await pool.query(
+      `
+      INSERT INTO po_work_rules (customer_po, weekday, start_time, grace_minutes, created_at, updated_at)
+      VALUES ($1, $2, $3::time, $4, NOW(), NOW())
+      RETURNING id
+      `,
+      [customer_po, weekday, start_time, grace_minutes]
+    );
+
+    res.json({ ok: true, id: r.rows[0].id });
+  } catch (e) {
+    if (String(e.code) === "23505") {
+      return res.status(409).json({ ok: false, error: "Regel existiert bereits für customer_po + weekday" });
+    }
+    console.error("PO WORK RULES POST ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// PATCH /api/admin/po-work-rules/:id
+app.patch("/api/admin/po-work-rules/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ ok: false, error: "id fehlt" });
+
+    const customer_po = req.body?.customer_po != null ? String(req.body.customer_po).trim() : null;
+    const weekday = req.body?.weekday != null && String(req.body.weekday).trim() !== "" ? Number(req.body.weekday) : null;
+    const start_time = req.body?.start_time != null ? String(req.body.start_time).trim() : null;
+    const grace_minutes =
+      req.body?.grace_minutes != null && String(req.body.grace_minutes).trim() !== ""
+        ? Number(req.body.grace_minutes)
+        : null;
+
+    if (customer_po !== null && !customer_po) return res.status(400).json({ ok: false, error: "customer_po ungültig" });
+    if (weekday !== null && (!Number.isFinite(weekday) || weekday < 1 || weekday > 7)) {
+      return res.status(400).json({ ok: false, error: "weekday muss 1..7 sein" });
+    }
+    if (start_time !== null && !/^\d{2}:\d{2}(:\d{2})?$/.test(start_time)) {
+      return res.status(400).json({ ok: false, error: "start_time ungültig (HH:MM oder HH:MM:SS)" });
+    }
+    if (grace_minutes !== null && (!Number.isFinite(grace_minutes) || grace_minutes < 0 || grace_minutes > 120)) {
+      return res.status(400).json({ ok: false, error: "grace_minutes ungültig (0..120)" });
+    }
+
+    const r = await pool.query(
+      `
+      UPDATE po_work_rules
+      SET customer_po = COALESCE($2, customer_po),
+          weekday = COALESCE($3, weekday),
+          start_time = COALESCE($4::time, start_time),
+          grace_minutes = COALESCE($5, grace_minutes),
+          updated_at = NOW()
+      WHERE id = $1::bigint
+      `,
+      [id, customer_po, weekday, start_time, grace_minutes]
+    );
+
+    if (!r.rowCount) return res.status(404).json({ ok: false, error: "Regel nicht gefunden" });
+    res.json({ ok: true });
+  } catch (e) {
+    if (String(e.code) === "23505") {
+      return res.status(409).json({ ok: false, error: "Konflikt: customer_po + weekday existiert bereits" });
+    }
+    console.error("PO WORK RULES PATCH ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// DELETE /api/admin/po-work-rules/:id
+app.delete("/api/admin/po-work-rules/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ ok: false, error: "id fehlt" });
+
+    const r = await pool.query(`DELETE FROM po_work_rules WHERE id=$1::bigint`, [id]);
+    if (!r.rowCount) return res.status(404).json({ ok: false, error: "Regel nicht gefunden" });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("PO WORK RULES DELETE ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ======================================================
 // ADMIN: PO Work Rules (Phase 2A) – READ ONLY TEST
 // ======================================================
