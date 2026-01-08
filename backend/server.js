@@ -1543,6 +1543,62 @@ app.patch("/api/admin/staffplan/planned-hours", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// ADMIN: Report Hours (Phase 2A) - uses clamped_hours
+// ======================================================
+// GET /api/admin/report-hours?from=YYYY-MM-DD&to=YYYY-MM-DD&employee_id=&customer_po=
+app.get("/api/admin/report-hours", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const employee_id = req.query.employee_id ? String(req.query.employee_id).trim() : null;
+    const customer_po = req.query.customer_po ? String(req.query.customer_po).trim() : null;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({ ok: false, error: "from ungültig (YYYY-MM-DD)" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
+    }
+
+    const where = [];
+    const params = [from, to];
+
+    where.push(`work_date BETWEEN $1::date AND $2::date`);
+    where.push(`start_ts IS NOT NULL`);
+    where.push(`end_ts IS NOT NULL`);
+
+    if (employee_id) {
+      params.push(employee_id);
+      where.push(`employee_id = $${params.length}`);
+    }
+    if (customer_po) {
+      params.push(customer_po);
+      where.push(`mapped_customer_po = $${params.length}`);
+    }
+
+    const r = await pool.query(
+      `
+      SELECT
+        work_date,
+        employee_id,
+        mapped_customer_po,
+        COUNT(*)::int AS entries,
+        ROUND(SUM(clamped_hours)::numeric, 4) AS hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      GROUP BY work_date, employee_id, mapped_customer_po
+      ORDER BY work_date ASC, employee_id ASC, mapped_customer_po ASC
+      `,
+      params
+    );
+
+    res.json({ ok: true, from, to, rows: r.rows });
+  } catch (e) {
+    console.error("REPORT HOURS ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ======================================================
 // DEBUG: Staffplan basics
