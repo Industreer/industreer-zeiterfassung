@@ -1974,6 +1974,38 @@ app.get("/api/admin/po-work-rules", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// ADMIN: Helper – list available customer_po values
+// ======================================================
+
+// GET /api/admin/customer-pos
+app.get("/api/admin/customer-pos", async (req, res) => {
+  try {
+    const limit =
+      Math.max(1, Math.min(500, Number(req.query.limit) || 200));
+
+    const r = await pool.query(
+      `
+      SELECT
+        customer_po,
+        MAX(customer) AS customer,
+        COUNT(*)::int AS cnt
+      FROM staffplan
+      WHERE customer_po IS NOT NULL
+        AND customer_po <> ''
+      GROUP BY customer_po
+      ORDER BY cnt DESC
+      LIMIT $1
+      `,
+      [limit]
+    );
+
+    res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("CUSTOMER-PO LIST ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ======================================================
 // ADMIN: ABSENCES API
