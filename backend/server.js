@@ -1812,6 +1812,39 @@ app.delete("/api/admin/employees", async (req, res) => {
   }
 });
 // ======================================================
+// ADMIN: PO Work Rules (Phase 2A)
+// ======================================================
+
+// GET /api/admin/po-work-rules?customer_po=...
+app.get("/api/admin/po-work-rules", async (req, res) => {
+  try {
+    const customer_po = req.query.customer_po != null ? String(req.query.customer_po).trim() : null;
+
+    const r = customer_po
+      ? await pool.query(
+          `
+          SELECT id, customer_po, weekday, start_time, grace_minutes, created_at, updated_at
+          FROM po_work_rules
+          WHERE customer_po = $1
+          ORDER BY customer_po ASC, weekday ASC
+          `,
+          [customer_po]
+        )
+      : await pool.query(
+          `
+          SELECT id, customer_po, weekday, start_time, grace_minutes, created_at, updated_at
+          FROM po_work_rules
+          ORDER BY customer_po ASC, weekday ASC
+          `
+        );
+
+    res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("PO WORK RULES GET ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// ======================================================
 // ADMIN: PO Work Rules (Phase 2A) – READ ONLY TEST
 // ======================================================
 app.get("/api/admin/po-work-rules", async (req, res) => {
