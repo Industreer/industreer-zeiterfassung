@@ -308,6 +308,26 @@ async function migrate() {
 
 
   // ... hier geht dein migrate() normal weiter (import_runs, app_settings, employee_absences, usw.)
+  // ======================================================
+  // PO WORK RULES (Phase 2A)
+  // ======================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS po_work_rules (
+      id BIGSERIAL PRIMARY KEY,
+      customer_po TEXT NOT NULL,
+      weekday INT NOT NULL CHECK (weekday BETWEEN 1 AND 7),
+      start_time TIME NOT NULL,
+      grace_minutes INT NOT NULL DEFAULT 0 CHECK (grace_minutes BETWEEN 0 AND 120),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (customer_po, weekday)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS po_work_rules_po_day
+    ON po_work_rules (customer_po, weekday);
+  `);
 
   console.log("✅ DB migrate finished");
 }
@@ -1788,6 +1808,29 @@ app.delete("/api/admin/employees", async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     console.error("ADMIN DELETE EMPLOYEE ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// ======================================================
+// ADMIN: PO Work Rules (Phase 2A) – READ ONLY TEST
+// ======================================================
+app.get("/api/admin/po-work-rules", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT
+        id,
+        customer_po,
+        weekday,
+        start_time,
+        grace_minutes,
+        created_at,
+        updated_at
+      FROM po_work_rules
+      ORDER BY customer_po ASC, weekday ASC
+    `);
+    res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("PO WORK RULES GET ERROR:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
