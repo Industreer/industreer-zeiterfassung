@@ -9,13 +9,15 @@
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:1200px}
     h1{margin:0 0 10px}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    input,button{padding:10px 12px;font-size:14px}
+    input,button,label{font-size:14px}
+    input,button{padding:10px 12px}
     button{cursor:pointer}
     .card{border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0}
     table{border-collapse:collapse;width:100%;margin-top:12px}
     th,td{border-bottom:1px solid #eee;padding:10px;text-align:left}
     th{background:#fafafa}
     .muted{color:#666}
+    .bad{color:#b10000}
     .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
     .btn{border:1px solid #ddd;border-radius:8px;background:#fff}
     .btn.primary{border-color:#b4d6f0;background:#f5fbff}
@@ -37,10 +39,106 @@
     <label>Bis:</label>
     <input id="to" type="date"/>
 
+    <label>Code:</label>
+    <input id="code" type="text" value="2012" style="width:110px"/>
+
     <button id="btnLoad" class="btn primary">Report laden</button>
 
     <label class="muted">
       <input id="byPo" type="checkbox"/> nach PO gruppieren
     </label>
 
-    <span id="s
+    <span id="status" class="muted"></span>
+  </div>
+  <div id="error" class="bad" style="margin-top:10px"></div>
+</div>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Mitarbeiter</th>
+        <th class="poCol" style="display:none">Customer PO</th>
+        <th>Einträge</th>
+        <th>Stunden</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<script>
+  const $ = (id)=>document.getElementById(id);
+
+  function todayIso(){
+    return new Date().toISOString().slice(0,10);
+  }
+
+  // Default: letzter Tag mit Daten ist bei dir oft in der Vergangenheit – daher heute als Start
+  $("from").value = todayIso();
+  $("to").value = todayIso();
+
+  function setStatus(msg){ $("status").textContent = msg || ""; }
+  function setError(msg){ $("error").textContent = msg || ""; }
+
+  async function api(url){
+    const code = ($("code").value || "").trim();
+    const r = await fetch(url, { headers: { "x-admin-code": code } });
+    const t = await r.text();
+    let j;
+    try { j = JSON.parse(t); } catch { j = { ok: false, error: t }; }
+    if(!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
+    return j;
+  }
+
+  function renderTable(rows, include_po){
+    const tb = $("tbody");
+    const poCols = document.querySelectorAll(".poCol");
+    poCols.forEach(c => c.style.display = include_po ? "" : "none");
+
+    if(!rows || !rows.length){
+      tb.innerHTML = `<tr><td colspan="${include_po ? 4 : 3}" class="muted">Keine Daten.</td></tr>`;
+      return;
+    }
+
+    tb.innerHTML = rows.map(r => `
+      <tr>
+        <td class="mono">${r.employee_id}${r.employee_name ? ` — ${r.employee_name}` : ""}</td>
+        ${include_po ? `<td class="mono">${r.mapped_customer_po || ""}</td>` : ""}
+        <td>${r.entries}</td>
+        <td>${Number(r.hours).toFixed(2)}</td>
+      </tr>
+    `).join("");
+  }
+
+  async function loadReport(){
+    setError("");
+    const from = $("from").value;
+    const to = $("to").value;
+    const include_po = $("byPo").checked;
+
+    if(!from || !to){
+      setError("Bitte Zeitraum wählen.");
+      return;
+    }
+
+    setStatus("Lade…");
+
+    try{
+      const url =
+        `/api/admin/report-hours/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&include_po=${include_po ? 1 : 0}`;
+      const j = await api(url);
+      renderTable(j.rows || [], include_po);
+      setStatus(`Zeilen: ${(j.rows||[]).length}`);
+    }catch(e){
+      setStatus("");
+      setError("❌ " + e.message);
+      renderTable([], include_po);
+    }
+  }
+
+  $("btnLoad").addEventListener("click", loadReport);
+</script>
+
+</body>
+</html>
