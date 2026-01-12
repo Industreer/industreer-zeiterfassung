@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reports (Clamp)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+    label { display: block; font-size: 12px; opacity: 0.8; margin-bottom: 4px; }
+    input, select, button { padding: 8px; font-size: 14px; }
+    button { cursor: pointer; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-top: 12px; }
+    .err { color: #b00020; white-space: pre-wrap; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 13px; }
+    th { background: #f6f6f6; text-align: left; }
+    .muted { opacity: 0.7; font-size: 12px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #f2f2f2; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h2>Reports & Clamp Preview</h2>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Admin Code</label>
+        <input id="code" placeholder="2012" style="width:120px">
+        <div class="muted">Wird in LocalStorage gespeichert.</div>
+      </div>
+
+      <div>
+        <label>Von</label>
+        <input id="from" type="date">
+      </div>
+
+      <div>
+        <label>Bis</label>
+        <input id="to" type="date">
+      </div>
+
+      <div>
+        <label>Employee</label>
+        <select id="employee">
+          <option value="">(alle)</option>
+        </select>
+      </div>
+
+      <div>
+        <label>Customer PO (Nummer)</label>
+        <select id="po">
+          <option value="">(alle)</option>
+        </select>
+      </div>
+
+      <div>
+        <button id="btnPreview">Clamp Preview</button>
+        <button id="btnDetail">Detail Report</button>
+        <button id="btnSummary">Summary Report</button>
+      </div>
+    </div>
+
+    <div id="status" class="muted" style="margin-top:8px;"></div>
+    <div id="error" class="err" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content: space-between;">
+      <div><span class="pill" id="resultTag">—</span></div>
+      <div class="muted" id="resultMeta"></div>
+    </div>
+    <div id="result"></div>
+  </div>
+
+<script>
+  const els = {
+    code: document.getElementById('code'),
+    from: document.getElementById('from'),
+    to: document.getElementById('to'),
+    employee: document.getElementById('employee'),
+    po: document.getElementById('po'),
+    status: document.getElementById('status'),
+    error: document.getElementById('error'),
+    result: document.getElementById('result'),
+    tag: document.getElementById('resultTag'),
+    meta: document.getElementById('resultMeta'),
+    btnPreview: document.getElementById('btnPreview'),
+    btnDetail: document.getElementById('btnDetail'),
+    btnSummary: document.getElementById('btnSummary'),
+  };
+
+  function setError(msg) {
+    els.error.textContent = msg || '';
+  }
+  function setStatus(msg) {
+    els.status.textContent = msg || '';
+  }
+
+  function qs(obj) {
+    const p = new URLSearchParams();
+    for (const [k,v] of Object.entries(obj)) {
+      if (v === null || v === undefined || v === '') continue;
+      p.set(k, v);
+    }
+    return p.toString();
+  }
+
+  function adminCode() {
+    const c = (els.code.value || '').trim();
+    if (!c) throw new Error('Admin Code fehlt');
+    localStorage.setItem('admin_code_2012', c);
+    return c;
+  }
+
+  async function apiGet(path, params = {}) {
+    const code = adminCode();
+    const url = path + '?' + qs({ ...params, code });
+    const r = await fetch(url);
+    const txt = await r.text();
+    let data;
+    try { data = JSON.parse(txt); } catch { data = { ok:false, error: txt }; }
+    if (!r.ok || data.ok === false) {
+      throw new Error(data.error || ('HTTP ' + r.status));
+    }
+    return data;
+  }
+
+  function renderTable(rows) {
+    if (!rows || !rows.length) {
+      els.result.innerHTML = '<div class="muted">Keine Daten.</div>';
+      return;
+    }
+    const cols = Object.keys(rows[0]);
+    const thead = '<thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead>';
+    const tbody = '<tbody>' + rows.map(row => {
+      return '<tr>' + cols.map(c => `<td>${row[c] ?? ''}</td>`).join('') + '</tr>';
+    }).join('') + '</tbody>';
+    els.result.innerHTML = `<table>${thead}${tbody}</table>`;
+  }
+
+  async function loadEmployees() {
+    // nutzt /api/employees (bei dir existiert das)
+    try {
+      const r = await fetch('/api/employees');
+      const data = await r.json();
+      if (!data.ok) return;
+      for (const e of data.rows) {
+        const opt = document.createElement('option');
+        opt.value = e.employee_id;
+        opt.textContent = `${e.name} (${e.employee_id})`;
+        els.employee.appendChild(opt);
+      }
+    } catch {}
+  }
+
+  async function loadCustomerPos() {
+    // nutzt den Helper /api/admin/customer-pos (den hast du gebaut)
+    try {
+      const data = await apiGet('/api/admin/customer-pos', { limit: 200 });
+      for (const row of data.rows) {
+        const opt = document.createElement('option');
+        opt.value = row.customer_po;
+        opt.textContent = row.customer_po + (row.customer ? ` — ${row.customer}` : '') + ` (${row.cnt})`;
+        els.po.appendChild(opt);
+      }
+    } catch (e) {
+      // helper ist optional – wenn nicht da, ignorieren
+    }
+  }
+
+  function setDefaults() {
+    els.code.value = localStorage.getItem('admin_code_2012') || '2012';
+    // default: letzte 14 Tage
+    const now = new Date();
+    const to = now.toISOString().slice(0,10);
+    const fromDate = new Date(now.getTime() - 13*86400000);
+    const from = fromDate.toISOString().slice(0,10);
+    els.from.value = from;
+    els.to.value = to;
+  }
+
+  async function clampPreview() {
+    setError('');
+    els.tag.textContent = 'Clamp Preview';
+    const params = {
+      from: els.from.value,
+      to: els.to.value,
+      employee_id: els.employee.value,
+      customer_po: els.po.value
+    };
+    setStatus('Lade Clamp Preview…');
+    const data = await apiGet('/api/admin/clamp-preview', params);
+    setStatus('');
+    els.meta.textContent = `${data.rows.length} rows`;
+    renderTable(data.rows);
+  }
+
+  async function reportDetail() {
+    setError('');
+    els.tag.textContent = 'Detail Report';
+    const params = {
+      from: els.from.value,
+      to: els.to.value,
+      employee_id: els.employee.value,
+      customer_po: els.po.value
+    };
+    setStatus('Lade Detail Report…');
+    const data = await apiGet('/api/admin/report-hours', params);
+    setStatus('');
+    els.meta.textContent = `${data.rows.length} rows`;
+    renderTable(data.rows);
+  }
+
+  async function reportSummary() {
+    setError('');
+    els.tag.textContent = 'Summary Report';
+    const params = {
+      from: els.from.value,
+      to: els.to.value,
+      employee_id: els.employee.value,
+      customer_po: els.po.value,
+      include_po: els.po.value ? '1' : '0'
+    };
+    setStatus('Lade Summary Report…');
+    const data = await apiGet('/api/admin/report-hours/summary', params);
+    setStatus('');
+    els.meta.textContent = `${data.rows.length} rows`;
+    renderTable(data.rows);
+  }
+
+  els.btnPreview.addEventListener('click', () => clampPreview().catch(e => setError(e.message)));
+  els.btnDetail.addEventListener('click', () => reportDetail().catch(e => setError(e.message)));
+  els.btnSummary.addEventListener('click', () => reportSummary().catch(e => setError(e.message)));
+
+  (async function init(){
+    setDefaults();
+    await loadEmployees();
+
+    // customer-po dropdown erst laden, wenn Code valide ist:
+    // Falls du noch nicht gespeichert hast: erst in Code-Feld klicken und einmal Button drücken.
+    try { await loadCustomerPos(); } catch {}
+    setStatus('Bereit.');
+  })();
+</script>
+</body>
+</html>
