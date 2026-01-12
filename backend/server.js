@@ -217,6 +217,18 @@ async function setSetting(key, value) {
     [key, value]
   );
 }
+async function ensureEmployeeExists(employee_id) {
+  // Minimal: wenn nicht vorhanden, anlegen
+  // Name = employee_id (kann später über Admin korrigiert werden)
+  await pool.query(
+    `
+    INSERT INTO employees (employee_id, name)
+    VALUES ($1, $2)
+    ON CONFLICT (employee_id) DO NOTHING
+    `,
+    [employee_id, employee_id]
+  );
+}
 
 // ======================================================
 // MIGRATE
