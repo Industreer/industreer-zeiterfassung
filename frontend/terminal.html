@@ -47,14 +47,22 @@ function todayIso(){ return new Date().toISOString().slice(0,10); }
 
 async function login(){
   loginErr.innerText="";
-  const id=empId.value.trim();
-  if(!id) return;
-  const r=await fetch(`/api/terminal/login?employee_id=${id}`);
-  const d=await r.json();
-  if(!d.ok){ loginErr.innerText="Mitarbeiter nicht gefunden"; return; }
-  employee=d.employee;
-  loadProjects();
+  const id = empId.value.trim();
+  if(!id){
+    loginErr.innerText = "Bitte Mitarbeiter-ID eingeben";
+    return;
+  }
+
+  // Minimal-Login: wir merken uns nur die ID
+  employee = { employee_id: id, name: id };
+
+  loginCard.style.display = "none";
+  projectCard.style.display = "none";
+  actionCard.style.display = "block";
+
+  headerText.innerText = `Hallo ${id}`;
 }
+
 
 async function loadProjects(){
   const r=await fetch(`/api/allowed-projects?employee_id=${employee.employee_id}&date=${todayIso()}`);
