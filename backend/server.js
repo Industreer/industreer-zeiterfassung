@@ -2504,10 +2504,12 @@ async function recomputeTimeEntryForDay(employee_id, work_date_iso) {
         MIN(event_time) FILTER (WHERE event_type='clock_in') AS start_ts,
         MAX(event_time) FILTER (WHERE event_type='clock_out') AS end_ts,
         COALESCE(
-          SUM(EXTRACT(EPOCH FROM (next_time - event_time)) / 60.0)
-            FILTER (WHERE event_type='break_start' AND next_type='break_end'),
-          0
-        )::int AS break_minutes
+  CEIL(
+    SUM(EXTRACT(EPOCH FROM (next_time - event_time)) / 60.0)
+      FILTER (WHERE event_type='break_start' AND next_type='break_end')
+  ),
+  0
+)::int AS break_minutes
       FROM paired
       GROUP BY employee_id, work_date
     )
