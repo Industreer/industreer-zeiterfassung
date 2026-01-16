@@ -2539,6 +2539,51 @@ app.post("/api/clock/in", async (req, res) => {
       `INSERT INTO time_events (employee_id, project_id, event_type) VALUES ($1,$2,'clock_in')`,
       [employee_id, project_id]
     );
+// POST /api/break/start
+app.post("/api/break/start", async (req, res) => {
+  try {
+    const employee_id = String(req.body?.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    await ensureEmployeeExists(employee_id);
+
+    const work_date = todayIsoBerlin();
+
+    await pool.query(
+      `INSERT INTO time_events (employee_id, event_type) VALUES ($1,'break_start')`,
+      [employee_id]
+    );
+
+    await recomputeTimeEntryForDay(employee_id, work_date);
+    res.json({ ok: true, employee_id, work_date });
+  } catch (e) {
+    console.error("BREAK START ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/break/end
+app.post("/api/break/end", async (req, res) => {
+  try {
+    const employee_id = String(req.body?.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    await ensureEmployeeExists(employee_id);
+
+    const work_date = todayIsoBerlin();
+
+    await pool.query(
+      `INSERT INTO time_events (employee_id, event_type) VALUES ($1,'break_end')`,
+      [employee_id]
+    );
+
+    await recomputeTimeEntryForDay(employee_id, work_date);
+    res.json({ ok: true, employee_id, work_date });
+  } catch (e) {
+    console.error("BREAK END ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
     await recomputeTimeEntryForDay(employee_id, work_date);
     res.json({ ok: true, employee_id, work_date });
