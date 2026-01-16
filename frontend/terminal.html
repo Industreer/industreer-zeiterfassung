@@ -33,9 +33,10 @@
 
 <div class="card" id="actionCard" style="display:none">
   <div class="ok" id="headerText"></div>
-  <button onclick="sendEvent('IN')">Arbeitsbeginn</button>
-  <button onclick="sendEvent('PAUSE')">Pause</button>
-  <button onclick="sendEvent('OUT')">Arbeitsende</button>
+<button onclick="sendEvent('clock_in')">Arbeitsbeginn</button>
+<button onclick="sendEvent('break_start')">Pause Start</button>
+<button onclick="sendEvent('break_end')">Pause Ende</button>
+<button onclick="sendEvent('clock_out')">Arbeitsende</button>
   <div class="err" id="eventErr"></div>
 </div>
 
@@ -99,17 +100,36 @@ function showActions(extra){
 
 async function sendEvent(type){
   eventErr.innerText="";
-  if(!projectId){ eventErr.innerText="Kein Projekt"; return; }
-  const r=await fetch("/api/time-event",{
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body:JSON.stringify({
-      employee_id:employee.employee_id,
-      project_id:projectId,
-      event_type:type,
-      date:todayIso()
-    })
-  });
+  if(!employee?.employee_id){ eventErr.innerText="Kein Mitarbeiter"; return; }
+
+  // Mapping event_type -> endpoint
+  const map = {
+    clock_in:  { url: "/api/clock/in",  body: (id)=>({ employee_id:id, project_id: projectId || null }) },
+    clock_out: { url: "/api/clock/out", body: (id)=>({ employee_id:id }) },
+    break_start:{ url: "/api/break/start", body: (id)=>({ employee_id:id }) },
+    break_end: { url: "/api/break/end",  body: (id)=>({ employee_id:id }) },
+  };
+
+  const cfg = map[type];
+  if(!cfg){ eventErr.innerText="Unbekannter Event-Typ"; return; }
+
+  try{
+    const r = await fetch(cfg.url, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(cfg.body(employee.employee_id))
+    });
+    const t = await r.text();
+    let d; try { d = JSON.parse(t); } catch { d = { ok:false, error:t }; }
+    if(!r.ok || d.ok === false) throw new Error(d.error || "Zeitbuchung fehlgeschlagen");
+
+    actionCard.innerHTML = `<div class="ok">✅ Gespeichert (${type})</div>`;
+    setTimeout(()=>location.reload(), 2500);
+  }catch(e){
+    eventErr.innerText = "❌ " + e.message;
+  }
+}
+
   const d=await r.json();
   if(!d.ok){ eventErr.innerText="Zeitbuchung fehlgeschlagen"; return; }
   actionCard.innerHTML=`<div class="ok">Gespeichert${d.is_exception?" (AUSNAHME)":""}</div>`;
