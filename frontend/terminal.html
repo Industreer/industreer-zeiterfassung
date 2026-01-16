@@ -105,18 +105,44 @@ function showActions(extra){
   actionCard.style.display="block";
   headerText.innerText=`${employee.name}\nProjekt: ${projectId} ${extra}`;
 }
-
 async function sendEvent(type){
   eventErr.innerText="";
   if(!employee?.employee_id){ eventErr.innerText="Kein Mitarbeiter"; return; }
 
-  // Mapping event_type -> endpoint
+  // Für clock_in brauchen wir projectId (Variante 2)
+  if(type === "clock_in" && !projectId){
+    eventErr.innerText="Kein Projekt ausgewählt";
+    return;
+  }
+
   const map = {
-    clock_in:  { url: "/api/clock/in",  body: (id)=>({ employee_id:id, project_id: projectId || null }) },
-    clock_out: { url: "/api/clock/out", body: (id)=>({ employee_id:id }) },
-    break_start:{ url: "/api/break/start", body: (id)=>({ employee_id:id }) },
-    break_end: { url: "/api/break/end",  body: (id)=>({ employee_id:id }) },
+    clock_in:    { url: "/api/clock/in",  body: { employee_id: employee.employee_id, project_id: projectId } },
+    clock_out:   { url: "/api/clock/out", body: { employee_id: employee.employee_id } },
+    break_start: { url: "/api/break/start", body: { employee_id: employee.employee_id } },
+    break_end:   { url: "/api/break/end", body: { employee_id: employee.employee_id } },
   };
+
+  const cfg = map[type];
+  if(!cfg){ eventErr.innerText="Unbekannter Event-Typ"; return; }
+
+  try{
+    const r = await fetch(cfg.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg.body)
+    });
+
+    const t = await r.text();
+    let d; try { d = JSON.parse(t); } catch { d = { ok:false, error:t }; }
+    if(!r.ok || d.ok === false) throw new Error(d.error || "Zeitbuchung fehlgeschlagen");
+
+    actionCard.innerHTML = `<div class="ok">✅ Gespeichert (${type})</div>`;
+    setTimeout(()=>location.reload(), 2500);
+  } catch(e){
+    eventErr.innerText = "❌ " + e.message;
+  }
+}
+
 
   const cfg = map[type];
   if(!cfg){ eventErr.innerText="Unbekannter Event-Typ"; return; }
