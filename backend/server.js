@@ -2539,6 +2539,10 @@ app.post("/api/clock/in", async (req, res) => {
       `INSERT INTO time_events (employee_id, project_id, event_type) VALUES ($1,$2,'clock_in')`,
       [employee_id, project_id]
     );
+    // DEBUG: proof that THIS server.js is running
+app.get("/api/debug/has-break-routes", (req, res) => {
+  res.json({ ok: true, hasBreakRoutes: true });
+});
 // POST /api/break/start
 app.post("/api/break/start", async (req, res) => {
   try {
