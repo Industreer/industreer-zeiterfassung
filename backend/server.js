@@ -2539,6 +2539,38 @@ app.post("/api/clock/in", async (req, res) => {
       `INSERT INTO time_events (employee_id, project_id, event_type) VALUES ($1,$2,'clock_in')`,
       [employee_id, project_id]
     );
+
+
+    await recomputeTimeEntryForDay(employee_id, work_date);
+    res.json({ ok: true, employee_id, work_date });
+  } catch (e) {
+    console.error("CLOCK IN ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/clock/out
+app.post("/api/clock/out", async (req, res) => {
+  try {
+    const employee_id = String(req.body?.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    await ensureEmployeeExists(employee_id);
+
+    const work_date = todayIsoBerlin();
+
+    await pool.query(
+      `INSERT INTO time_events (employee_id, event_type) VALUES ($1,'clock_out')`,
+      [employee_id]
+    );
+
+    await recomputeTimeEntryForDay(employee_id, work_date);
+    res.json({ ok: true, employee_id, work_date });
+  } catch (e) {
+    console.error("CLOCK OUT ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
     // DEBUG: proof that THIS server.js is running
 app.get("/api/debug/has-break-routes", (req, res) => {
   res.json({ ok: true, hasBreakRoutes: true });
@@ -2588,38 +2620,6 @@ app.post("/api/break/end", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
-    await recomputeTimeEntryForDay(employee_id, work_date);
-    res.json({ ok: true, employee_id, work_date });
-  } catch (e) {
-    console.error("CLOCK IN ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// POST /api/clock/out
-app.post("/api/clock/out", async (req, res) => {
-  try {
-    const employee_id = String(req.body?.employee_id || "").trim();
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-
-    await ensureEmployeeExists(employee_id);
-
-    const work_date = todayIsoBerlin();
-
-    await pool.query(
-      `INSERT INTO time_events (employee_id, event_type) VALUES ($1,'clock_out')`,
-      [employee_id]
-    );
-
-    await recomputeTimeEntryForDay(employee_id, work_date);
-    res.json({ ok: true, employee_id, work_date });
-  } catch (e) {
-    console.error("CLOCK OUT ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
 
 // ======================================================
 // START
