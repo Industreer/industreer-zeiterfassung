@@ -2622,6 +2622,66 @@ app.post("/api/break/end", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// TERMINAL: Login + Allowed Projects
+// ======================================================
+
+// GET /api/terminal/login?employee_id=1001
+app.get("/api/terminal/login", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    // legt notfalls an (damit FK später nicht knallt)
+    await ensureEmployeeExists(employee_id);
+
+    const r = await pool.query(
+      `SELECT employee_id, name FROM employees WHERE employee_id=$1 LIMIT 1`,
+      [employee_id]
+    );
+
+    return res.json({ ok: true, employee: r.rows[0] || { employee_id, name: employee_id } });
+  } catch (e) {
+    console.error("TERMINAL LOGIN ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// GET /api/allowed-projects?employee_id=1001&date=YYYY-MM-DD
+app.get("/api/allowed-projects", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "").trim();
+    const date = String(req.query.date || "").trim();
+
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ ok: false, error: "date ungültig (YYYY-MM-DD)" });
+    }
+
+    // Wir nehmen project_short aus staffplan als "project_id"
+    const r = await pool.query(
+      `
+      SELECT DISTINCT TRIM(project_short) AS project_id
+      FROM staffplan
+      WHERE employee_id = $1
+        AND work_date = $2::date
+        AND COALESCE(TRIM(project_short),'') <> ''
+      ORDER BY 1 ASC
+      `,
+      [employee_id, date]
+    );
+
+    const projects = r.rows.map(x => ({
+      project_id: x.project_id,
+      name: x.project_id, // Terminal erwartet "name"
+    }));
+
+    return res.json({ ok: true, projects });
+  } catch (e) {
+    console.error("ALLOWED PROJECTS ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ======================================================
 // START
