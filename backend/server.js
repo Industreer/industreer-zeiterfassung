@@ -2458,6 +2458,119 @@ app.post("/api/admin/staffplan/upload", upload.single("file"), async (req, res) 
     });
   }
 });
+// =============================
+// ZEITERFASSUNG – STEMPLEN (A)
+// =============================
+
+async function ensureEmployeeExists(employee_id) {
+  await pool.query(
+    `
+    INSERT INTO employees (employee_id, name)
+    VALUES ($1, $2)
+    ON CONFLICT (employee_id) DO NOTHING
+    `,
+    [employee_id, employee_id]
+  );
+}
+
+// recompute day summary from time_events -> time_entries
+async function recomputeTimeEntryForDay(employee_id, work_date_iso) {
+  await pool.query(
+    `
+    WITH day_events AS (
+      SELECT
+        employee_id,
+        (event_time AT TIME ZONE 'Europe/Berlin')::date AS work_date,
+        event_type,
+        event_time
+      FROM time_events
+      WHERE employee_id = $1
+        AND (event_time AT TIME ZONE 'Europe/Berlin')::date = $2::date
+    ),
+    paired AS (
+      SELECT
+        employee_id,
+        work_date,
+        event_type,
+        event_time,
+        LEAD(event_type) OVER (PARTITION BY employee_id, work_date ORDER BY event_time) AS next_type,
+        LEAD(event_time) OVER (PARTITION BY employee_id, work_date ORDER BY event_time) AS next_time
+      FROM day_events
+    ),
+    agg AS (
+      SELECT
+        employee_id,
+        work_date,
+        MIN(event_time) FILTER (WHERE event_type='clock_in') AS start_ts,
+        MAX(event_time) FILTER (WHERE event_type='clock_out') AS end_ts,
+        COALESCE(
+          SUM(EXTRACT(EPOCH FROM (next_time - event_time)) / 60.0)
+            FILTER (WHERE event_type='break_start' AND next_type='break_end'),
+          0
+        )::int AS break_minutes
+      FROM paired
+      GROUP BY employee_id, work_date
+    )
+    INSERT INTO time_entries (employee_id, work_date, start_ts, end_ts, break_minutes, auto_break_minutes)
+    SELECT employee_id, work_date, start_ts, end_ts, break_minutes, 0
+    FROM agg
+    ON CONFLICT (employee_id, work_date) DO UPDATE
+    SET start_ts = EXCLUDED.start_ts,
+        end_ts = EXCLUDED.end_ts,
+        break_minutes = EXCLUDED.break_minutes,
+        auto_break_minutes = 0;
+    `,
+    [employee_id, work_date_iso]
+  );
+}
+
+// POST /api/clock/in
+app.post("/api/clock/in", async (req, res) => {
+  try {
+    const employee_id = String(req.body?.employee_id || "").trim();
+    const project_id = req.body?.project_id != null ? String(req.body.project_id).trim() : null;
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    await ensureEmployeeExists(employee_id);
+
+    const work_date = todayIsoBerlin();
+
+    await pool.query(
+      `INSERT INTO time_events (employee_id, project_id, event_type) VALUES ($1,$2,'clock_in')`,
+      [employee_id, project_id]
+    );
+
+    await recomputeTimeEntryForDay(employee_id, work_date);
+    res.json({ ok: true, employee_id, work_date });
+  } catch (e) {
+    console.error("CLOCK IN ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/clock/out
+app.post("/api/clock/out", async (req, res) => {
+  try {
+    const employee_id = String(req.body?.employee_id || "").trim();
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+
+    await ensureEmployeeExists(employee_id);
+
+    const work_date = todayIsoBerlin();
+
+    await pool.query(
+      `INSERT INTO time_events (employee_id, event_type) VALUES ($1,'clock_out')`,
+      [employee_id]
+    );
+
+    await recomputeTimeEntryForDay(employee_id, work_date);
+    res.json({ ok: true, employee_id, work_date });
+  } catch (e) {
+    console.error("CLOCK OUT ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 
 // ======================================================
 // START
