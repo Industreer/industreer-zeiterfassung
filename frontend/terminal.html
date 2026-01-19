@@ -114,11 +114,10 @@ async function sendEvent(type){
   eventErr.innerText="";
   if(!employee?.employee_id){ eventErr.innerText="Kein Mitarbeiter"; return; }
 
-  // Für clock_in brauchen wir projectId (Variante 2)
-  if(type === "clock_in" && !projectId){
-    eventErr.innerText="Kein Projekt ausgewählt";
-    return;
-  }
+// Variante 2: Projekt optional, wenn staffplan leer
+if(type === "clock_in" && !projectId){
+  console.warn("Clock-In ohne Projekt (staffplan leer)");
+}
 
   const map = {
     clock_in:    { url: "/api/clock/in",  body: { employee_id: employee.employee_id, project_id: projectId } },
