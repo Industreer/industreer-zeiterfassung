@@ -2625,14 +2625,13 @@ app.post("/api/break/end", async (req, res) => {
 // ======================================================
 // TERMINAL: Login + Allowed Projects
 // ======================================================
-
-// GET /api/terminal/login?employee_id=1001
+// GET /api/terminal/login?employee_id=...
 app.get("/api/terminal/login", async (req, res) => {
   try {
     const q = String(req.query.employee_id || "").trim();
     if (!q) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
-    // 1) Exakter Treffer als employee_id
+    // 1) exakte employee_id in employees (manuelle ID wie 1001)
     const exact = await pool.query(
       `SELECT employee_id, name FROM employees WHERE employee_id=$1 LIMIT 1`,
       [q]
@@ -2641,43 +2640,49 @@ app.get("/api/terminal/login", async (req, res) => {
       return res.json({ ok: true, employee: exact.rows[0] });
     }
 
-    // 2) Name-Suche (falls user z.B. "Damir" eingibt)
-    const like = await pool.query(
-      `
-      SELECT employee_id, name
-      FROM employees
-      WHERE lower(name) LIKE lower($1)
-      ORDER BY length(name) ASC
-      LIMIT 5
-      `,
-      ['%' + q + '%']
+    // 2) exakte staffplan employee_id (AUTO_...)
+    const spId = await pool.query(
+      `SELECT employee_id, employee_name AS name
+       FROM staffplan
+       WHERE employee_id=$1
+       LIMIT 1`,
+      [q]
     );
-
-    if (like.rowCount) {
-      return res.json({ ok: true, employee: like.rows[0] });
+    if (spId.rowCount) {
+      return res.json({ ok: true, employee: spId.rows[0] });
     }
 
-    // 3) Fallback: falls employees leer wären, versuchen wir staffplan employee_name zu matchen
-    const sp = await pool.query(
+    // 3) Name-Suche (z.B. "Abdullah")
+    const cand = await pool.query(
       `
-      SELECT employee_id, employee_name AS name
+      SELECT employee_id, employee_name AS name, COUNT(*)::int AS cnt
       FROM staffplan
-      WHERE lower(employee_name) LIKE lower($1)
-      ORDER BY length(employee_name) ASC
-      LIMIT 1
+      WHERE employee_name ILIKE $1
+      GROUP BY employee_id, employee_name
+      ORDER BY cnt DESC
+      LIMIT 10
       `,
       ['%' + q + '%']
     );
-    if (sp.rowCount) {
-      return res.json({ ok: true, employee: sp.rows[0] });
+
+    if (!cand.rowCount) {
+      return res.json({ ok: false, error: "Mitarbeiter nicht gefunden" });
     }
 
-    return res.json({ ok: false, error: "Mitarbeiter nicht gefunden" });
+    // besten Treffer nehmen
+    const best = cand.rows[0];
+    return res.json({
+      ok: true,
+      employee: { employee_id: best.employee_id, name: best.name },
+      candidates: cand.rows
+    });
+
   } catch (e) {
     console.error("TERMINAL LOGIN ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 
 // ======================================================
 // START
