@@ -94,10 +94,15 @@ function useManual(){
 }
 
 function confirmProject(){
-  const v=projectSelect.value;
-  if(!v){ projErr.innerText="Kein Projekt ausgewählt"; return; }
-  projectId=v;
-  showActions("");
+if(!v){
+  // staffplan ist leer -> ohne Projekt weiter
+  projectId = null;
+  showActions("(kein Projekt)");
+  return;
+}
+projectId = v;
+showActions("");
+
 }
 
 function showActions(extra){
