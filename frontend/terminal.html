@@ -46,35 +46,34 @@ let employee=null, projectId=null;
 function todayIso(){ return new Date().toISOString().slice(0,10); }
 
 async function login(){
-  loginErr.innerText="";
-  const id = empId.value.trim();
+  const loginErrEl = document.getElementById("loginErr");
+  const empEl = document.getElementById("empId");
+
+  loginErrEl.innerText = "";
+
+  const id = (empEl.value || "").trim();
   if(!id){
-    loginErr.innerText = "Bitte Mitarbeiter-ID eingeben";
+    loginErrEl.innerText = "Bitte Mitarbeiter-ID oder Namen eingeben";
     return;
   }
 
-  // Minimal-Login: wir merken uns nur die ID
-  employee = { employee_id: id, name: id };
+  try{
+    const r = await fetch(`/api/terminal/login?employee_id=${encodeURIComponent(id)}`);
+    const t = await r.text();
+    let d; try { d = JSON.parse(t); } catch { d = { ok:false, error:t }; }
 
-  loginCard.style.display = "none";
-  projectCard.style.display = "none";
-  actionCard.style.display = "block";
+    if(!r.ok || d.ok === false){
+      loginErrEl.innerText = d.error || "Mitarbeiter nicht gefunden";
+      return;
+    }
 
-  headerText.innerText = `Hallo ${id}`;
+    employee = d.employee;     // <- kommt jetzt AUTO_... zurück oder manuelle ID
+    await loadProjects();      // <- läuft weiter wie gehabt
+  }catch(e){
+    loginErrEl.innerText = "❌ " + (e.message || String(e));
+  }
 }
 
-
-async function loadProjects(){
-  const r=await fetch(`/api/allowed-projects?employee_id=${employee.employee_id}&date=${todayIso()}`);
-  const d=await r.json();
-  projectSelect.innerHTML="";
-  if(d.projects.length){
-    d.projects.forEach(p=>{
-      const o=document.createElement("option");
-      o.value=p.project_id;
-      o.text=`${p.project_id} – ${p.name}`;
-      projectSelect.appendChild(o);
-    });
   }else{
     const o=document.createElement("option");
     o.value="";
