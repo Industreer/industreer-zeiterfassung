@@ -2629,56 +2629,52 @@ app.post("/api/break/end", async (req, res) => {
 // GET /api/terminal/login?employee_id=1001
 app.get("/api/terminal/login", async (req, res) => {
   try {
-    const employee_id = String(req.query.employee_id || "").trim();
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    const q = String(req.query.employee_id || "").trim();
+    if (!q) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
-    // legt notfalls an (damit FK später nicht knallt)
-    await ensureEmployeeExists(employee_id);
-
-    const r = await pool.query(
+    // 1) Exakter Treffer als employee_id
+    const exact = await pool.query(
       `SELECT employee_id, name FROM employees WHERE employee_id=$1 LIMIT 1`,
-      [employee_id]
+      [q]
     );
-
-    return res.json({ ok: true, employee: r.rows[0] || { employee_id, name: employee_id } });
-  } catch (e) {
-    console.error("TERMINAL LOGIN ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// GET /api/allowed-projects?employee_id=1001&date=YYYY-MM-DD
-app.get("/api/allowed-projects", async (req, res) => {
-  try {
-    const employee_id = String(req.query.employee_id || "").trim();
-    const date = String(req.query.date || "").trim();
-
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({ ok: false, error: "date ungültig (YYYY-MM-DD)" });
+    if (exact.rowCount) {
+      return res.json({ ok: true, employee: exact.rows[0] });
     }
 
-    // Wir nehmen project_short aus staffplan als "project_id"
-    const r = await pool.query(
+    // 2) Name-Suche (falls user z.B. "Damir" eingibt)
+    const like = await pool.query(
       `
-      SELECT DISTINCT TRIM(project_short) AS project_id
-      FROM staffplan
-      WHERE employee_id = $1
-        AND work_date = $2::date
-        AND COALESCE(TRIM(project_short),'') <> ''
-      ORDER BY 1 ASC
+      SELECT employee_id, name
+      FROM employees
+      WHERE lower(name) LIKE lower($1)
+      ORDER BY length(name) ASC
+      LIMIT 5
       `,
-      [employee_id, date]
+      ['%' + q + '%']
     );
 
-    const projects = r.rows.map(x => ({
-      project_id: x.project_id,
-      name: x.project_id, // Terminal erwartet "name"
-    }));
+    if (like.rowCount) {
+      return res.json({ ok: true, employee: like.rows[0] });
+    }
 
-    return res.json({ ok: true, projects });
+    // 3) Fallback: falls employees leer wären, versuchen wir staffplan employee_name zu matchen
+    const sp = await pool.query(
+      `
+      SELECT employee_id, employee_name AS name
+      FROM staffplan
+      WHERE lower(employee_name) LIKE lower($1)
+      ORDER BY length(employee_name) ASC
+      LIMIT 1
+      `,
+      ['%' + q + '%']
+    );
+    if (sp.rowCount) {
+      return res.json({ ok: true, employee: sp.rows[0] });
+    }
+
+    return res.json({ ok: false, error: "Mitarbeiter nicht gefunden" });
   } catch (e) {
-    console.error("ALLOWED PROJECTS ERROR:", e);
+    console.error("TERMINAL LOGIN ERROR:", e);
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
