@@ -45,7 +45,7 @@ let employee=null, projectId=null;
 
 function todayIso(){ return new Date().toISOString().slice(0,10); }
 
-async function login(){
+window.login = async function login(){
   const loginErrEl = document.getElementById("loginErr");
   const empEl = document.getElementById("empId");
 
@@ -85,14 +85,14 @@ async function login(){
   projectCard.style.display="block";
 }
 
-function useManual(){
+function window.useManual(){
   const v=manualProject.value.trim();
   if(!v){ projErr.innerText="Projekt-ID fehlt"; return; }
   projectId=v;
   showActions("(Ausnahme)");
 }
 
-function confirmProject(){
+function window.confirmProject(){
 if(!v){
   // staffplan ist leer -> ohne Projekt weiter
   projectId = null;
@@ -109,7 +109,7 @@ function showActions(extra){
   actionCard.style.display="block";
   headerText.innerText=`${employee.name}\nProjekt: ${projectId} ${extra}`;
 }
-async function sendEvent(type){
+async function window.sendEvent(type){
   eventErr.innerText="";
   if(!employee?.employee_id){ eventErr.innerText="Kein Mitarbeiter"; return; }
 
