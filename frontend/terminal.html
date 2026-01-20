@@ -43,17 +43,12 @@
 <script>
   var employee = null;
   var projectId = null;
-function chosenDate(){
-  const el = document.getElementById("workDate");
-  return (el && el.value)
-    ? el.value
-    : new Date().toISOString().slice(0,10);
-}
 
-function chosenDate(){
-  const el = document.getElementById("workDate");
-  return (el && el.value) ? el.value : new Date().toISOString().slice(0,10);
-}
+  function chosenDate() {
+    var el = document.getElementById("workDate");
+    return (el && el.value) ? el.value : new Date().toISOString().slice(0, 10);
+  }
+
   window.login = async function () {
     var loginErrEl = document.getElementById("loginErr");
     var empEl = document.getElementById("empId");
@@ -87,6 +82,12 @@ function chosenDate(){
     var projErrEl = document.getElementById("projErr");
     projErrEl.innerText = "";
 
+    // set default date when opening project card
+    var wd = document.getElementById("workDate");
+    if (wd && !wd.value) {
+      wd.value = new Date().toISOString().slice(0, 10);
+    }
+
     var r = await fetch(
       "/api/allowed-projects?employee_id=" +
         encodeURIComponent(employee.employee_id) +
@@ -113,9 +114,7 @@ function chosenDate(){
 
     document.getElementById("welcome").innerText = "Hallo " + (employee.name || employee.employee_id);
     document.getElementById("loginCard").style.display = "none";
-    document.getElementById("projectCard").style.display = "block";const wd = document.getElementById("workDate");
-if (wd && !wd.value) {
-  wd.value = new Date().toISOString().slice(0,10);
+    document.getElementById("projectCard").style.display = "block";
   }
 
   window.useManual = function () {
@@ -185,17 +184,17 @@ if (wd && !wd.value) {
     }
 
     try {
-      var r = await fetch(url, {
+      var rr = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
 
-      var t = await r.text();
-      var d;
-      try { d = JSON.parse(t); } catch (e) { d = { ok: false, error: t }; }
+      var tt = await rr.text();
+      var dd;
+      try { dd = JSON.parse(tt); } catch (e) { dd = { ok: false, error: tt }; }
 
-      if (!r.ok || d.ok === false) throw new Error(d.error || "Zeitbuchung fehlgeschlagen");
+      if (!rr.ok || dd.ok === false) throw new Error(dd.error || "Zeitbuchung fehlgeschlagen");
 
       var actionCard = document.getElementById("actionCard");
       actionCard.innerHTML = '<div class="ok">✅ Gespeichert (' + type + ')</div>';
@@ -205,5 +204,6 @@ if (wd && !wd.value) {
     }
   };
 </script>
+
 </body>
 </html>
