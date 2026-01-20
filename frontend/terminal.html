@@ -25,6 +25,7 @@
 <div class="card" id="projectCard" style="display:none">
   <h2 id="welcome"></h2>
   <select id="projectSelect"></select>
+  <input id="workDate" type="date">
   <input id="manualProject" placeholder="Ausnahme Projekt-ID">
   <button onclick="useManual()">Ausnahme verwenden</button>
   <button onclick="confirmProject()">Weiter</button>
@@ -42,11 +43,17 @@
 <script>
   var employee = null;
   var projectId = null;
+function chosenDate(){
+  const el = document.getElementById("workDate");
+  return (el && el.value)
+    ? el.value
+    : new Date().toISOString().slice(0,10);
+}
 
-  function todayIso() {
-    return new Date().toISOString().slice(0, 10);
-  }
-
+function chosenDate(){
+  const el = document.getElementById("workDate");
+  return (el && el.value) ? el.value : new Date().toISOString().slice(0,10);
+}
   window.login = async function () {
     var loginErrEl = document.getElementById("loginErr");
     var empEl = document.getElementById("empId");
@@ -83,7 +90,7 @@
     var r = await fetch(
       "/api/allowed-projects?employee_id=" +
         encodeURIComponent(employee.employee_id) +
-        "&date=" + encodeURIComponent(todayIso())
+        "&date=" + encodeURIComponent(chosenDate())
     );
     var d = await r.json();
 
@@ -106,7 +113,9 @@
 
     document.getElementById("welcome").innerText = "Hallo " + (employee.name || employee.employee_id);
     document.getElementById("loginCard").style.display = "none";
-    document.getElementById("projectCard").style.display = "block";
+    document.getElementById("projectCard").style.display = "block";const wd = document.getElementById("workDate");
+if (wd && !wd.value) {
+  wd.value = new Date().toISOString().slice(0,10);
   }
 
   window.useManual = function () {
