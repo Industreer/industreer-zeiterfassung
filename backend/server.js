@@ -2682,6 +2682,36 @@ app.get("/api/terminal/login", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// GET /api/allowed-projects?employee_id=...&date=YYYY-MM-DD
+app.get("/api/allowed-projects", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "").trim();
+    const date = String(req.query.date || "").trim();
+
+    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ ok: false, error: "date ungültig (YYYY-MM-DD)" });
+    }
+
+    const r = await pool.query(
+      `
+      SELECT DISTINCT TRIM(project_short) AS project_id
+      FROM staffplan
+      WHERE employee_id = $1
+        AND work_date = $2::date
+        AND COALESCE(TRIM(project_short),'') <> ''
+      ORDER BY 1 ASC
+      `,
+      [employee_id, date]
+    );
+
+    const projects = r.rows.map(x => ({ project_id: x.project_id, name: x.project_id }));
+    res.json({ ok: true, projects });
+  } catch (e) {
+    console.error("ALLOWED PROJECTS ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 
 // ======================================================
