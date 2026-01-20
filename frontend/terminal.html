@@ -39,79 +39,82 @@
 <button onclick="sendEvent('clock_out')">Arbeitsende</button>
   <div class="err" id="eventErr"></div>
 </div>
-
 <script>
-  let employee = null, projectId = null;
+  var employee = null;
+  var projectId = null;
 
-  function todayIso(){ return new Date().toISOString().slice(0,10); }
+  function todayIso() {
+    return new Date().toISOString().slice(0, 10);
+  }
 
-  // ---------- LOGIN (global für onclick) ----------
-  window.login = async function login(){
-    const loginErrEl = document.getElementById("loginErr");
-    const empEl = document.getElementById("empId");
-
+  window.login = async function () {
+    var loginErrEl = document.getElementById("loginErr");
+    var empEl = document.getElementById("empId");
     loginErrEl.innerText = "";
 
-    const id = (empEl.value || "").trim();
-    if(!id){
+    var id = (empEl.value || "").trim();
+    if (!id) {
       loginErrEl.innerText = "Bitte Mitarbeiter-ID oder Namen eingeben";
       return;
     }
 
-    try{
-      const r = await fetch(`/api/terminal/login?employee_id=${encodeURIComponent(id)}`);
-      const t = await r.text();
-      let d; try { d = JSON.parse(t); } catch { d = { ok:false, error:t }; }
+    try {
+      var r = await fetch("/api/terminal/login?employee_id=" + encodeURIComponent(id));
+      var t = await r.text();
+      var d;
+      try { d = JSON.parse(t); } catch (e) { d = { ok: false, error: t }; }
 
-      if(!r.ok || d.ok === false){
+      if (!r.ok || d.ok === false) {
         loginErrEl.innerText = d.error || "Mitarbeiter nicht gefunden";
         return;
       }
 
       employee = d.employee;
       await loadProjects();
-    }catch(e){
-      loginErrEl.innerText = "❌ " + (e.message || String(e));
+    } catch (e) {
+      loginErrEl.innerText = "❌ " + (e && e.message ? e.message : String(e));
     }
   };
 
-  // ---------- PROJECTS ----------
-  async function loadProjects(){
-    const projErrEl = document.getElementById("projErr");
+  async function loadProjects() {
+    var projErrEl = document.getElementById("projErr");
     projErrEl.innerText = "";
 
-    const r = await fetch(`/api/allowed-projects?employee_id=${encodeURIComponent(employee.employee_id)}&date=${todayIso()}`);
-    const d = await r.json();
+    var r = await fetch(
+      "/api/allowed-projects?employee_id=" +
+        encodeURIComponent(employee.employee_id) +
+        "&date=" + encodeURIComponent(todayIso())
+    );
+    var d = await r.json();
 
-    const projectSelect = document.getElementById("projectSelect");
+    var projectSelect = document.getElementById("projectSelect");
     projectSelect.innerHTML = "";
 
-    if(d.projects && d.projects.length){
-      d.projects.forEach(p=>{
-        const o = document.createElement("option");
+    if (d.projects && d.projects.length) {
+      d.projects.forEach(function (p) {
+        var o = document.createElement("option");
         o.value = p.project_id;
-        o.text = `${p.project_id} – ${p.name}`;
+        o.textContent = p.project_id + " – " + p.name;
         projectSelect.appendChild(o);
       });
-    }else{
-      const o = document.createElement("option");
-      o.value = "";
-      o.text = "Kein Projekt zugewiesen";
-      projectSelect.appendChild(o);
+    } else {
+      var o2 = document.createElement("option");
+      o2.value = "";
+      o2.textContent = "Kein Projekt zugewiesen";
+      projectSelect.appendChild(o2);
     }
 
-    document.getElementById("welcome").innerText = `Hallo ${employee.name}`;
+    document.getElementById("welcome").innerText = "Hallo " + (employee.name || employee.employee_id);
     document.getElementById("loginCard").style.display = "none";
     document.getElementById("projectCard").style.display = "block";
   }
 
-  // ---------- MANUAL PROJECT ----------
-  window.useManual = function useManual(){
-    const v = (document.getElementById("manualProject").value || "").trim();
-    const projErrEl = document.getElementById("projErr");
+  window.useManual = function () {
+    var v = (document.getElementById("manualProject").value || "").trim();
+    var projErrEl = document.getElementById("projErr");
     projErrEl.innerText = "";
 
-    if(!v){
+    if (!v) {
       projErrEl.innerText = "Projekt-ID fehlt";
       return;
     }
@@ -119,15 +122,13 @@
     showActions("(Ausnahme)");
   };
 
-  // ---------- CONFIRM PROJECT ----------
-  window.confirmProject = function confirmProject(){
-    const projErrEl = document.getElementById("projErr");
+  window.confirmProject = function () {
+    var projErrEl = document.getElementById("projErr");
     projErrEl.innerText = "";
 
-    const v = document.getElementById("projectSelect").value;
+    var v = document.getElementById("projectSelect").value;
 
-    if(!v){
-      // staffplan leer oder nichts ausgewählt -> ohne Projekt weiter
+    if (!v) {
       projectId = null;
       showActions("(kein Projekt)");
       return;
@@ -137,54 +138,63 @@
     showActions("");
   };
 
-  function showActions(extra){
+  function showActions(extra) {
     document.getElementById("projectCard").style.display = "none";
     document.getElementById("actionCard").style.display = "block";
-    document.getElementById("headerText").innerText = `${employee.name}\nProjekt: ${projectId || "-"} ${extra}`;
+    document.getElementById("headerText").innerText =
+      (employee && (employee.name || employee.employee_id) ? (employee.name || employee.employee_id) : "") +
+      "\nProjekt: " + (projectId ? projectId : "-") + " " + (extra || "");
   }
 
-  // ---------- EVENTS ----------
-  window.sendEvent = async function sendEvent(type){
-    const eventErrEl = document.getElementById("eventErr");
+  window.sendEvent = async function (type) {
+    var eventErrEl = document.getElementById("eventErr");
     eventErrEl.innerText = "";
 
-    if(!employee?.employee_id){
+    if (!employee || !employee.employee_id) {
       eventErrEl.innerText = "Kein Mitarbeiter";
       return;
     }
 
-    // Mapping zu neuen Endpoints (Variante 2: project_id nur bei clock_in)
-    const map = {
-      clock_in:    { url: "/api/clock/in",    body: { employee_id: employee.employee_id, project_id: projectId || null } },
-      clock_out:   { url: "/api/clock/out",   body: { employee_id: employee.employee_id } },
-      break_start: { url: "/api/break/start", body: { employee_id: employee.employee_id } },
-      break_end:   { url: "/api/break/end",   body: { employee_id: employee.employee_id } },
-    };
+    var url = null;
+    var body = null;
 
-    const cfg = map[type];
-    if(!cfg){
+    if (type === "clock_in") {
+      url = "/api/clock/in";
+      body = { employee_id: employee.employee_id, project_id: projectId || null };
+    } else if (type === "clock_out") {
+      url = "/api/clock/out";
+      body = { employee_id: employee.employee_id };
+    } else if (type === "break_start") {
+      url = "/api/break/start";
+      body = { employee_id: employee.employee_id };
+    } else if (type === "break_end") {
+      url = "/api/break/end";
+      body = { employee_id: employee.employee_id };
+    } else {
       eventErrEl.innerText = "Unbekannter Event-Typ";
       return;
     }
 
-    try{
-      const r = await fetch(cfg.url, {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify(cfg.body)
+    try {
+      var r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
       });
-      const t = await r.text();
-      let d; try { d = JSON.parse(t); } catch { d = { ok:false, error:t }; }
-      if(!r.ok || d.ok === false) throw new Error(d.error || "Zeitbuchung fehlgeschlagen");
 
-      const actionCard = document.getElementById("actionCard");
-      actionCard.innerHTML = `<div class="ok">✅ Gespeichert (${type})</div>`;
-      setTimeout(()=>location.reload(), 2500);
-    }catch(e){
-      eventErrEl.innerText = "❌ " + (e.message || String(e));
+      var t = await r.text();
+      var d;
+      try { d = JSON.parse(t); } catch (e) { d = { ok: false, error: t }; }
+
+      if (!r.ok || d.ok === false) throw new Error(d.error || "Zeitbuchung fehlgeschlagen");
+
+      var actionCard = document.getElementById("actionCard");
+      actionCard.innerHTML = '<div class="ok">✅ Gespeichert (' + type + ')</div>';
+      setTimeout(function () { location.reload(); }, 2500);
+    } catch (e) {
+      eventErrEl.innerText = "❌ " + (e && e.message ? e.message : String(e));
     }
   };
 </script>
-
 </body>
 </html>
