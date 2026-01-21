@@ -2790,6 +2790,73 @@ app.get("/api/admin/report-hours/summary.csv", async (req, res) => {
   }
 });
 // ======================================================
+// ADMIN: Import Employees from Excel (name, employee_id)
+// POST /api/admin/import/employees  (multipart form-data: file)
+// protected by /api/admin guard (x-admin-code: 2012)
+// ======================================================
+app.post("/api/admin/import/employees", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+    let inserted = 0, updated = 0, skipped = 0;
+    const seen = new Set();
+
+    for (const r of rows) {
+      // Excel kann Spaltennamen unterschiedlich groß schreiben
+      const rawId = (r.employee_id ?? r.Employee_ID ?? r.EmployeeId ?? r.id ?? "").toString().trim();
+      const rawName = (r.name ?? r.Name ?? r.employee_name ?? "").toString().trim();
+
+      if (!rawId || !rawName) { skipped++; continue; }
+
+      // IDs aus Excel kommen oft als "1001" oder "1001.0"
+      let employee_id = rawId.replace(/\.0$/, "").trim();
+      let name = commaSwapName(rawName).trim(); // "Nachname, Vorname" -> "Vorname Nachname"
+
+      // sanity
+      if (!employee_id || !name) { skipped++; continue; }
+      if (employee_id.startsWith("AUTO_")) { skipped++; continue; }
+
+      // Doppelte in der Datei überspringen (oder später überschreiben)
+      const key = employee_id;
+      if (seen.has(key)) { skipped++; continue; }
+      seen.add(key);
+
+      // Insert/Update
+      const q = await pool.query(
+        `
+        INSERT INTO employees (employee_id, name)
+        VALUES ($1, $2)
+        ON CONFLICT (employee_id) DO UPDATE
+          SET name = EXCLUDED.name
+        RETURNING (xmax = 0) AS inserted
+        `,
+        [employee_id, name]
+      );
+
+      if (q.rows[0]?.inserted) inserted++;
+      else updated++;
+    }
+
+    res.json({
+      ok: true,
+      file: req.file.originalname,
+      rows_in_file: rows.length,
+      inserted,
+      updated,
+      skipped,
+      note: "Name wird auf 'Vorname Nachname' normalisiert (Komma-Swap).",
+    });
+  } catch (e) {
+    console.error("EMPLOYEE IMPORT ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
 // START
 // ======================================================
 (async () => {
