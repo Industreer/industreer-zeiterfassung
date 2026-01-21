@@ -2684,8 +2684,6 @@ app.get("/api/terminal/login", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
-
-});
 // GET /api/allowed-projects?employee_id=...&date=YYYY-MM-DD
 app.get("/api/allowed-projects", async (req, res) => {
   try {
