@@ -1327,16 +1327,10 @@ app.post("/api/import/staffplan/sharepoint", async (req, res) => {
     const hash = sha256Hex(buf);
     const lastHash = await getSetting("staffplan_last_sha256");
 
-    // Skip only in write mode
-    if (!dryRun && lastHash && lastHash === hash) {
-      return res.json({
-        ok: true,
-        skipped: true,
-        reason: "unchanged_file_hash",
-        sha256: hash,
-        note: "Datei unverändert → kein Import ausgeführt",
-      });
-    }
+// Skip only in write mode AND only if NOT reset
+if (!dryRun && !reset && lastHash && lastHash === hash) {
+  return res.json({ ok:true, skipped:true, reason:"unchanged_file_hash", ... });
+}
 
     const result = await doImportStaffplan({
       buffer: buf,
