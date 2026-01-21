@@ -2626,61 +2626,65 @@ app.post("/api/break/end", async (req, res) => {
 // TERMINAL: Login + Allowed Projects
 // ======================================================
 // GET /api/terminal/login?employee_id=...
+// GET /api/terminal/login?employee_id=...&date=YYYY-MM-DD
 app.get("/api/terminal/login", async (req, res) => {
   try {
     const q = String(req.query.employee_id || "").trim();
+    const date = String(req.query.date || "").trim();
+
     if (!q) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-
-    // 1) exakte employee_id in employees (manuelle ID wie 1001)
-    const exact = await pool.query(
-      `SELECT employee_id, name FROM employees WHERE employee_id=$1 LIMIT 1`,
-      [q]
-    );
-    if (exact.rowCount) {
-      return res.json({ ok: true, employee: exact.rows[0] });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ ok: false, error: "date fehlt/ungültig (YYYY-MM-DD)" });
     }
 
-    // 2) exakte staffplan employee_id (AUTO_...)
-    const spId = await pool.query(
-      `SELECT employee_id, employee_name AS name
-       FROM staffplan
-       WHERE employee_id=$1
-       LIMIT 1`,
-      [q]
+    // 1) Falls exakte employee_id eingegeben wurde: nur zulassen, wenn an diesem Datum geplant
+    const plannedExact = await pool.query(
+      `
+      SELECT employee_id, employee_name AS name
+      FROM staffplan
+      WHERE employee_id=$1 AND work_date=$2::date
+      LIMIT 1
+      `,
+      [q, date]
     );
-    if (spId.rowCount) {
-      return res.json({ ok: true, employee: spId.rows[0] });
+    if (plannedExact.rowCount) {
+      return res.json({ ok: true, employee: plannedExact.rows[0] });
     }
 
-    // 3) Name-Suche (z.B. "Abdullah")
-    const cand = await pool.query(
+    // 2) Name-Suche im Staffplan für GENAU dieses Datum
+    const plannedByName = await pool.query(
       `
       SELECT employee_id, employee_name AS name, COUNT(*)::int AS cnt
       FROM staffplan
-      WHERE employee_name ILIKE $1
+      WHERE work_date=$2::date
+        AND employee_name ILIKE $1
       GROUP BY employee_id, employee_name
       ORDER BY cnt DESC
       LIMIT 10
       `,
-      ['%' + q + '%']
+      ['%' + q + '%', date]
     );
 
-    if (!cand.rowCount) {
-      return res.json({ ok: false, error: "Mitarbeiter nicht gefunden" });
+    if (plannedByName.rowCount) {
+      const best = plannedByName.rows[0];
+      return res.json({
+        ok: true,
+        employee: { employee_id: best.employee_id, name: best.name },
+        candidates: plannedByName.rows
+      });
     }
 
-    // besten Treffer nehmen
-    const best = cand.rows[0];
+    // Niemand geplant -> Login nicht erlaubt
     return res.json({
-      ok: true,
-      employee: { employee_id: best.employee_id, name: best.name },
-      candidates: cand.rows
+      ok: false,
+      error: "Mitarbeiter ist an diesem Datum nicht eingeplant."
     });
-
   } catch (e) {
     console.error("TERMINAL LOGIN ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
+});
+
 });
 // GET /api/allowed-projects?employee_id=...&date=YYYY-MM-DD
 app.get("/api/allowed-projects", async (req, res) => {
