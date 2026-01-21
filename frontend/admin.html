@@ -149,6 +149,24 @@
 
   <div id="moveResult" class="small" style="margin-top:10px"></div>
 </div>
+<!-- ====================================================== -->
+<!-- EMPLOYEES IMPORT (Excel) -->
+<!-- ====================================================== -->
+<div class="card">
+  <h3 style="margin:0 0 8px">Mitarbeiter-IDs importieren (Excel)</h3>
+  <div class="muted small" style="margin-bottom:10px">
+    Erwartet eine Excel mit Spalten <span class="mono">employee_id</span> und <span class="mono">name</span>.
+    Namen dürfen als <span class="mono">Nachname, Vorname</span> kommen (wird normalisiert).
+  </div>
+
+  <div class="row">
+    <input id="empImportFile" type="file" accept=".xlsx"/>
+    <button id="btnEmpImport" class="btn primary">Excel importieren</button>
+    <span id="empImportOut" class="small muted"></span>
+  </div>
+
+  <div id="empImportResult" class="small" style="margin-top:10px"></div>
+</div>
 
 <!-- ====================================================== -->
 <!-- RESET -->
@@ -815,10 +833,74 @@ function renderWeeklyHoursInput(employee_id, current){
       }
     }
   }
+async function importEmployeesExcel(){
+  const fileEl = $("empImportFile");
+  const out = $("empImportOut");
+  const box = $("empImportResult");
+
+  if(out){ out.className = "small muted"; out.textContent = ""; }
+  if(box) box.innerHTML = "";
+
+  if(!fileEl?.files || !fileEl.files[0]){
+    if(out){ out.className = "small bad"; out.textContent = "❌ Bitte eine .xlsx Datei auswählen."; }
+    return;
+  }
+
+  const f = fileEl.files[0];
+  if(!f.name.toLowerCase().endsWith(".xlsx")){
+    if(out){ out.className = "small bad"; out.textContent = "❌ Nur .xlsx erlaubt."; }
+    return;
+  }
+
+  try{
+    if(out){ out.className = "small muted"; out.textContent = "Upload läuft…"; }
+
+    const fd = new FormData();
+    fd.append("file", f);
+
+    // Wichtig: NICHT api() verwenden, weil api() Content-Type sonst falsch setzt.
+    // Wir nutzen fetch direkt, aber mit Admin-Header.
+    const r = await fetch("/api/admin/import/employees", {
+      method: "POST",
+      headers: { "x-admin-code": "2012" },
+      body: fd
+    });
+
+    const t = await r.text();
+    let j; try { j = JSON.parse(t); } catch { j = { ok:false, raw:t }; }
+
+    if(!r.ok || j.ok === false){
+      throw new Error(j.error || j.message || t);
+    }
+
+    if(out){ out.className = "small ok"; out.textContent = "✅ Import fertig"; }
+
+    if(box){
+      box.innerHTML = `
+        <div class="ok"><b>✅ Mitarbeiter importiert</b></div>
+        <div class="small">
+          <div>Datei: <span class="mono">${esc(j.file || f.name)}</span></div>
+          <div>Zeilen in Datei: <b>${esc(j.rows_in_file)}</b></div>
+          <div>Inserted: <b>${esc(j.inserted)}</b>, Updated: <b>${esc(j.updated)}</b>, Skipped: <b>${esc(j.skipped)}</b></div>
+          <div class="muted">${esc(j.note || "")}</div>
+        </div>
+      `;
+    }
+
+    // optional: reload employees list so you see manual IDs immediately
+    await load();
+
+    fileEl.value = "";
+  }catch(e){
+    if(out){ out.className = "small bad"; out.textContent = "❌ " + e.message; }
+  }
+}
 
   // ---------------- EVENTS ----------------
   $("btnUploadLogo")?.addEventListener("click", uploadLogo);
   $("btnReload")?.addEventListener("click", load);
+  $("btnEmpImport")?.addEventListener("click", importEmployeesExcel);
+
   $("btnMove")?.addEventListener("click", move);
   $("btnResetImport")?.addEventListener("click", doReset);
 
