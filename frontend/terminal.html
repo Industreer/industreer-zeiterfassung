@@ -18,6 +18,7 @@
 <div class="card" id="loginCard">
   <h2>Mitarbeiter Anmeldung</h2>
   <input id="empId" placeholder="Mitarbeiter-ID">
+<input id="loginDate" type="date">
   <button onclick="login()">Anmelden</button>
   <div class="err" id="loginErr"></div>
 </div>
@@ -61,7 +62,15 @@
     }
 
     try {
-      var r = await fetch("/api/terminal/login?employee_id=" + encodeURIComponent(id));
+var dateEl = document.getElementById("loginDate");
+var date = (dateEl && dateEl.value) ? dateEl.value : "";
+if (!date) { loginErrEl.innerText = "Bitte Datum auswählen"; return; }
+
+var r = await fetch(
+  "/api/terminal/login?employee_id=" + encodeURIComponent(id) +
+  "&date=" + encodeURIComponent(date)
+);
+
       var t = await r.text();
       var d;
       try { d = JSON.parse(t); } catch (e) { d = { ok: false, error: t }; }
@@ -91,7 +100,7 @@
     var r = await fetch(
       "/api/allowed-projects?employee_id=" +
         encodeURIComponent(employee.employee_id) +
-        "&date=" + encodeURIComponent(chosenDate())
+        "&date=" + encodeURIComponent(document.getElementById("loginDate").value)
     );
     var d = await r.json();
 
