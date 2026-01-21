@@ -2720,8 +2720,75 @@ app.get("/api/allowed-projects", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// ADMIN: Report CSV Export (semicolon for DE Excel)
+// GET /api/admin/report-hours/summary.csv?from=YYYY-MM-DD&to=YYYY-MM-DD
+// ======================================================
+app.get("/api/admin/report-hours/summary.csv", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
 
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
+    }
+    if (to < from) {
+      return res.status(400).send("to darf nicht vor from liegen");
+    }
 
+    const q = await pool.query(
+      `
+      SELECT
+        employee_id,
+        mapped_customer_po,
+        mapped_internal_po,
+        COUNT(*)::int AS days,
+        ROUND(SUM(clamped_hours)::numeric, 2) AS hours
+      FROM v_time_entries_clamped
+      WHERE work_date BETWEEN $1::date AND $2::date
+        AND clamped_hours IS NOT NULL
+        AND COALESCE(mapped_customer_po,'') <> ''
+      GROUP BY employee_id, mapped_customer_po, mapped_internal_po
+      ORDER BY employee_id, mapped_customer_po, mapped_internal_po
+      `,
+      [from, to]
+    );
+
+    // CSV helpers (semicolon + quoting)
+    function csvCell(v) {
+      const s = (v === null || v === undefined) ? "" : String(v);
+      // quote if contains ; " \n \r
+      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    }
+
+    // UTF-8 BOM for Excel
+    let csv = "\ufeff" + [
+      ["employee_id", "customer_po", "internal_po", "days", "hours"].join(";")
+    ].join("\n");
+
+    for (const r of q.rows) {
+      csv += "\n" + [
+        csvCell(r.employee_id),
+        csvCell(r.mapped_customer_po),
+        csvCell(r.mapped_internal_po),
+        csvCell(r.days),
+        csvCell(r.hours)
+      ].join(";");
+    }
+
+    const filename = `report_summary_${from}_to_${to}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (e) {
+    console.error("SUMMARY CSV ERROR:", e);
+    res.status(500).send(e.message || "csv error");
+  }
+});
 // ======================================================
 // START
 // ======================================================
