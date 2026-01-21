@@ -1763,8 +1763,14 @@ app.get("/api/admin/employees", async (req, res) => {
         ON sp.employee_id = e.employee_id
       LEFT JOIN (SELECT employee_id, COUNT(*) AS cnt FROM time_entries GROUP BY employee_id) te
         ON te.employee_id = e.employee_id
-      LEFT JOIN (SELECT employee_id, COUNT(*) AS cnt FROM breaks GROUP BY employee_id) br
-        ON br.employee_id = e.employee_id
+LEFT JOIN (
+  SELECT employee_id, COUNT(*) AS cnt
+  FROM time_events
+  WHERE event_type IN ('break_start','break_end')
+  GROUP BY employee_id
+) br
+  ON br.employee_id = e.employee_id
+
       ORDER BY (CASE WHEN e.employee_id LIKE 'AUTO\\_%' THEN 1 ELSE 0 END) ASC, e.name ASC
     `, [today]);
 
