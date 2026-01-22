@@ -1669,9 +1669,10 @@ app.get("/api/admin/report-hours/summary", async (req, res) => {
       FROM v_time_entries_clamped
       WHERE ${where.join(" AND ")}
       GROUP BY ${groupCols}
-      ${orderBy}
-      params
-    );
+    ${orderBy}
+`,
+params
+);
 
     res.json({ ok: true, from, to, include_po, rows: r.rows });
   } catch (e) {
