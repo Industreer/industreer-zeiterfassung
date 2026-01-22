@@ -1701,7 +1701,6 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
     `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE work_date = $1::date`,
     [date]
   );
-
   res.json({
     ok: true,
     date,
