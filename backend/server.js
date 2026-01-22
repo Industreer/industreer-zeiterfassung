@@ -1344,21 +1344,20 @@ if (!dryRun && !reset && lastHash && lastHash === hash) {
     if (!result.ok) return res.status(500).json(result);
 
     // store last import info only for write
-    if (!dryRun) {
+   if (!dryRun && !reset && lastHash && lastHash === hash) {
       await setSetting("staffplan_last_sha256", hash);
       await setSetting("staffplan_last_run_id", String(result.run_id || ""));
       await setSetting("staffplan_last_import_at", new Date().toISOString());
     }
 
-    return res.json({
-      ...result,
-      sharepoint: { url_saved: true, sha256: hash, skipped_due_to_hash: false },
-    });
-  } catch (e) {
-    console.error("SHAREPOINT IMPORT ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
-  }
+return res.json({
+  ok: true,
+  skipped: true,
+  reason: "unchanged_file_hash",
+  sha256: hash,
+  note: "Datei unverändert → kein Import ausgeführt",
 });
+
 // ======================================================
 // ADMIN: STAFFPLAN + ABSENCES OVERLAY  (Phase 1B)
 // GET /api/admin/staffplan/with-absences?from=YYYY-MM-DD&to=YYYY-MM-DD
