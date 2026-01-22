@@ -1659,7 +1659,6 @@ app.get("/api/admin/report-hours/summary", async (req, res) => {
       WHERE ${where.join(" AND ")}
       GROUP BY ${groupCols}
       ${orderBy}
-      `,
       params
     );
 
