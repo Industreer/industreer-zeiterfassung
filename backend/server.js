@@ -1315,7 +1315,9 @@ app.post("/api/import/staffplan/sharepoint", async (req, res) => {
     const targetEndIso = String(req.query.target_end || "").trim() || null;
 
     const actorIp =
-      (req.headers["x-forwarded-for"] ? String(req.headers["x-forwarded-for"]).split(",")[0].trim() : null) ||
+      (req.headers["x-forwarded-for"]
+        ? String(req.headers["x-forwarded-for"]).split(",")[0].trim()
+        : null) ||
       req.socket?.remoteAddress ||
       null;
 
@@ -1327,10 +1329,16 @@ app.post("/api/import/staffplan/sharepoint", async (req, res) => {
     const hash = sha256Hex(buf);
     const lastHash = await getSetting("staffplan_last_sha256");
 
-// Skip only in write mode AND only if NOT reset
-if (!dryRun && !reset && lastHash && lastHash === hash) {
-  return res.json({ ok:true, skipped:true, reason:"unchanged_file_hash", ... });
-}
+    // Skip nur im WRITE mode UND nur wenn NICHT reset
+    if (!dryRun && !reset && lastHash && lastHash === hash) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: "unchanged_file_hash",
+        sha256: hash,
+        note: "Datei unverändert → kein Import ausgeführt",
+      });
+    }
 
     const result = await doImportStaffplan({
       buffer: buf,
@@ -1340,23 +1348,26 @@ if (!dryRun && !reset && lastHash && lastHash === hash) {
       targetEndIso,
       actorIp,
     });
-    }
+
     if (!result.ok) return res.status(500).json(result);
 
-    // store last import info only for write
-   if (!dryRun && !reset && lastHash && lastHash === hash) {
+    // last import info nur im WRITE mode (dry-run speichert NICHT)
+    if (!dryRun) {
       await setSetting("staffplan_last_sha256", hash);
       await setSetting("staffplan_last_run_id", String(result.run_id || ""));
       await setSetting("staffplan_last_import_at", new Date().toISOString());
     }
 
-return res.json({
-  ok: true,
-  skipped: true,
-  reason: "unchanged_file_hash",
-  sha256: hash,
-  note: "Datei unverändert → kein Import ausgeführt",
+    return res.json({
+      ...result,
+      sharepoint: { url_saved: true, sha256: hash, skipped_due_to_hash: false },
+    });
+  } catch (e) {
+    console.error("SHAREPOINT IMPORT ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
+
 
 // ======================================================
 // ADMIN: STAFFPLAN + ABSENCES OVERLAY  (Phase 1B)
