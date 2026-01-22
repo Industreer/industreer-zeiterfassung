@@ -1340,7 +1340,7 @@ if (!dryRun && !reset && lastHash && lastHash === hash) {
       targetEndIso,
       actorIp,
     });
-
+    }
     if (!result.ok) return res.status(500).json(result);
 
     // store last import info only for write
