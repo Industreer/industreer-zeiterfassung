@@ -2805,6 +2805,185 @@ app.get("/api/admin/report-hours/summary.csv", async (req, res) => {
   }
 });
 // ======================================================
+// ADMIN: Open Sessions (start_ts gesetzt, end_ts fehlt)
+// GET /api/admin/open-sessions?from=YYYY-MM-DD&to=YYYY-MM-DD
+// ======================================================
+app.get("/api/admin/open-sessions", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({ ok: false, error: "from fehlt/ungültig (YYYY-MM-DD)" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "to fehlt/ungültig (YYYY-MM-DD)" });
+    }
+
+    const r = await pool.query(
+      `
+      SELECT
+        employee_id,
+        work_date,
+        mapped_customer_po,
+        mapped_internal_po,
+        start_ts,
+        end_ts,
+        break_minutes
+      FROM v_time_entries_clamped
+      WHERE work_date BETWEEN $1::date AND $2::date
+        AND start_ts IS NOT NULL
+        AND end_ts IS NULL
+      ORDER BY work_date DESC, employee_id ASC
+      `,
+      [from, to]
+    );
+
+    res.json({ ok: true, from, to, rows: r.rows });
+  } catch (e) {
+    console.error("OPEN SESSIONS ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// ======================================================
+// ADMIN: Report Hours Daily (für Nachweise)
+// GET /api/admin/report-hours/daily?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=&internal_po=
+// ======================================================
+app.get("/api/admin/report-hours/daily", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const customer_po = req.query.customer_po != null ? String(req.query.customer_po).trim() : "";
+    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : "";
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({ ok: false, error: "from ungültig (YYYY-MM-DD)" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
+    }
+
+    const params = [from, to];
+    const where = [
+      `work_date BETWEEN $1::date AND $2::date`,
+      `clamped_hours IS NOT NULL`,
+    ];
+
+    if (customer_po) {
+      params.push(customer_po);
+      where.push(`COALESCE(mapped_customer_po,'') = $${params.length}`);
+    }
+    if (internal_po) {
+      params.push(internal_po);
+      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
+    }
+
+    const r = await pool.query(
+      `
+      SELECT
+        work_date,
+        employee_id,
+        mapped_customer_po,
+        mapped_internal_po,
+        start_ts,
+        end_ts,
+        break_minutes,
+        ROUND(clamped_hours::numeric, 4) AS hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      ORDER BY work_date ASC, employee_id ASC
+      `,
+      params
+    );
+
+    res.json({ ok: true, from, to, rows: r.rows });
+  } catch (e) {
+    console.error("REPORT DAILY ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// ======================================================
+// ADMIN: Report Hours Daily CSV
+// GET /api/admin/report-hours/daily.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=&internal_po=
+// ======================================================
+app.get("/api/admin/report-hours/daily.csv", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const customer_po = req.query.customer_po != null ? String(req.query.customer_po).trim() : "";
+    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : "";
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from ungültig");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to ungültig");
+
+    const params = [from, to];
+    const where = [
+      `work_date BETWEEN $1::date AND $2::date`,
+      `clamped_hours IS NOT NULL`,
+    ];
+
+    if (customer_po) {
+      params.push(customer_po);
+      where.push(`COALESCE(mapped_customer_po,'') = $${params.length}`);
+    }
+    if (internal_po) {
+      params.push(internal_po);
+      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
+    }
+
+    const q = await pool.query(
+      `
+      SELECT
+        work_date,
+        employee_id,
+        mapped_customer_po,
+        mapped_internal_po,
+        start_ts,
+        end_ts,
+        break_minutes,
+        ROUND(clamped_hours::numeric, 4) AS hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      ORDER BY work_date ASC, employee_id ASC
+      `,
+      params
+    );
+
+    function csvCell(v) {
+      const s = (v === null || v === undefined) ? "" : String(v);
+      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    }
+
+    let csv = "\ufeff" + [
+      ["work_date","employee_id","customer_po","internal_po","start_ts","end_ts","break_minutes","hours"].join(";")
+    ].join("\n");
+
+    for (const r of q.rows) {
+      csv += "\n" + [
+        csvCell(r.work_date),
+        csvCell(r.employee_id),
+        csvCell(r.mapped_customer_po),
+        csvCell(r.mapped_internal_po),
+        csvCell(r.start_ts),
+        csvCell(r.end_ts),
+        csvCell(r.break_minutes),
+        csvCell(r.hours),
+      ].join(";");
+    }
+
+    const filename = `report_daily_${from}_to_${to}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (e) {
+    console.error("DAILY CSV ERROR:", e);
+    res.status(500).send(e.message || "csv error");
+  }
+});
+
+
+// ======================================================
 // ADMIN: Import Employees from Excel (name, employee_id)
 // POST /api/admin/import/employees  (multipart form-data: file)
 // protected by /api/admin guard (x-admin-code: 2012)
