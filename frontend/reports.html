@@ -28,20 +28,43 @@
 
 <h1>Reports – Arbeitszeiten</h1>
 <div class="muted">
-  Summary-Report (Clamp-Logik berücksichtigt).
+  Abrechnung als Default (nach PO gruppiert) – Clamp-Logik berücksichtigt.
 </div>
 
+<!-- FILTER -->
+<div class="card">
+  <div class="row">
+    <label>Von:</label>
+    <input id="from" type="date"/>
+
+    <label>Bis:</label>
+    <input id="to" type="date"/>
+
+    <label>Code:</label>
+    <input id="code" type="text" value="2012" style="width:110px"/>
+
+    <label class="muted" style="margin-left:8px">
+      <input id="byPo" type="checkbox" checked/> Abrechnung (nach PO)
+    </label>
+  </div>
+</div>
+
+<!-- ACTIONS + STATUS -->
 <div class="card">
   <div class="row" style="gap:10px">
-       <button id="btnSummaryCsv" class="btn">Summary CSV</button>
-
+    <button id="btnLoad" class="btn primary">Summary laden</button>
+    <button id="btnSummaryCsv" class="btn">Summary CSV</button>
     <button id="btnDaily" class="btn">Daily laden</button>
-
     <button id="btnDailyCsv" class="btn">Daily CSV</button>
-
     <button id="btnOpen" class="btn">Offene Zeiten</button>
 
- 
+    <span id="status" class="muted"></span>
+  </div>
+
+  <div id="error" class="bad" style="margin-top:10px"></div>
+</div>
+
+<!-- TABLE -->
 <div class="card">
   <table>
     <thead id="thead"></thead>
@@ -54,12 +77,15 @@
 
   function todayIso(){ return new Date().toISOString().slice(0,10); }
 
-  // Default: heute
-  $("from").value = $("from").value || todayIso();
-  $("to").value = $("to").value || todayIso();
-
   function setStatus(msg){ $("status").textContent = msg || ""; }
   function setError(msg){ $("error").textContent = msg || ""; }
+
+  function getRange(){
+    const from = $("from").value;
+    const to = $("to").value;
+    if(!from || !to) throw new Error("Bitte Zeitraum wählen.");
+    return { from, to };
+  }
 
   async function api(url){
     const code = ($("code").value || "").trim();
@@ -80,7 +106,6 @@
     const tb = $("tbody");
     const th = $("thead");
 
-    // mode: "summary" | "daily" | "open"
     if(mode === "summary"){
       const include_po = $("byPo").checked;
 
@@ -176,13 +201,6 @@
     }
   }
 
-  function getRange(){
-    const from = $("from").value;
-    const to = $("to").value;
-    if(!from || !to) throw new Error("Bitte Zeitraum wählen.");
-    return { from, to };
-  }
-
   async function loadSummary(){
     setError(""); setStatus("Lade Summary…");
     try{
@@ -190,7 +208,7 @@
       const include_po = $("byPo").checked ? 1 : 0;
       const j = await api(`/api/admin/report-hours/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&include_po=${include_po}`);
       render(j.rows || [], "summary");
-      setStatus(`Summary: ${ (j.rows||[]).length } Zeilen`);
+      setStatus(`Summary: ${(j.rows||[]).length} Zeilen`);
     }catch(e){
       setStatus("");
       setError("❌ " + e.message);
@@ -215,7 +233,7 @@
       const {from,to} = getRange();
       const j = await api(`/api/admin/report-hours/daily?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
       render(j.rows || [], "daily");
-      setStatus(`Daily: ${ (j.rows||[]).length } Zeilen`);
+      setStatus(`Daily: ${(j.rows||[]).length} Zeilen`);
     }catch(e){
       setStatus("");
       setError("❌ " + e.message);
@@ -240,7 +258,7 @@
       const {from,to} = getRange();
       const j = await api(`/api/admin/open-sessions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
       render(j.rows || [], "open");
-      setStatus(`Offen: ${ (j.rows||[]).length } Zeilen`);
+      setStatus(`Offen: ${(j.rows||[]).length} Zeilen`);
     }catch(e){
       setStatus("");
       setError("❌ " + e.message);
@@ -248,87 +266,19 @@
     }
   }
 
+  // Defaults
+  $("from").value = $("from").value || todayIso();
+  $("to").value = $("to").value || todayIso();
+
+  // Wire buttons
   $("btnLoad").addEventListener("click", loadSummary);
   $("btnSummaryCsv").addEventListener("click", downloadSummaryCsv);
   $("btnDaily").addEventListener("click", loadDaily);
   $("btnDailyCsv").addEventListener("click", downloadDailyCsv);
   $("btnOpen").addEventListener("click", loadOpen);
 
-  // Default direkt Abrechnung laden
+  // Auto-load (Abrechnung)
   loadSummary();
-</script>
-
-<script>
-  const $ = (id)=>document.getElementById(id);
-
-  function todayIso(){
-    return new Date().toISOString().slice(0,10);
-  }
-
-  // Default: letzter Tag mit Daten ist bei dir oft in der Vergangenheit – daher heute als Start
-  $("from").value = todayIso();
-  $("to").value = todayIso();
-
-  function setStatus(msg){ $("status").textContent = msg || ""; }
-  function setError(msg){ $("error").textContent = msg || ""; }
-
-  async function api(url){
-    const code = ($("code").value || "").trim();
-    const r = await fetch(url, { headers: { "x-admin-code": code } });
-    const t = await r.text();
-    let j;
-    try { j = JSON.parse(t); } catch { j = { ok: false, error: t }; }
-    if(!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
-    return j;
-  }
-
-  function renderTable(rows, include_po){
-    const tb = $("tbody");
-    const poCols = document.querySelectorAll(".poCol");
-    poCols.forEach(c => c.style.display = include_po ? "" : "none");
-
-    if(!rows || !rows.length){
-      tb.innerHTML = `<tr><td colspan="${include_po ? 4 : 3}" class="muted">Keine Daten.</td></tr>`;
-      return;
-    }
-
-    tb.innerHTML = rows.map(r => `
-      <tr>
-        <td class="mono">${r.employee_id}${r.employee_name ? ` — ${r.employee_name}` : ""}</td>
-        ${include_po ? `<td class="mono">${r.mapped_customer_po || ""}</td>` : ""}
-        <td>${r.entries}</td>
-        <td>${Number(r.hours).toFixed(2)}</td>
-      </tr>
-    `).join("");
-  }
-
-  async function loadReport(){
-    setError("");
-    const from = $("from").value;
-    const to = $("to").value;
-    const include_po = $("byPo").checked;
-
-    if(!from || !to){
-      setError("Bitte Zeitraum wählen.");
-      return;
-    }
-
-    setStatus("Lade…");
-
-    try{
-      const url =
-        `/api/admin/report-hours/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&include_po=${include_po ? 1 : 0}`;
-      const j = await api(url);
-      renderTable(j.rows || [], include_po);
-      setStatus(`Zeilen: ${(j.rows||[]).length}`);
-    }catch(e){
-      setStatus("");
-      setError("❌ " + e.message);
-      renderTable([], include_po);
-    }
-  }
-
-  $("btnLoad").addEventListener("click", loadReport);
 </script>
 
 </body>
