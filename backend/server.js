@@ -2225,6 +2225,37 @@ app.get("/api/admin/customer-pos", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// ADMIN: Helper – list internal_po values for a customer_po
+// GET /api/admin/internal-pos?customer_po=...
+// ======================================================
+app.get("/api/admin/internal-pos", async (req, res) => {
+  try {
+    const customer_po = String(req.query.customer_po || "").trim();
+    if (!customer_po) {
+      return res.status(400).json({ ok: false, error: "customer_po fehlt" });
+    }
+
+    const r = await pool.query(
+      `
+      SELECT
+        COALESCE(NULLIF(TRIM(internal_po),''), '') AS internal_po,
+        COUNT(*)::int AS cnt
+      FROM staffplan
+      WHERE customer_po = $1
+      GROUP BY COALESCE(NULLIF(TRIM(internal_po),''), '')
+      ORDER BY cnt DESC, internal_po ASC
+      `,
+      [customer_po]
+    );
+
+    res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("INTERNAL-PO LIST ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 
 // ======================================================
 // ADMIN: ABSENCES API
