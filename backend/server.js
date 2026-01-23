@@ -1644,13 +1644,11 @@ app.get("/api/admin/report-hours", async (req, res) => {
 // ======================================================
 // ADMIN: Report Hours Summary (Phase 2A)
 // ======================================================
-// GET /api/admin/report-hours/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&employee_id=&customer_po=&include_po=0|1
+// GET /api/admin/report-hours/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&include_po=0|1
 app.get("/api/admin/report-hours/summary", async (req, res) => {
   try {
     const from = String(req.query.from || "").trim();
     const to = String(req.query.to || "").trim();
-    const employee_id = req.query.employee_id ? String(req.query.employee_id).trim() : null;
-    const customer_po = req.query.customer_po ? String(req.query.customer_po).trim() : null;
     const include_po = String(req.query.include_po || "0") === "1";
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
@@ -1660,42 +1658,32 @@ app.get("/api/admin/report-hours/summary", async (req, res) => {
       return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
     }
 
-    const where = [];
-    const params = [from, to];
+    const groupCols = include_po
+      ? `employee_id, mapped_customer_po, mapped_internal_po`
+      : `employee_id`;
 
-    where.push(`work_date BETWEEN $1::date AND $2::date`);
-    where.push(`start_ts IS NOT NULL`);
-    where.push(`end_ts IS NOT NULL`);
+    const selectCols = include_po
+      ? `employee_id, mapped_customer_po, mapped_internal_po`
+      : `employee_id`;
 
-    if (employee_id) {
-      params.push(employee_id);
-      where.push(`employee_id = $${params.length}`);
-    }
-    if (customer_po) {
-      params.push(customer_po);
-      where.push(`mapped_customer_po = $${params.length}`);
-    }
-
-    const groupCols = include_po ? `employee_id, mapped_customer_po` : `employee_id`;
-    const selectPo = include_po ? `, mapped_customer_po` : ``;
     const orderBy = include_po
-      ? `ORDER BY employee_id ASC, mapped_customer_po ASC`
+      ? `ORDER BY employee_id ASC, mapped_customer_po ASC, mapped_internal_po ASC`
       : `ORDER BY employee_id ASC`;
 
     const r = await pool.query(
       `
       SELECT
-        employee_id
-        ${selectPo},
-        COUNT(*)::int AS entries,
+        ${selectCols},
+        COUNT(DISTINCT work_date)::int AS days,
         ROUND(SUM(clamped_hours)::numeric, 4) AS hours
       FROM v_time_entries_clamped
-      WHERE ${where.join(" AND ")}
+      WHERE work_date BETWEEN $1::date AND $2::date
+        AND clamped_hours IS NOT NULL
       GROUP BY ${groupCols}
-    ${orderBy}
-`,
-params
-);
+      ${orderBy}
+      `,
+      [from, to]
+    );
 
     res.json({ ok: true, from, to, include_po, rows: r.rows });
   } catch (e) {
@@ -1703,6 +1691,7 @@ params
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 
 // ======================================================
 // DEBUG: Staffplan basics
