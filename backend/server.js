@@ -1691,6 +1691,67 @@ app.get("/api/admin/report-hours/summary", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// ADMIN: Report Hours Weekly (KW) - JSON
+// GET /api/admin/report-hours/weekly?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Optional: &customer_po=&internal_po=&employee_id=
+// ======================================================
+app.get("/api/admin/report-hours/weekly", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const employee_id = req.query.employee_id ? String(req.query.employee_id).trim() : null;
+    const customer_po = req.query.customer_po ? String(req.query.customer_po).trim() : null;
+    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null; // kann "" sein
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).json({ ok:false, error:"from ungültig (YYYY-MM-DD)" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ ok:false, error:"to ungültig (YYYY-MM-DD)" });
+    if (to < from) return res.status(400).json({ ok:false, error:"to darf nicht vor from liegen" });
+
+    const where = [];
+    const params = [from, to];
+
+    where.push(`work_date BETWEEN $1::date AND $2::date`);
+    where.push(`clamped_hours IS NOT NULL`);
+
+    if (employee_id) {
+      params.push(employee_id);
+      where.push(`employee_id = $${params.length}`);
+    }
+    if (customer_po) {
+      params.push(customer_po);
+      where.push(`mapped_customer_po = $${params.length}`);
+    }
+    // internal_po filter: wenn Parameter gesetzt, filtern wir auch "" (leer) gezielt
+    if (internal_po !== null) {
+      params.push(internal_po);
+      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
+    }
+
+    const r = await pool.query(
+      `
+      SELECT
+        EXTRACT(ISOYEAR FROM work_date)::int AS isoyear,
+        EXTRACT(WEEK FROM work_date)::int AS isoweek,
+        employee_id,
+        COALESCE(mapped_customer_po,'') AS customer_po,
+        COALESCE(mapped_internal_po,'') AS internal_po,
+        COUNT(*)::int AS days,
+        ROUND(SUM(clamped_hours)::numeric, 2) AS hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      GROUP BY isoyear, isoweek, employee_id, customer_po, internal_po
+      ORDER BY isoyear ASC, isoweek ASC, employee_id ASC, customer_po ASC, internal_po ASC
+      `,
+      params
+    );
+
+    res.json({ ok:true, from, to, rows: r.rows });
+  } catch (e) {
+    console.error("WEEKLY REPORT ERROR:", e);
+    res.status(500).json({ ok:false, error: e.message });
+  }
+});
 
 
 // ======================================================
@@ -2835,6 +2896,82 @@ app.get("/api/admin/report-hours/summary.csv", async (req, res) => {
     res.status(500).send(e.message || "csv error");
   }
 });
+// ======================================================
+// ADMIN: Weekly CSV Export (semicolon for DE Excel)
+// GET /api/admin/report-hours/weekly.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&code=2012
+// Optional: &customer_po=&internal_po=&employee_id=
+// ======================================================
+app.get("/api/admin/report-hours/weekly.csv", async (req, res) => {
+  try {
+    // Admin Guard ist aktiv, aber CSV wird oft per ?code=2012 geladen -> akzeptieren wir:
+    try { requireCode2012(req); } catch (e) { return res.status(403).send("Falscher Sicherheitscode"); }
+
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const employee_id = req.query.employee_id ? String(req.query.employee_id).trim() : null;
+    const customer_po = req.query.customer_po ? String(req.query.customer_po).trim() : null;
+    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
+    if (to < from) return res.status(400).send("to darf nicht vor from liegen");
+
+    const where = [];
+    const params = [from, to];
+    where.push(`work_date BETWEEN $1::date AND $2::date`);
+    where.push(`clamped_hours IS NOT NULL`);
+
+    if (employee_id) { params.push(employee_id); where.push(`employee_id = $${params.length}`); }
+    if (customer_po) { params.push(customer_po); where.push(`mapped_customer_po = $${params.length}`); }
+    if (internal_po !== null) { params.push(internal_po); where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`); }
+
+    const q = await pool.query(
+      `
+      SELECT
+        EXTRACT(ISOYEAR FROM work_date)::int AS isoyear,
+        EXTRACT(WEEK FROM work_date)::int AS isoweek,
+        employee_id,
+        COALESCE(mapped_customer_po,'') AS customer_po,
+        COALESCE(mapped_internal_po,'') AS internal_po,
+        COUNT(*)::int AS days,
+        ROUND(SUM(clamped_hours)::numeric, 2) AS hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      GROUP BY isoyear, isoweek, employee_id, customer_po, internal_po
+      ORDER BY isoyear ASC, isoweek ASC, employee_id ASC, customer_po ASC, internal_po ASC
+      `,
+      params
+    );
+
+    function csvCell(v){
+      const s = (v === null || v === undefined) ? "" : String(v);
+      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
+      return s;
+    }
+
+    let csv = "\ufeff" + "isoyear;isoweek;employee_id;customer_po;internal_po;days;hours";
+    for (const r of q.rows){
+      csv += "\n" + [
+        csvCell(r.isoyear),
+        csvCell(r.isoweek),
+        csvCell(r.employee_id),
+        csvCell(r.customer_po),
+        csvCell(r.internal_po),
+        csvCell(r.days),
+        csvCell(r.hours),
+      ].join(";");
+    }
+
+    const filename = `report_weekly_${from}_to_${to}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (e) {
+    console.error("WEEKLY CSV ERROR:", e);
+    res.status(500).send(e.message || "csv error");
+  }
+});
+
 // ======================================================
 // ADMIN: Open Sessions (start_ts gesetzt, end_ts fehlt)
 // GET /api/admin/open-sessions?from=YYYY-MM-DD&to=YYYY-MM-DD
