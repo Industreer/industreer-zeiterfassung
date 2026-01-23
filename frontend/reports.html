@@ -46,6 +46,12 @@
     <label class="muted" style="margin-left:8px">
       <input id="byPo" type="checkbox" checked/> Abrechnung (nach PO)
     </label>
+<label class="muted">Customer PO:</label>
+<select id="customerPo" style="padding:10px 12px"></select>
+
+<label class="muted">Interne PO:</label>
+<select id="internalPo" style="padding:10px 12px"></select>
+
   </div>
 </div>
 
@@ -96,6 +102,26 @@
     if(!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
     return j;
   }
+async function loadCustomerPos(){
+  const j = await api(`/api/admin/customer-pos?limit=300`);
+  const sel = $("customerPo");
+  sel.innerHTML = `<option value="">(alle)</option>` + (j.rows||[]).map(r =>
+    `<option value="${r.customer_po}">${r.customer_po} (${r.cnt})</option>`
+  ).join("");
+}
+
+async function loadInternalPos(customerPo){
+  const sel = $("internalPo");
+  sel.innerHTML = `<option value="">(alle)</option>`;
+  if(!customerPo) return;
+
+  const j = await api(`/api/admin/internal-pos?customer_po=${encodeURIComponent(customerPo)}`);
+  sel.innerHTML = `<option value="">(alle)</option>` + (j.rows||[]).map(r => {
+    const v = r.internal_po || "";
+    const label = v ? `${v} (${r.cnt})` : `(leer) (${r.cnt})`;
+    return `<option value="${v}">${label}</option>`;
+  }).join("");
+}
 
   function num(v){
     const n = Number(v);
@@ -206,7 +232,12 @@
     try{
       const {from,to} = getRange();
       const include_po = $("byPo").checked ? 1 : 0;
-      const j = await api(`/api/admin/report-hours/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&include_po=${include_po}`);
+const customer_po = $("customerPo")?.value || "";
+
+let url =
+  `/api/admin/report-hours/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&include_po=${include_po}`;
+if(customer_po) url += `&customer_po=${encodeURIComponent(customer_po)}`;
+
       render(j.rows || [], "summary");
       setStatus(`Summary: ${(j.rows||[]).length} Zeilen`);
     }catch(e){
@@ -231,7 +262,14 @@
     setError(""); setStatus("Lade Daily…");
     try{
       const {from,to} = getRange();
-      const j = await api(`/api/admin/report-hours/daily?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+const customer_po = $("customerPo")?.value || "";
+const internal_po = $("internalPo")?.value || "";
+
+let url =
+  `/api/admin/report-hours/daily?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+if(customer_po) url += `&customer_po=${encodeURIComponent(customer_po)}`;
+if(internal_po !== "") url += `&internal_po=${encodeURIComponent(internal_po)}`;
+
       render(j.rows || [], "daily");
       setStatus(`Daily: ${(j.rows||[]).length} Zeilen`);
     }catch(e){
@@ -245,7 +283,16 @@
     try{
       const {from,to} = getRange();
       const code = ($("code").value || "").trim();
-      const url = `/api/admin/report-hours/daily.csv?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&code=${encodeURIComponent(code)}`;
+const customer_po = $("customerPo")?.value || "";
+const internal_po = $("internalPo")?.value || "";
+
+let url =
+  `/api/admin/report-hours/daily.csv?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&code=${encodeURIComponent(code)}`;
+if(customer_po) url += `&customer_po=${encodeURIComponent(customer_po)}`;
+if(internal_po !== "") url += `&internal_po=${encodeURIComponent(internal_po)}`;
+
+window.location.href = url;
+
       window.location.href = url;
     }catch(e){
       setError("❌ " + e.message);
@@ -279,6 +326,18 @@
 
   // Auto-load (Abrechnung)
   loadSummary();
+  // Dropdown init
+loadCustomerPos()
+  .then(() => loadInternalPos($("customerPo").value))
+  .catch(e => setError("❌ " + e.message));
+
+$("customerPo").addEventListener("change", async () => {
+  await loadInternalPos($("customerPo").value);
+  loadSummary();
+});
+
+$("internalPo").addEventListener("change", () => loadDaily());
+
 </script>
 
 </body>
