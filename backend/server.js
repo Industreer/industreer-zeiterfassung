@@ -2971,6 +2971,156 @@ app.get("/api/admin/report-hours/weekly.csv", async (req, res) => {
     res.status(500).send(e.message || "csv error");
   }
 });
+// ======================================================
+// ADMIN: Customer Invoice (DAILY) CSV
+// GET /api/admin/invoice/daily.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=...&code=2012
+// Optional: &internal_po=   (leer erlaubt)
+// ======================================================
+app.get("/api/admin/invoice/daily.csv", async (req, res) => {
+  try {
+    // CSV wird oft per ?code=2012 geladen -> akzeptieren wir:
+    try { requireCode2012(req); } catch { return res.status(403).send("Falscher Sicherheitscode"); }
+
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const customer_po = String(req.query.customer_po || "").trim();
+    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
+    if (to < from) return res.status(400).send("to darf nicht vor from liegen");
+    if (!customer_po) return res.status(400).send("customer_po fehlt");
+
+    const where = [];
+    const params = [from, to, customer_po];
+
+    where.push(`work_date BETWEEN $1::date AND $2::date`);
+    where.push(`clamped_hours IS NOT NULL`);
+    where.push(`mapped_customer_po = $3`);
+
+    // internal_po filter: wenn Parameter gesetzt, filtern wir auch "" (leer) gezielt
+    if (internal_po !== null) {
+      params.push(internal_po);
+      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
+    }
+
+    // pro Tag pro Mitarbeiter pro interner PO summieren (mehrere Entries pro Tag möglich)
+    const q = await pool.query(
+      `
+      SELECT
+        work_date,
+        employee_id,
+        mapped_customer_po AS customer_po,
+        COALESCE(mapped_internal_po,'') AS internal_po,
+        ROUND(SUM(clamped_hours)::numeric, 2) AS hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      GROUP BY work_date, employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
+      ORDER BY work_date ASC, employee_id ASC, internal_po ASC
+      `,
+      params
+    );
+
+    function csvCell(v){
+      const s = (v === null || v === undefined) ? "" : String(v);
+      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
+      return s;
+    }
+
+    let csv = "\ufeff" + "date;employee_id;customer_po;internal_po;hours";
+    for (const r of q.rows){
+      csv += "\n" + [
+        csvCell(String(r.work_date).slice(0,10)),
+        csvCell(r.employee_id),
+        csvCell(r.customer_po),
+        csvCell(r.internal_po),
+        csvCell(r.hours),
+      ].join(";");
+    }
+
+    const filename = `invoice_daily_${customer_po}_${from}_to_${to}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (e) {
+    console.error("INVOICE DAILY CSV ERROR:", e);
+    res.status(500).send(e.message || "csv error");
+  }
+});
+// ======================================================
+// ADMIN: Customer Invoice (SUMMARY) CSV
+// GET /api/admin/invoice/summary.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=...&code=2012
+// Optional: &internal_po=   (leer erlaubt)
+// ======================================================
+app.get("/api/admin/invoice/summary.csv", async (req, res) => {
+  try {
+    try { requireCode2012(req); } catch { return res.status(403).send("Falscher Sicherheitscode"); }
+
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const customer_po = String(req.query.customer_po || "").trim();
+    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
+    if (to < from) return res.status(400).send("to darf nicht vor from liegen");
+    if (!customer_po) return res.status(400).send("customer_po fehlt");
+
+    const where = [];
+    const params = [from, to, customer_po];
+
+    where.push(`work_date BETWEEN $1::date AND $2::date`);
+    where.push(`clamped_hours IS NOT NULL`);
+    where.push(`mapped_customer_po = $3`);
+
+    if (internal_po !== null) {
+      params.push(internal_po);
+      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
+    }
+
+    const q = await pool.query(
+      `
+      SELECT
+        employee_id,
+        mapped_customer_po AS customer_po,
+        COALESCE(mapped_internal_po,'') AS internal_po,
+        COUNT(DISTINCT work_date)::int AS days,
+        ROUND(SUM(clamped_hours)::numeric, 2) AS hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      GROUP BY employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
+      ORDER BY employee_id ASC, internal_po ASC
+      `,
+      params
+    );
+
+    function csvCell(v){
+      const s = (v === null || v === undefined) ? "" : String(v);
+      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
+      return s;
+    }
+
+    let csv = "\ufeff" + "employee_id;customer_po;internal_po;days;hours";
+    for (const r of q.rows){
+      csv += "\n" + [
+        csvCell(r.employee_id),
+        csvCell(r.customer_po),
+        csvCell(r.internal_po),
+        csvCell(r.days),
+        csvCell(r.hours),
+      ].join(";");
+    }
+
+    const filename = `invoice_summary_${customer_po}_${from}_to_${to}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (e) {
+    console.error("INVOICE SUMMARY CSV ERROR:", e);
+    res.status(500).send(e.message || "csv error");
+  }
+});
+
 
 // ======================================================
 // ADMIN: Open Sessions (start_ts gesetzt, end_ts fehlt)
