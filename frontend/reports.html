@@ -61,6 +61,8 @@
     <button id="btnLoad" class="btn primary">Summary laden</button>
     <button id="btnSummaryCsv" class="btn">Summary CSV</button>
     <button id="btnDaily" class="btn">Daily laden</button>
+<button id="btnWeekly" class="btn">KW laden</button>
+<button id="btnWeeklyCsv" class="btn">KW CSV</button>
     <button id="btnDailyCsv" class="btn">Daily CSV</button>
     <button id="btnOpen" class="btn">Offene Zeiten</button>
 
@@ -148,6 +150,37 @@ async function loadInternalPos(customerPo){
         tb.innerHTML = `<tr><td colspan="${include_po ? 5 : 3}" class="muted">Keine Daten.</td></tr>`;
         return;
       }
+if(mode === "weekly"){
+  th.innerHTML = `
+    <tr>
+      <th>ISO-Jahr</th>
+      <th>KW</th>
+      <th>Mitarbeiter</th>
+      <th class="mono">Customer PO</th>
+      <th class="mono">Interne PO</th>
+      <th>Tage</th>
+      <th>Stunden</th>
+    </tr>
+  `;
+
+  if(!rows || !rows.length){
+    tb.innerHTML = `<tr><td colspan="7" class="muted">Keine Daten.</td></tr>`;
+    return;
+  }
+
+  tb.innerHTML = rows.map(r => `
+    <tr>
+      <td class="mono">${r.isoyear}</td>
+      <td class="mono">${r.isoweek}</td>
+      <td class="mono">${r.employee_id}</td>
+      <td class="mono">${r.customer_po || ""}</td>
+      <td class="mono">${r.internal_po || ""}</td>
+      <td>${r.days ?? ""}</td>
+      <td>${Number(r.hours || 0).toFixed(2)}</td>
+    </tr>
+  `).join("");
+  return;
+}
 
       tb.innerHTML = rows.map(r => `
         <tr>
@@ -312,6 +345,48 @@ window.location.href = url;
       render([], "open");
     }
   }
+async function loadWeekly(){
+  setError(""); setStatus("Lade KW…");
+  try{
+    const {from,to} = getRange();
+
+    // optional: filter aus dropdowns, falls du die schon eingebaut hast
+    const customer_po = $("customerPo")?.value || "";
+    const internal_po = $("internalPo")?.value;
+    const hasInternal = (internal_po !== undefined); // dropdown existiert?
+
+    let url = `/api/admin/report-hours/weekly?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    if(customer_po) url += `&customer_po=${encodeURIComponent(customer_po)}`;
+    if(hasInternal) url += `&internal_po=${encodeURIComponent(internal_po || "")}`;
+
+    const j = await api(url);
+    render(j.rows || [], "weekly");
+    setStatus(`KW: ${(j.rows||[]).length} Zeilen`);
+  }catch(e){
+    setStatus("");
+    setError("❌ " + e.message);
+    render([], "weekly");
+  }
+}
+
+function downloadWeeklyCsv(){
+  try{
+    const {from,to} = getRange();
+    const code = ($("code").value || "").trim();
+
+    const customer_po = $("customerPo")?.value || "";
+    const internal_po = $("internalPo")?.value;
+    const hasInternal = (internal_po !== undefined);
+
+    let url = `/api/admin/report-hours/weekly.csv?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&code=${encodeURIComponent(code)}`;
+    if(customer_po) url += `&customer_po=${encodeURIComponent(customer_po)}`;
+    if(hasInternal) url += `&internal_po=${encodeURIComponent(internal_po || "")}`;
+
+    window.location.href = url;
+  }catch(e){
+    setError("❌ " + e.message);
+  }
+}
 
   // Defaults
   $("from").value = $("from").value || todayIso();
@@ -322,6 +397,9 @@ window.location.href = url;
   $("btnSummaryCsv").addEventListener("click", downloadSummaryCsv);
   $("btnDaily").addEventListener("click", loadDaily);
   $("btnDailyCsv").addEventListener("click", downloadDailyCsv);
+  $("btnWeekly").addEventListener("click", loadWeekly);
+$("btnWeeklyCsv").addEventListener("click", downloadWeeklyCsv);
+
   $("btnOpen").addEventListener("click", loadOpen);
 
   // Auto-load (Abrechnung)
