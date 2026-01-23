@@ -3078,6 +3078,19 @@ app.get("/api/admin/invoice/summary.csv", async (req, res) => {
     const to = String(req.query.to || "").trim();
     const customer_po = String(req.query.customer_po || "").trim();
     const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null;
+    const round_to = req.query.round_to != null ? Number(req.query.round_to) : null;     // z.B. 0.25
+const round_mode = String(req.query.round_mode || "nearest").trim();                // nearest|up|down
+const min_day_hours = req.query.min_day_hours != null ? Number(req.query.min_day_hours) : null; // z.B. 1
+const cap_day_hours = req.query.cap_day_hours != null ? Number(req.query.cap_day_hours) : null; // z.B. 10
+      const rounded = roundHours(r.hours);
+  const billed = applyMinCap(rounded);
+    if (round_to !== null && (!isFinite(round_to) || round_to <= 0 || round_to > 4)) return res.status(400).send("round_to ungültig (z.B. 0.25)");
+if (!["nearest","up","down"].includes(round_mode)) return res.status(400).send("round_mode ungültig (nearest|up|down)");
+for (const [k,v] of [["min_day_hours",min_day_hours],["cap_day_hours",cap_day_hours]]) {
+  if (v !== null && (!isFinite(v) || v < 0 || v > 24)) return res.status(400).send(`${k} ungültig (0..24)`);
+}
+
+
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
@@ -3114,8 +3127,7 @@ app.get("/api/admin/invoice/summary.csv", async (req, res) => {
 const bucket = new Map();
 
 for (const r of (daily.rows || [])) {
-  const rounded = roundHours(r.hours);
-  const billed = applyMinCap(rounded);
+
   if (billed === null) continue;
 
   const key = `${r.employee_id}||${r.customer_po}||${r.internal_po}`;
@@ -3158,20 +3170,6 @@ function applyMinCap(h){
   if (cap_day_hours !== null) x = Math.min(x, cap_day_hours);
   return x;
 }
-
-// rows transform
-const rows = (q.rows || []).map(r => {
-  const raw = r.hours;
-  const rounded = roundHours(raw);
-  const billed = applyMinCap(rounded);
-  return {
-    ...r,
-    hours_raw: raw,
-    hours_rounded: rounded,
-    hours_billed: billed
-  };
-});
-
     function csvCell(v){
       const s = (v === null || v === undefined) ? "" : String(v);
       if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
