@@ -245,6 +245,15 @@ async function migrate() {
       weekly_hours NUMERIC DEFAULT 40
     );
   `);
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS projects (
+    project_id TEXT PRIMARY KEY,
+    customer_po TEXT,
+    internal_po TEXT,
+    customer TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staffplan (
@@ -886,7 +895,21 @@ async function doImportStaffplan({
         dryRun ? "dry-run (no db write)" : "write import",
       ]
     );
-    runId = rr.rows[0].run_id;
+   if (!dryRun && proj) {
+  await client.query(
+    `
+    INSERT INTO projects (project_id, customer_po, internal_po, customer, updated_at)
+    VALUES ($1,$2,$3,$4,NOW())
+    ON CONFLICT (project_id) DO UPDATE
+      SET customer_po = COALESCE(EXCLUDED.customer_po, projects.customer_po),
+          internal_po = COALESCE(EXCLUDED.internal_po, projects.internal_po),
+          customer    = COALESCE(EXCLUDED.customer, projects.customer),
+          updated_at  = NOW()
+    `,
+    [String(proj).trim(), customerPo ? String(customerPo).trim() : null, internalPo ? String(internalPo).trim() : null, customer ? String(customer).trim() : null]
+  );
+}
+ runId = rr.rows[0].run_id;
   } catch (e) {
     console.error("IMPORT_RUNS INSERT ERROR:", e);
   }
