@@ -3162,8 +3162,8 @@ if (bill_travel) prev.travel_billed += tr;
 
   bucket.set(key, prev);
 }
-
-const rows = Array.from(bucket.values()).map(x => ({
+const rows = Array.from(bucket.values())
+  .map(x => ({
   employee_id: x.employee_id,
   customer_po: x.customer_po,
   internal_po: x.internal_po,
