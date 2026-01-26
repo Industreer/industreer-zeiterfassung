@@ -245,15 +245,16 @@ async function migrate() {
       weekly_hours NUMERIC DEFAULT 40
     );
   `);
-await pool.query(`
-  CREATE TABLE IF NOT EXISTS projects (
-    project_id TEXT PRIMARY KEY,
-    customer_po TEXT,
-    internal_po TEXT,
-    customer TEXT,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS projects (
+      project_id TEXT PRIMARY KEY,
+      customer_po TEXT,
+      internal_po TEXT,
+      customer TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staffplan (
@@ -270,21 +271,19 @@ await pool.query(`
       planned_hours NUMERIC
     );
   `);
-  // employees: weekly_hours nachziehen (falls Tabelle schon existiert)
+
   await pool.query(`
     ALTER TABLE employees
     ADD COLUMN IF NOT EXISTS weekly_hours NUMERIC DEFAULT 40;
   `);
-  // ===== STAFFPLAN: Duplikate entfernen + NULL-sicheren Unique Index setzen =====
+
+  // ===== STAFFPLAN: Duplikate entfernen + Unique Index (NULL-sicher) =====
   try {
-    // alten Index entfernen (falls vorhanden)
     await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
 
-    // 1) Duplikate entfernen (behält jeweils die Zeile mit größter id)
     const dedupe = await pool.query(`
       WITH ranked AS (
-        SELECT
-          id,
+        SELECT id,
           ROW_NUMBER() OVER (
             PARTITION BY
               employee_id,
@@ -305,7 +304,6 @@ await pool.query(`
 
     console.log("🧹 staffplan dedupe deleted:", dedupe.rowCount);
 
-    // 2) NULL-sicheren Unique Index erstellen
     await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq2
       ON staffplan (
@@ -320,20 +318,21 @@ await pool.query(`
     console.log("✅ staffplan_uniq2 aktiv");
   } catch (e) {
     console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);
-    // NICHT throwen, sonst startet der Server nicht
-    // normale Indizes
+  }
+
+  // normale Indizes (IMMER ausführen)
   await pool.query(`
     CREATE INDEX IF NOT EXISTS staffplan_by_date
     ON staffplan (work_date);
+  `);
 
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS staffplan_by_date_emp
     ON staffplan (work_date, employee_id);
   `);
 
-
-  // ... hier geht dein migrate() normal weiter (import_runs, app_settings, employee_absences, usw.)
   // ======================================================
-  // PO WORK RULES (Phase 2A)
+  // PO WORK RULES
   // ======================================================
   await pool.query(`
     CREATE TABLE IF NOT EXISTS po_work_rules (
@@ -342,6 +341,7 @@ await pool.query(`
       weekday INT NOT NULL CHECK (weekday BETWEEN 1 AND 7),
       start_time TIME NOT NULL,
       grace_minutes INT NOT NULL DEFAULT 0 CHECK (grace_minutes BETWEEN 0 AND 120),
+      bill_travel boolean NOT NULL DEFAULT false,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (customer_po, weekday)
@@ -353,18 +353,14 @@ await pool.query(`
     ON po_work_rules (customer_po, weekday);
   `);
 
-  console.log("✅ DB migrate finished");
-}
-
-
   // ===== Import History tables =====
   await pool.query(`
     CREATE TABLE IF NOT EXISTS import_runs (
       run_id BIGSERIAL PRIMARY KEY,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       finished_at TIMESTAMPTZ,
-      status TEXT NOT NULL DEFAULT 'running',  -- running|ok|failed
-      mode TEXT NOT NULL,                      -- dry_run|write
+      status TEXT NOT NULL DEFAULT 'running',
+      mode TEXT NOT NULL,
       filename TEXT,
       file_sha256 TEXT,
       target_end DATE,
@@ -386,14 +382,12 @@ await pool.query(`
     CREATE TABLE IF NOT EXISTS staffplan_changes (
       change_id BIGSERIAL PRIMARY KEY,
       run_id BIGINT NOT NULL REFERENCES import_runs(run_id) ON DELETE CASCADE,
-      change_type TEXT NOT NULL, -- insert|update
+      change_type TEXT NOT NULL,
       employee_id TEXT NOT NULL,
       work_date DATE NOT NULL,
       customer_po TEXT,
       internal_po TEXT,
       project_short TEXT,
-
-      -- old values for rollback (only for updates)
       old_employee_name TEXT,
       old_requester_name TEXT,
       old_calendar_week TEXT,
@@ -415,6 +409,41 @@ await pool.query(`
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+
+  // ===== Employee absences =====
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS employee_absences (
+      id BIGSERIAL PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(employee_id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK (type IN ('sick','vacation')),
+      date_from DATE NOT NULL,
+      date_to   DATE NOT NULL,
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','cancelled')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS employee_absences_by_emp_dates
+    ON employee_absences (employee_id, date_from, date_to);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS employee_absences_by_type_dates
+    ON employee_absences (type, date_from, date_to);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS employee_absences_active
+    ON employee_absences (employee_id)
+    WHERE status='active';
+  `);
+
+  console.log("✅ DB migrate finished");
+}
+
 
   // ======================================================
   // EMPLOYEE ABSENCES (sick / vacation)
@@ -895,21 +924,7 @@ async function doImportStaffplan({
         dryRun ? "dry-run (no db write)" : "write import",
       ]
     );
-   if (!dryRun && proj) {
-  await client.query(
-    `
-    INSERT INTO projects (project_id, customer_po, internal_po, customer, updated_at)
-    VALUES ($1,$2,$3,$4,NOW())
-    ON CONFLICT (project_id) DO UPDATE
-      SET customer_po = COALESCE(EXCLUDED.customer_po, projects.customer_po),
-          internal_po = COALESCE(EXCLUDED.internal_po, projects.internal_po),
-          customer    = COALESCE(EXCLUDED.customer, projects.customer),
-          updated_at  = NOW()
-    `,
-    [String(proj).trim(), customerPo ? String(customerPo).trim() : null, internalPo ? String(internalPo).trim() : null, customer ? String(customer).trim() : null]
-  );
-}
- runId = rr.rows[0].run_id;
+  runId = rr.rows[0].run_id;
   } catch (e) {
     console.error("IMPORT_RUNS INSERT ERROR:", e);
   }
@@ -1521,14 +1536,12 @@ app.get("/api/admin/staffplan/with-absences", async (req, res) => {
     );
 
     return res.json({ ok: true, from, to, rows: r.rows });
-  } catch (e) {
-    console.error("WITH-ABSENCES ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
+      } catch (e) {
+    console.error("WEEKLY REPORT ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-
-  
 // ======================================================
 // ADMIN: STAFFPLAN EDIT (planned_hours)
 // PATCH /api/admin/staffplan/planned-hours
