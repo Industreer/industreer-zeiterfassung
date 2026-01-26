@@ -317,7 +317,7 @@ async function migrate() {
 
     console.log("✅ staffplan_uniq2 aktiv");
   } catch (e) {
-    console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);
+    console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);  
   }
 
   // normale Indizes (IMMER ausführen)
