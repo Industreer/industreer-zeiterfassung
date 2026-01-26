@@ -3124,8 +3124,7 @@ const bill_travel = !!bt.rows?.[0]?.bill_travel;
     mapped_customer_po AS customer_po,
     COALESCE(mapped_internal_po,'') AS internal_po,
     SUM(clamped_hours)::numeric AS hours,
-SUM(travel_hours)::numeric AS travel_hours
-
+    SUM(travel_hours)::numeric AS travel_hours
   FROM v_time_entries_clamped
   WHERE ${where.join(" AND ")}
   GROUP BY work_date, employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
@@ -3133,6 +3132,7 @@ SUM(travel_hours)::numeric AS travel_hours
   `,
   params
 );
+
 const bucket = new Map();
 
 for (const r of (daily.rows || [])) {
