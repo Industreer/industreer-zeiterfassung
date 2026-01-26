@@ -1727,30 +1727,25 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
       params.push(internal_po);
       where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
     }
+const r = await pool.query(
+  `
+  SELECT
+    work_date,
+    employee_id,
+    mapped_customer_po AS customer_po,
+    COALESCE(mapped_internal_po,'') AS internal_po,
+    SUM(clamped_hours)::numeric AS hours,
+    SUM(travel_hours)::numeric AS travel_hours
+  FROM v_time_entries_clamped
+  WHERE ${where.join(" AND ")}
+  GROUP BY work_date, employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
+  ORDER BY work_date ASC, employee_id ASC, internal_po ASC
+  `,
+  params
+);
 
-    const r = await pool.query(
-      `
-SELECT
-  work_date,
-  employee_id,
-  mapped_customer_po AS customer_po,
-  COALESCE(mapped_internal_po,'') AS internal_po,
-  SUM(clamped_hours)::numeric AS hours,
-  SUM(travel_hours)::numeric AS travel_hours,
-  BOOL_OR(bill_travel) AS bill_travel
-FROM v_time_entries_clamped
-WHERE ${where.join(" AND ")}
-GROUP BY work_date, employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
-ORDER BY work_date ASC, employee_id ASC, internal_po ASC
+res.json({ ok: true, from, to, rows: r.rows });
 
-    );
-
-    res.json({ ok:true, from, to, rows: r.rows });
-  } catch (e) {
-    console.error("WEEKLY REPORT ERROR:", e);
-    res.status(500).json({ ok:false, error: e.message });
-  }
-});
 
 
 // ======================================================
