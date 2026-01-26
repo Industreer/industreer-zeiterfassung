@@ -3164,16 +3164,19 @@ if (bill_travel) prev.travel_billed += tr;
 }
 const rows = Array.from(bucket.values())
   .map(x => ({
-  employee_id: x.employee_id,
-  customer_po: x.customer_po,
-  internal_po: x.internal_po,
-  days: x.days.size,
-  hours_raw: Math.round(x.hours_raw * 100) / 100,
-  hours_billed: Math.round(x.hours_billed * 100) / 100
-  travel_raw: Math.round(x.travel_raw * 100) / 100,
-travel_billed: Math.round(x.travel_billed * 100) / 100,
-
-})).sort((a,b)=> (a.employee_id.localeCompare(b.employee_id) || a.internal_po.localeCompare(b.internal_po)));
+    employee_id: x.employee_id,
+    customer_po: x.customer_po,
+    internal_po: x.internal_po,
+    days: x.days.size,
+    hours_raw: Math.round(x.hours_raw * 100) / 100,
+    hours_billed: Math.round(x.hours_billed * 100) / 100,
+    travel_raw: Math.round(x.travel_raw * 100) / 100,
+    travel_billed: Math.round(x.travel_billed * 100) / 100,
+  }))
+  .sort((a, b) =>
+    a.employee_id.localeCompare(b.employee_id) ||
+    a.internal_po.localeCompare(b.internal_po)
+  );
 
 function roundHours(val){
   const x = Number(val);
