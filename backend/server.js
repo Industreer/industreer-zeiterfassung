@@ -442,7 +442,7 @@ async function migrate() {
   `);
 
   console.log("✅ DB migrate finished");
-}
+
 
 
   // ======================================================
