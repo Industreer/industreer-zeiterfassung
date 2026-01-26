@@ -3158,6 +3158,9 @@ if (bill_travel) prev.travel_billed += tr;
   prev.days.add(String(r.work_date).slice(0,10));
   prev.hours_raw += Number(r.hours) || 0;
   prev.hours_billed += Number(billed) || 0;
+  prev.travel_raw += travelRaw;
+prev.travel_billed += travelBilled;
+
 
   bucket.set(key, prev);
 }
