@@ -1730,16 +1730,17 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
 const r = await pool.query(
   `
   SELECT
-    work_date,
+    EXTRACT(ISOYEAR FROM work_date)::int AS isoyear,
+    EXTRACT(WEEK FROM work_date)::int AS isoweek,
     employee_id,
-    mapped_customer_po AS customer_po,
+    COALESCE(mapped_customer_po,'') AS customer_po,
     COALESCE(mapped_internal_po,'') AS internal_po,
-    SUM(clamped_hours)::numeric AS hours,
-    SUM(travel_hours)::numeric AS travel_hours
+    COUNT(*)::int AS days,
+    ROUND(SUM(clamped_hours)::numeric, 2) AS hours
   FROM v_time_entries_clamped
   WHERE ${where.join(" AND ")}
-  GROUP BY work_date, employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
-  ORDER BY work_date ASC, employee_id ASC, internal_po ASC
+  GROUP BY isoyear, isoweek, employee_id, customer_po, internal_po
+  ORDER BY isoyear ASC, isoweek ASC, employee_id ASC, customer_po ASC, internal_po ASC
   `,
   params
 );
