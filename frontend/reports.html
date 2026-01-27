@@ -93,6 +93,7 @@
   <button id="btnInvoiceDailyCsv" class="btn">Invoice Daily CSV</button>
 </div>
 
+
 <!-- ACTIONS + STATUS -->
 <div class="card">
   <div class="row" style="gap:10px">
@@ -713,23 +714,24 @@ async function loadInternalPos(customerPo){
     sel.appendChild(opt);
   }
 }
-
-  $("btnInvoiceDaily").addEventListener("click", async () => {
-  setError("");
-  try{
-    setStatus("Lade Invoice Daily…");
-    await loadInvoiceDaily();
-    setStatus("OK");
-  }catch(e){
-    setStatus("");
-    setError("❌ " + e.message);
-    renderInvoiceDaily([]);
-  }
-});
-
 loadCustomerPos()
   .then(()=> loadInternalPos($("customer_po").value))
   .catch(e => setError("❌ " + e.message));
+$("btnInvoiceSummaryCsv").addEventListener("click", () => {
+  const p = getInvoiceParams();
+  if(!p.from || !p.to){ setError("Bitte Zeitraum wählen."); return; }
+  if(!p.customer_po){ setError("Bitte Customer PO wählen."); return; }
+  setError("");
+  openCsv("/api/admin/invoice/summary.csv", p);
+});
+
+$("btnInvoiceDailyCsv").addEventListener("click", () => {
+  const p = getInvoiceParams();
+  if(!p.from || !p.to){ setError("Bitte Zeitraum wählen."); return; }
+  if(!p.customer_po){ setError("Bitte Customer PO wählen."); return; }
+  setError("");
+  openCsv("/api/admin/invoice/daily.csv", p);
+});
 
 </script>
 
