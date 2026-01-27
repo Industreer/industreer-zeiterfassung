@@ -1717,9 +1717,9 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
     const customer_po = req.query.customer_po ? String(req.query.customer_po).trim() : null;
     const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null; // kann "" sein
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).json({ ok:false, error:"from ungültig (YYYY-MM-DD)" });
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ ok:false, error:"to ungültig (YYYY-MM-DD)" });
-    if (to < from) return res.status(400).json({ ok:false, error:"to darf nicht vor from liegen" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).json({ ok: false, error: "from ungültig (YYYY-MM-DD)" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
+    if (to < from) return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
 
     const where = [];
     const params = [from, to];
@@ -1735,45 +1735,36 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
       params.push(customer_po);
       where.push(`mapped_customer_po = $${params.length}`);
     }
-    // internal_po filter: wenn Parameter gesetzt, filtern wir auch "" (leer) gezielt
     if (internal_po !== null) {
       params.push(internal_po);
       where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
     }
-const r = await pool.query(
-  `
-  SELECT
-    EXTRACT(ISOYEAR FROM work_date)::int AS isoyear,
-    EXTRACT(WEEK FROM work_date)::int AS isoweek,
-    employee_id,
-    COALESCE(mapped_customer_po,'') AS customer_po,
-    COALESCE(mapped_internal_po,'') AS internal_po,
-    COUNT(*)::int AS days,
-    ROUND(SUM(clamped_hours)::numeric, 2) AS hours
-  FROM v_time_entries_clamped
-  WHERE ${where.join(" AND ")}
-  GROUP BY isoyear, isoweek, employee_id, customer_po, internal_po
-  ORDER BY isoyear ASC, isoweek ASC, employee_id ASC, customer_po ASC, internal_po ASC
-  `,
-  params
-);
 
-res.json({ ok: true, from, to, rows: r.rows });
+    const r = await pool.query(
+      `
+      SELECT
+        EXTRACT(ISOYEAR FROM work_date)::int AS isoyear,
+        EXTRACT(WEEK FROM work_date)::int AS isoweek,
+        employee_id,
+        COALESCE(mapped_customer_po,'') AS customer_po,
+        COALESCE(mapped_internal_po,'') AS internal_po,
+        COUNT(DISTINCT work_date)::int AS days,
+        ROUND(SUM(clamped_hours)::numeric, 2) AS hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      GROUP BY isoyear, isoweek, employee_id, customer_po, internal_po
+      ORDER BY isoyear ASC, isoweek ASC, employee_id ASC, customer_po ASC, internal_po ASC
+      `,
+      params
+    );
 
-
-
-// ======================================================
-// DEBUG: Staffplan basics
-// ======================================================
-app.get("/api/debug/staffplan-minmax", async (req, res) => {
-  const r = await pool.query(`
-    SELECT MIN(work_date) AS min_date,
-           MAX(work_date) AS max_date,
-           COUNT(*)::int AS total
-    FROM staffplan
-  `);
-  res.json({ ok: true, ...r.rows[0] });
+    return res.json({ ok: true, from, to, rows: r.rows });
+  } catch (e) {
+    console.error("WEEKLY REPORT ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
+
 
 app.get("/api/debug/staffplan-topdates", async (req, res) => {
   const r = await pool.query(`
