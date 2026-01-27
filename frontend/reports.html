@@ -58,10 +58,10 @@
 
 <div class="row">
   <label>Customer PO:</label>
-  <input id="customer_po" type="text" placeholder="z.B. 5101181660" style="width:160px"/>
+<select id="customer_po" style="width:220px"></select>
 
   <label>Internal PO:</label>
-  <input id="internal_po" type="text" placeholder="leer = alle" style="width:160px"/>
+  <select id="internal_po" style="width:220px"></select>
 
   <label class="muted">
     Rundung:
@@ -497,6 +497,41 @@ $("btnInvoiceSummaryCsv").addEventListener("click", () => {
   setError("");
   openCsv("/api/admin/invoice/summary.csv", p);
 });
+async function apiJson(url){
+  const code = ($("code").value || "").trim();
+  const r = await fetch(url, { headers: { "x-admin-code": code } });
+  const t = await r.text();
+  let j;
+  try { j = JSON.parse(t); } catch { j = { ok:false, error:t }; }
+  if(!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+
+async function loadCustomerPos(){
+  const sel = $("customer_po");
+  sel.innerHTML = `<option value="">– Customer PO wählen –</option>`;
+  const j = await apiJson("/api/admin/customer-pos?limit=300");
+  for(const r of (j.rows || [])){
+    const opt = document.createElement("option");
+    opt.value = r.customer_po;
+    opt.textContent = `${r.customer_po} (${r.cnt})`;
+    sel.appendChild(opt);
+  }
+}
+
+async function loadInternalPos(customerPo){
+  const sel = $("internal_po");
+  sel.innerHTML = `<option value="">(alle Internal PO)</option>`;
+  if(!customerPo) return;
+
+  const j = await apiJson(`/api/admin/internal-pos?customer_po=${encodeURIComponent(customerPo)}`);
+  for(const r of (j.rows || [])){
+    const opt = document.createElement("option");
+    opt.value = r.internal_po;              // kann "" sein
+    opt.textContent = r.internal_po ? `${r.internal_po} (${r.cnt})` : `(leer) (${r.cnt})`;
+    sel.appendChild(opt);
+  }
+}
 
 $("btnInvoiceDailyCsv").addEventListener("click", () => {
   const p = getInvoiceParams();
@@ -505,6 +540,16 @@ $("btnInvoiceDailyCsv").addEventListener("click", () => {
   setError("");
   openCsv("/api/admin/invoice/daily.csv", p);
 });
+$("customer_po").addEventListener("change", async () => {
+  try{
+    await loadInternalPos($("customer_po").value);
+  }catch(e){
+    setError("❌ " + e.message);
+  }
+});
+loadCustomerPos()
+  .then(()=> loadInternalPos($("customer_po").value))
+  .catch(e => setError("❌ " + e.message));
 
 </script>
 
