@@ -3183,15 +3183,6 @@ for (const [k,v] of [["min_day_hours",min_day_hours],["cap_day_hours",cap_day_ho
       params.push(internal_po);
       where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
     }
-// bill_travel: darf Reisezeit berechnet werden?
-const bt = await pool.query(
-  `SELECT bool_or(bill_travel) AS bill_travel
-   FROM po_work_rules
-   WHERE customer_po = $1`,
-  [customer_po]
-);
-const bill_travel = !!bt.rows?.[0]?.bill_travel;
-
  // bill_travel: darf Reisezeit berechnet werden?
 const bt = await pool.query(
   `SELECT bool_or(bill_travel) AS bill_travel
