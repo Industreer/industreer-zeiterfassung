@@ -109,12 +109,45 @@
 
   <div id="error" class="bad" style="margin-top:10px"></div>
 </div>
+$("btnInvoiceSummary").addEventListener("click", async () => {
+  setError("");
+  try{
+    setStatus("Lade Invoice Summary…");
+    await loadInvoiceSummary();
+    setStatus("OK");
+  }catch(e){
+    setStatus("");
+    setError("❌ " + e.message);
+  }
+});
 
 <!-- TABLE -->
 <div class="card">
   <table>
     <thead id="thead"></thead>
     <tbody id="tbody"></tbody>
+  </table>
+</div>
+<div class="card">
+  <h3 style="margin:0 0 8px">Invoice – Summary</h3>
+  <div class="muted small">Billed berücksichtigt Rundung/Min/Cap + optional Travel.</div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Mitarbeiter</th>
+        <th>Customer PO</th>
+        <th>Internal PO</th>
+        <th>Tage</th>
+        <th>Std roh</th>
+        <th>Std billed</th>
+        <th>Travel roh</th>
+        <th>Travel billed</th>
+        <th>Bill travel</th>
+        <th>Total billed</th>
+      </tr>
+    </thead>
+    <tbody id="invoiceTbody"></tbody>
   </table>
 </div>
 
@@ -161,6 +194,65 @@ async function loadInternalPos(customerPo){
     const label = v ? `${v} (${r.cnt})` : `(leer) (${r.cnt})`;
     return `<option value="${v}">${label}</option>`;
   }).join("");
+}
+function renderInvoiceSummary(rows){
+  const tb = $("invoiceTbody");
+  if(!rows || !rows.length){
+    tb.innerHTML = `<tr><td colspan="10" class="muted">Keine Daten.</td></tr>`;
+    return;
+  }
+
+  tb.innerHTML = rows.map(r => `
+    <tr>
+      <td class="mono">${r.employee_id}</td>
+      <td class="mono">${r.customer_po || ""}</td>
+      <td class="mono">${r.internal_po || ""}</td>
+      <td>${r.days ?? ""}</td>
+      <td>${Number(r.hours_raw || 0).toFixed(2)}</td>
+      <td>${Number(r.hours_billed || 0).toFixed(2)}</td>
+      <td>${Number(r.travel_raw || 0).toFixed(2)}</td>
+      <td>${Number(r.travel_billed || 0).toFixed(2)}</td>
+      <td>${r.bill_travel ? "1" : "0"}</td>
+      <td><b>${Number(r.total_billed || 0).toFixed(2)}</b></td>
+    </tr>
+  `).join("");
+}
+
+async function loadInvoiceSummary(){
+  const from = $("from").value;
+  const to = $("to").value;
+
+  const customer_po = $("customer_po")?.value || "";
+  const internal_po = $("internal_po")?.value ?? ""; // kann ""
+
+  if(!from || !to) throw new Error("Zeitraum fehlt");
+  if(!customer_po) { renderInvoiceSummary([]); return; }
+
+  // Optional rounding params (falls du Inputs hast)
+  const round_to = $("round_to") ? $("round_to").value : "";
+  const round_mode = $("round_mode") ? $("round_mode").value : "";
+  const min_day_hours = $("min_day_hours") ? $("min_day_hours").value : "";
+  const cap_day_hours = $("cap_day_hours") ? $("cap_day_hours").value : "";
+
+  const qs = new URLSearchParams();
+  qs.set("from", from);
+  qs.set("to", to);
+  qs.set("customer_po", customer_po);
+  qs.set("code", ($("code").value || "").trim());
+
+  // internal_po: nur senden, wenn user bewusst gefiltert hat (select existiert immer)
+  // Wenn du "alle" willst: value="" -> trotzdem senden ist OK (dein Endpoint kann "" filtern)
+  qs.set("internal_po", internal_po);
+
+  if(round_to) qs.set("round_to", round_to);
+  if(round_mode) qs.set("round_mode", round_mode);
+  if(min_day_hours) qs.set("min_day_hours", min_day_hours);
+  if(cap_day_hours) qs.set("cap_day_hours", cap_day_hours);
+
+  const url = `/api/admin/invoice/summary?` + qs.toString();
+  const j = await apiJson(url);
+  // j.rows enthält schon customer_po/internal_po/hours_raw/hours_billed/travel_raw/travel_billed/bill_travel/total_billed
+  renderInvoiceSummary(j.rows || []);
 }
 
   function num(v){
