@@ -3144,6 +3144,8 @@ SELECT
 // ADMIN: Customer Invoice (SUMMARY) CSV
 // GET /api/admin/invoice/summary.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=...&code=2012
 // Optional: &internal_po=   (leer erlaubt)
+// Optional rounding: &round_to=0.25&round_mode=nearest|up|down&min_day_hours=1&cap_day_hours=10
+// Travel = separat, Rundung = Tagesbasis
 // ======================================================
 app.get("/api/admin/invoice/summary.csv", async (req, res) => {
   try {
@@ -3152,25 +3154,58 @@ app.get("/api/admin/invoice/summary.csv", async (req, res) => {
     const from = String(req.query.from || "").trim();
     const to = String(req.query.to || "").trim();
     const customer_po = String(req.query.customer_po || "").trim();
-    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null;
-    const round_to = req.query.round_to != null ? Number(req.query.round_to) : null;     // z.B. 0.25
-const round_mode = String(req.query.round_mode || "nearest").trim();                // nearest|up|down
-const min_day_hours = req.query.min_day_hours != null ? Number(req.query.min_day_hours) : null; // z.B. 1
-const cap_day_hours = req.query.cap_day_hours != null ? Number(req.query.cap_day_hours) : null; // z.B. 10
-      const rounded = roundHours(r.hours);
-  const billed = applyMinCap(rounded);
-    if (round_to !== null && (!isFinite(round_to) || round_to <= 0 || round_to > 4)) return res.status(400).send("round_to ungültig (z.B. 0.25)");
-if (!["nearest","up","down"].includes(round_mode)) return res.status(400).send("round_mode ungültig (nearest|up|down)");
-for (const [k,v] of [["min_day_hours",min_day_hours],["cap_day_hours",cap_day_hours]]) {
-  if (v !== null && (!isFinite(v) || v < 0 || v > 24)) return res.status(400).send(`${k} ungültig (0..24)`);
-}
+    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null; // kann "" sein
 
-
+    const round_to = req.query.round_to != null && String(req.query.round_to).trim() !== "" ? Number(req.query.round_to) : null; // z.B. 0.25
+    const round_mode = String(req.query.round_mode || "nearest").trim(); // nearest|up|down
+    const min_day_hours = req.query.min_day_hours != null && String(req.query.min_day_hours).trim() !== "" ? Number(req.query.min_day_hours) : null; // z.B. 1
+    const cap_day_hours = req.query.cap_day_hours != null && String(req.query.cap_day_hours).trim() !== "" ? Number(req.query.cap_day_hours) : null; // z.B. 10
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
     if (to < from) return res.status(400).send("to darf nicht vor from liegen");
     if (!customer_po) return res.status(400).send("customer_po fehlt");
+
+    if (round_to !== null && (!isFinite(round_to) || round_to <= 0 || round_to > 4)) {
+      return res.status(400).send("round_to ungültig (z.B. 0.25)");
+    }
+    if (!["nearest", "up", "down"].includes(round_mode)) {
+      return res.status(400).send("round_mode ungültig (nearest|up|down)");
+    }
+    for (const [k, v] of [["min_day_hours", min_day_hours], ["cap_day_hours", cap_day_hours]]) {
+      if (v !== null && (!isFinite(v) || v < 0 || v > 24)) return res.status(400).send(`${k} ungültig (0..24)`);
+    }
+
+    function roundHours(val) {
+      const x = Number(val);
+      if (!isFinite(x)) return null;
+      if (round_to === null) return x;
+
+      const units = x / round_to;
+      let r;
+      if (round_mode === "up") r = Math.ceil(units);
+      else if (round_mode === "down") r = Math.floor(units);
+      else r = Math.round(units);
+
+      return r * round_to;
+    }
+
+    function applyMinCap(h) {
+      if (h === null) return null;
+      let x = h;
+      if (min_day_hours !== null) x = Math.max(x, min_day_hours);
+      if (cap_day_hours !== null) x = Math.min(x, cap_day_hours);
+      return x;
+    }
+
+    // bill_travel für diese Customer-PO (einmalig)
+    const btRow = await pool.query(
+      `SELECT bool_or(bill_travel) AS bill_travel
+       FROM po_work_rules
+       WHERE customer_po = $1`,
+      [customer_po]
+    );
+    const bill_travel = !!btRow.rows?.[0]?.bill_travel;
 
     const where = [];
     const params = [from, to, customer_po];
@@ -3183,137 +3218,113 @@ for (const [k,v] of [["min_day_hours",min_day_hours],["cap_day_hours",cap_day_ho
       params.push(internal_po);
       where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
     }
- // bill_travel: darf Reisezeit berechnet werden?
-const bt = await pool.query(
-  `SELECT bool_or(bill_travel) AS bill_travel
-   FROM po_work_rules
-   WHERE customer_po = $1`,
-  [customer_po]
-);
-const bill_travel = !!bt.rows?.[0]?.bill_travel;
 
-// DAILY aggregation (für invoice-Logik: pro Tag runden/min/cap, dann aufsummieren)
-const daily = await pool.query(
-  `
-  SELECT
-    work_date,
-    employee_id,
-    mapped_customer_po AS customer_po,
-    COALESCE(mapped_internal_po,'') AS internal_po,
-    SUM(clamped_hours)::numeric AS hours,
-    SUM(travel_hours)::numeric  AS travel_hours
-  FROM v_time_entries_clamped
-  WHERE ${where.join(" AND ")}
-  GROUP BY work_date, employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
-  ORDER BY work_date ASC, employee_id ASC, internal_po ASC
-  `,
-  params
-);
+    // Daily-Basis: pro Tag+Mitarbeiter+internal_po summieren
+    const daily = await pool.query(
+      `
+      SELECT
+        work_date,
+        employee_id,
+        mapped_customer_po AS customer_po,
+        COALESCE(mapped_internal_po,'') AS internal_po,
+        SUM(clamped_hours)::numeric AS hours,
+        SUM(COALESCE(travel_hours,0))::numeric AS travel_hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      GROUP BY work_date, employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
+      ORDER BY work_date ASC, employee_id ASC, internal_po ASC
+      `,
+      params
+    );
 
-// ---- Helper: rounding / min / cap pro Tag ----
-function roundHours(val){
-  const x = Number(val);
-  if (!isFinite(x)) return null;
-  if (round_to === null) return x;
+    // Bucket je employee_id + customer_po + internal_po
+    const bucket = new Map();
 
-  const units = x / round_to;
-  let r;
-  if (round_mode === "up") r = Math.ceil(units);
-  else if (round_mode === "down") r = Math.floor(units);
-  else r = Math.round(units);
+    for (const r of (daily.rows || [])) {
+      const rawHours = Number(r.hours) || 0;
+      const roundedHours = roundHours(rawHours);
+      const billedHours = applyMinCap(roundedHours);
+      if (billedHours === null) continue;
 
-  return r * round_to;
-}
+      const travelRaw = Number(r.travel_hours) || 0;
+      const travelBilled = bill_travel ? travelRaw : 0;
 
-function applyMinCap(h){
-  if (h === null) return null;
-  let x = h;
-  if (min_day_hours !== null) x = Math.max(x, min_day_hours);
-  if (cap_day_hours !== null) x = Math.min(x, cap_day_hours);
-  return x;
-}
+      const key = `${r.employee_id}||${r.customer_po}||${r.internal_po}`;
+      const prev = bucket.get(key) || {
+        employee_id: r.employee_id,
+        customer_po: r.customer_po,
+        internal_po: r.internal_po,
+        days: new Set(),
+        hours_raw: 0,
+        hours_billed: 0,
+        travel_raw: 0,
+        travel_billed: 0,
+      };
 
-// ---- Bucket: pro employee_id + customer_po + internal_po ----
-const bucket = new Map();
+      prev.days.add(String(r.work_date).slice(0, 10));
+      prev.hours_raw += rawHours;
+      prev.hours_billed += Number(billedHours) || 0;
+      prev.travel_raw += travelRaw;
+      prev.travel_billed += travelBilled;
 
-for (const r of (daily.rows || [])) {
-  const raw = Number(r.hours) || 0;
-  const rounded = roundHours(raw);
-  const billed = applyMinCap(rounded);
-  if (billed === null) continue;
+      bucket.set(key, prev);
+    }
 
-  const tr = Number(r.travel_hours) || 0;
-  const tr_billed = bill_travel ? tr : 0;
+    const rows = Array.from(bucket.values())
+      .map(x => {
+        const total_billed = (Number(x.hours_billed) || 0) + (Number(x.travel_billed) || 0);
+        return {
+          employee_id: x.employee_id,
+          customer_po: x.customer_po,
+          internal_po: x.internal_po,
+          days: x.days.size,
+          hours_raw: Math.round(x.hours_raw * 100) / 100,
+          hours_billed: Math.round(x.hours_billed * 100) / 100,
+          travel_raw: Math.round(x.travel_raw * 100) / 100,
+          travel_billed: Math.round(x.travel_billed * 100) / 100,
+          bill_travel: bill_travel ? 1 : 0,
+          total_billed: Math.round(total_billed * 100) / 100,
+        };
+      })
+      .sort((a, b) =>
+        a.employee_id.localeCompare(b.employee_id) ||
+        a.internal_po.localeCompare(b.internal_po)
+      );
 
-  const key = `${r.employee_id}||${r.customer_po}||${r.internal_po}`;
-  const prev = bucket.get(key) || {
-    employee_id: r.employee_id,
-    customer_po: r.customer_po,
-    internal_po: r.internal_po,
-    days: new Set(),
-    hours_raw: 0,
-    hours_billed: 0,
-    travel_raw: 0,
-    travel_billed: 0,
-    bill_travel: bill_travel ? 1 : 0
-  };
-
-  prev.days.add(String(r.work_date).slice(0,10));
-  prev.hours_raw += raw;
-  prev.hours_billed += Number(billed) || 0;
-  prev.travel_raw += tr;
-  prev.travel_billed += tr_billed;
-
-  bucket.set(key, prev);
-}
-
-const rows = Array.from(bucket.values())
-  .map(x => ({
-    employee_id: x.employee_id,
-    customer_po: x.customer_po,
-    internal_po: x.internal_po,
-    days: x.days.size,
-    hours_raw: Math.round(x.hours_raw * 100) / 100,
-    hours_billed: Math.round(x.hours_billed * 100) / 100,
-    travel_raw: Math.round(x.travel_raw * 100) / 100,
-    travel_billed: Math.round(x.travel_billed * 100) / 100,
-    bill_travel: x.bill_travel,
-    total_billed: Math.round((x.hours_billed + x.travel_billed) * 100) / 100
-  }))
-  .sort((a,b)=> a.employee_id.localeCompare(b.employee_id) || a.internal_po.localeCompare(b.internal_po));
-
-    function csvCell(v){
+    function csvCell(v) {
       const s = (v === null || v === undefined) ? "" : String(v);
-      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
+      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
       return s;
     }
 
-let csv = "\ufeff" + "employee_id;customer_po;internal_po;days;hours_raw;hours_billed;travel_raw;travel_billed;bill_travel;total_billed";
+    let csv = "\ufeff" +
+      "employee_id;customer_po;internal_po;days;hours_raw;hours_billed;travel_raw;travel_billed;bill_travel;total_billed";
 
-for (const r of rows){
-  csv += "\n" + [
-    csvCell(r.employee_id),
-    csvCell(r.customer_po),
-    csvCell(r.internal_po),
-    csvCell(r.days),
-    csvCell(r.hours_raw),
-    csvCell(r.hours_billed),
-    csvCell(r.travel_raw),
-    csvCell(r.travel_billed),
-    csvCell(r.bill_travel),
-    csvCell(r.total_billed),
-  ].join(";");
-}
+    for (const r of rows) {
+      csv += "\n" + [
+        csvCell(r.employee_id),
+        csvCell(r.customer_po),
+        csvCell(r.internal_po),
+        csvCell(r.days),
+        csvCell(r.hours_raw),
+        csvCell(r.hours_billed),
+        csvCell(r.travel_raw),
+        csvCell(r.travel_billed),
+        csvCell(r.bill_travel),
+        csvCell(r.total_billed),
+      ].join(";");
+    }
 
     const filename = `invoice_summary_${customer_po}_${from}_to_${to}.csv`;
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(csv);
+    return res.send(csv);
   } catch (e) {
     console.error("INVOICE SUMMARY CSV ERROR:", e);
-    res.status(500).send(e.message || "csv error");
+    return res.status(500).send(e.message || "csv error");
   }
 });
+
 
 
 // ======================================================
