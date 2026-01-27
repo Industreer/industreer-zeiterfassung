@@ -467,35 +467,26 @@ if(mode === "weekly"){
   }
 
   async function loadSummary(){
-    setError(""); setStatus("Lade Summary…");
-    try{
-      const {from,to} = getRange();
-      const include_po = $("byPo").checked ? 1 : 0;
-const customer_po = $("customerPo")?.value || "";
+  setError(""); setStatus("Lade Summary…");
+  try{
+    const {from,to} = getRange();
+    const include_po = $("byPo").checked ? 1 : 0;
+    const customer_po = $("customerPo")?.value || "";
 
-let url =
-  `/api/admin/report-hours/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&include_po=${include_po}`;
-if(customer_po) url += `&customer_po=${encodeURIComponent(customer_po)}`;
+    let url =
+      `/api/admin/report-hours/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&include_po=${include_po}`;
+    if(customer_po) url += `&customer_po=${encodeURIComponent(customer_po)}`;
 
-      render(j.rows || [], "summary");
-      setStatus(`Summary: ${(j.rows||[]).length} Zeilen`);
-    }catch(e){
-      setStatus("");
-      setError("❌ " + e.message);
-      render([], "summary");
-    }
+    const j = await api(url); // ✅ DIESE ZEILE FEHLTE
+
+    render(j.rows || [], "summary");
+    setStatus(`Summary: ${(j.rows||[]).length} Zeilen`);
+  }catch(e){
+    setStatus("");
+    setError("❌ " + e.message);
+    render([], "summary");
   }
-
-  function downloadSummaryCsv(){
-    try{
-      const {from,to} = getRange();
-      const code = ($("code").value || "").trim();
-      const url = `/api/admin/report-hours/summary.csv?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&code=${encodeURIComponent(code)}`;
-      window.location.href = url;
-    }catch(e){
-      setError("❌ " + e.message);
-    }
-  }
+}
 
   async function loadDaily(){
     setError(""); setStatus("Lade Daily…");
