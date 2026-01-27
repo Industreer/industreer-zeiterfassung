@@ -3060,8 +3060,8 @@ app.get("/api/admin/invoice/daily.csv", async (req, res) => {
     // travel_hours kommt aus deiner v_time_entries_clamped (berechnet aus travel_minutes)
     const q = await pool.query(
       `
-      SELECT
-        work_date,
+SELECT
+  to_char(work_date, 'YYYY-MM-DD') AS work_date,
         employee_id,
         mapped_customer_po AS customer_po,
         COALESCE(mapped_internal_po,'') AS internal_po,
