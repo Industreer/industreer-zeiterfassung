@@ -89,9 +89,7 @@
 </div>
 
 <div class="row" style="margin-top:10px">
-  <button id="btnInvoiceSummaryCsv" class="btn">Invoice Summary CSV</button>
-  <button id="btnInvoiceDailyCsv" class="btn">Invoice Daily CSV</button>
-</div>
+
 
 
 <!-- ACTIONS + STATUS -->
@@ -110,18 +108,6 @@
 
   <div id="error" class="bad" style="margin-top:10px"></div>
 </div>
-$("btnInvoiceSummary").addEventListener("click", async () => {
-  setError("");
-  try{
-    setStatus("Lade Invoice Summary…");
-    await loadInvoiceSummary();
-    setStatus("OK");
-  }catch(e){
-    setStatus("");
-    setError("❌ " + e.message);
-  }
-});
-
 <!-- TABLE -->
 <div class="card">
   <table>
