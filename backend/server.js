@@ -3781,6 +3781,133 @@ app.get("/api/admin/report-hours/daily.csv", async (req, res) => {
     res.status(500).send(e.message || "csv error");
   }
 });
+// ======================================================
+// A8: INVOICES (Draft) - create invoice snapshot from STAFFPLAN (planned hours)
+// POST /api/admin/invoices/create-planned
+// Body: { customer_po, from, to, internal_po? }
+// NOTE: amount/total_amount are HOURS (planned), no rates yet.
+// ======================================================
+app.post("/api/admin/invoices/create-planned", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const customer_po = String(req.body?.customer_po || "").trim();
+    const from = String(req.body?.from || "").trim();
+    const to = String(req.body?.to || "").trim();
+    const internal_po = req.body?.internal_po != null ? String(req.body.internal_po).trim() : null; // can be "" or null
+
+    if (!customer_po) return res.status(400).json({ ok: false, error: "customer_po fehlt" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).json({ ok: false, error: "from ungültig (YYYY-MM-DD)" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
+    if (to < from) return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+
+    await client.query("BEGIN");
+
+    // best-effort customer label
+    const custRow = await client.query(
+      `
+      SELECT MAX(customer) AS customer
+      FROM staffplan
+      WHERE customer_po = $1 AND customer IS NOT NULL AND customer <> ''
+      `,
+      [customer_po]
+    );
+    const customer = custRow.rows?.[0]?.customer || null;
+
+    // aggregate planned hours per employee (+ internal_po bucket)
+    const where = [];
+    const params = [customer_po, from, to];
+    where.push(`customer_po = $1`);
+    where.push(`work_date BETWEEN $2::date AND $3::date`);
+    where.push(`planned_hours IS NOT NULL`);
+    where.push(`planned_hours > 0`);
+
+    if (internal_po !== null) {
+      params.push(internal_po);
+      where.push(`COALESCE(internal_po,'') = $${params.length}`);
+    }
+
+    const agg = await client.query(
+      `
+      SELECT
+        employee_id,
+        MAX(employee_name) AS employee_name,
+        COALESCE(internal_po,'') AS internal_po,
+        COUNT(DISTINCT work_date)::int AS days,
+        SUM(planned_hours)::numeric AS hours
+      FROM staffplan
+      WHERE ${where.join(" AND ")}
+      GROUP BY employee_id, COALESCE(internal_po,'')
+      ORDER BY employee_id ASC, internal_po ASC
+      `,
+      params
+    );
+
+    if (!agg.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        ok: false,
+        error: "Keine Planstunden im Zeitraum (staffplan.planned_hours).",
+      });
+    }
+
+    // create invoice (draft, no number)
+    const totalHours = Math.round((agg.rows.reduce((s, r) => s + (Number(r.hours) || 0), 0)) * 100) / 100;
+
+    const inv = await client.query(
+      `
+      INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount)
+      VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5)
+      RETURNING id
+      `,
+      [customer_po, customer, from, to, totalHours]
+    );
+    const invoice_id = inv.rows[0].id;
+
+    // lines
+    let lines = 0;
+    for (const r of agg.rows) {
+      const hours = Math.round((Number(r.hours) || 0) * 100) / 100;
+      if (hours <= 0) continue;
+
+      const desc =
+        `Planstunden – ${r.employee_name || r.employee_id} (${r.employee_id})` +
+        (r.internal_po ? ` / Internal PO: ${r.internal_po}` : "") +
+        ` / Tage: ${r.days}`;
+
+      await client.query(
+        `
+        INSERT INTO invoice_lines (invoice_id, description, quantity, unit, unit_price, amount)
+        VALUES ($1,$2,$3,'h',NULL,$3)
+        `,
+        [invoice_id, desc, hours]
+      );
+      lines++;
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      invoice_id,
+      status: "draft",
+      source: "staffplan.planned_hours",
+      customer_po,
+      customer,
+      period_start: from,
+      period_end: to,
+      currency: "EUR",
+      total_amount: totalHours,
+      lines,
+      note: "Rechnung basiert auf Planstunden (nicht auf echten Zeiten). total_amount/amount sind Stunden.",
+    });
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error("INVOICE CREATE PLANNED ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
 
 
 // ======================================================
