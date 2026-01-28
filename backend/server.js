@@ -3977,29 +3977,6 @@ app.post("/api/admin/import/employees", upload.single("file"), async (req, res) 
   }
 });
 // ======================================================
-// A8: INVOICES - get invoice + lines
-// GET /api/admin/invoices/:id
-// ======================================================
-app.get("/api/admin/invoices/:id", async (req, res) => {
-  try {
-    const id = String(req.params.id || "").trim();
-    if (!/^\d+$/.test(id)) return res.status(400).json({ ok: false, error: "id ungültig" });
-
-    const inv = await pool.query(`SELECT * FROM invoices WHERE id=$1::bigint`, [id]);
-    if (!inv.rowCount) return res.status(404).json({ ok: false, error: "Invoice nicht gefunden" });
-
-    const lines = await pool.query(
-      `SELECT * FROM invoice_lines WHERE invoice_id=$1::bigint ORDER BY id ASC`,
-      [id]
-    );
-
-    res.json({ ok: true, invoice: inv.rows[0], lines: lines.rows });
-  } catch (e) {
-    console.error("GET INVOICE ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// ======================================================
 // A8: INVOICES - CSV export from invoice_lines (semicolon, Excel-DE)
 // GET /api/admin/invoices/:id.csv
 // ======================================================
@@ -4044,6 +4021,29 @@ app.get("/api/admin/invoices/:id.csv", async (req, res) => {
   } catch (e) {
     console.error("INVOICE CSV ERROR:", e);
     res.status(500).send(e.message || "csv error");
+  }
+});
+// ======================================================
+// A8: INVOICES - get invoice + lines
+// GET /api/admin/invoices/:id
+// ======================================================
+app.get("/api/admin/invoices/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!/^\d+$/.test(id)) return res.status(400).json({ ok: false, error: "id ungültig" });
+
+    const inv = await pool.query(`SELECT * FROM invoices WHERE id=$1::bigint`, [id]);
+    if (!inv.rowCount) return res.status(404).json({ ok: false, error: "Invoice nicht gefunden" });
+
+    const lines = await pool.query(
+      `SELECT * FROM invoice_lines WHERE invoice_id=$1::bigint ORDER BY id ASC`,
+      [id]
+    );
+
+    res.json({ ok: true, invoice: inv.rows[0], lines: lines.rows });
+  } catch (e) {
+    console.error("GET INVOICE ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
