@@ -4046,6 +4046,80 @@ app.get("/api/admin/invoices/:id", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// A8: INVOICES - finalize (assign invoice_number + lock)
+// POST /api/admin/invoices/:id/finalize
+// Body: { }
+// ======================================================
+app.post("/api/admin/invoices/:id/finalize", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    // admin guard already applies for /api/admin/*, but keep consistent:
+    // (optional) requireCode2012(req);
+
+    const id = String(req.params.id || "").trim();
+    if (!/^\d+$/.test(id)) return res.status(400).json({ ok: false, error: "id ungültig" });
+
+    await client.query("BEGIN");
+
+    const inv = await client.query(`SELECT * FROM invoices WHERE id=$1::bigint FOR UPDATE`, [id]);
+    if (!inv.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "Invoice nicht gefunden" });
+    }
+
+    const row = inv.rows[0];
+    if (row.status !== "draft") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: `Finalize nur möglich bei status=draft (aktuell: ${row.status})` });
+    }
+
+    // Must have at least one line
+    const lines = await client.query(`SELECT COUNT(*)::int AS cnt FROM invoice_lines WHERE invoice_id=$1::bigint`, [id]);
+    if ((lines.rows?.[0]?.cnt || 0) <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "Invoice hat keine Positionen (invoice_lines leer)" });
+    }
+
+    const year = new Date().getUTCFullYear();
+
+    // bump counter safely
+    const c = await client.query(
+      `
+      INSERT INTO invoice_counters (year, last_number)
+      VALUES ($1, 1)
+      ON CONFLICT (year)
+      DO UPDATE SET last_number = invoice_counters.last_number + 1
+      RETURNING last_number
+      `,
+      [year]
+    );
+
+    const last_number = Number(c.rows[0].last_number);
+    const invoice_number = `INV-${year}-${String(last_number).padStart(6, "0")}`;
+
+    await client.query(
+      `
+      UPDATE invoices
+      SET invoice_number=$2,
+          status='final',
+          finalized_at=NOW()
+      WHERE id=$1::bigint
+      `,
+      [id, invoice_number]
+    );
+
+    await client.query("COMMIT");
+
+    return res.json({ ok: true, invoice_id: id, status: "final", invoice_number });
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error("FINALIZE INVOICE ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
 
 // ======================================================
 // START
