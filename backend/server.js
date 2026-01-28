@@ -38,6 +38,46 @@ function requireCode2012(req) {
     throw err;
   }
 }
+// ======================================================
+// A9.9: Public cron trigger with secret token (stable for Render cron)
+// GET /api/cron/run?token=...&mode=monthly|weekly
+// ======================================================
+app.get("/api/cron/run", async (req, res) => {
+  try {
+    const token = String(req.query.token || "").trim();
+    const mode = String(req.query.mode || "").trim(); // monthly|weekly
+
+    if (!process.env.CRON_TOKEN) {
+      return res.status(500).json({ ok: false, error: "CRON_TOKEN not configured" });
+    }
+    if (token !== process.env.CRON_TOKEN) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+    if (!["monthly", "weekly"].includes(mode)) {
+      return res.status(400).json({ ok: false, error: "mode must be monthly|weekly" });
+    }
+
+    // Call the same logic as automation/run by performing an internal HTTP call to self:
+    const base = `http://127.0.0.1:${PORT}`;
+    const r = await fetch(`${base}/api/admin/automation/run`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-code": "2012"
+      },
+      body: JSON.stringify({ mode, date: todayIsoBerlin() })
+    });
+
+    const text = await r.text();
+    let j; try { j = JSON.parse(text); } catch { j = { ok: false, error: text }; }
+    if (!r.ok || j.ok === false) return res.status(500).json({ ok: false, error: j.error || "automation failed", raw: j });
+
+    return res.json({ ok: true, mode, ran_at: new Date().toISOString(), result: j });
+  } catch (e) {
+    console.error("CRON RUN ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ======================================================
 // ADMIN ROUTE GUARD (VARIANTE B)
