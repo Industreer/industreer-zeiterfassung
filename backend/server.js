@@ -3999,6 +3999,53 @@ app.get("/api/admin/invoices/:id", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// A8: INVOICES - CSV export from invoice_lines (semicolon, Excel-DE)
+// GET /api/admin/invoices/:id.csv
+// ======================================================
+app.get("/api/admin/invoices/:id.csv", async (req, res) => {
+  try {
+    try { requireCode2012(req); } catch { return res.status(403).send("Falscher Sicherheitscode"); }
+
+    const id = String(req.params.id || "").trim();
+    if (!/^\d+$/.test(id)) return res.status(400).send("id ungültig");
+
+    const inv = await pool.query(`SELECT * FROM invoices WHERE id=$1::bigint`, [id]);
+    if (!inv.rowCount) return res.status(404).send("Invoice nicht gefunden");
+
+    const lines = await pool.query(
+      `SELECT description, quantity, unit, unit_price, amount FROM invoice_lines WHERE invoice_id=$1::bigint ORDER BY id ASC`,
+      [id]
+    );
+
+    function csvCell(v) {
+      const s = (v === null || v === undefined) ? "" : String(v);
+      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    }
+
+    let csv = "\ufeff" + ["description;quantity;unit;unit_price;amount"].join("\n");
+    for (const r of lines.rows) {
+      csv += "\n" + [
+        csvCell(r.description),
+        csvCell(r.quantity),
+        csvCell(r.unit),
+        csvCell(r.unit_price),
+        csvCell(r.amount),
+      ].join(";");
+    }
+
+    const r0 = inv.rows[0];
+    const filename = `invoice_${r0.invoice_number || ("draft_" + r0.id)}_${r0.customer_po}_${r0.period_start}_to_${r0.period_end}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (e) {
+    console.error("INVOICE CSV ERROR:", e);
+    res.status(500).send(e.message || "csv error");
+  }
+});
 
 // ======================================================
 // START
