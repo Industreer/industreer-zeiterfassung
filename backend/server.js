@@ -3977,6 +3977,79 @@ app.post("/api/admin/import/employees", upload.single("file"), async (req, res) 
   }
 });
 // ======================================================
+// A8: INVOICES - PDF export
+// GET /api/admin/invoices/:id.pdf?code=2012
+// ======================================================
+app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
+  try {
+    try { requireCode2012(req); } catch { return res.status(403).send("Falscher Sicherheitscode"); }
+
+    const id = String(req.params.id || "").trim();
+    if (!/^\d+$/.test(id)) return res.status(400).send("id ungültig");
+
+    const inv = await pool.query(`SELECT * FROM invoices WHERE id=$1::bigint`, [id]);
+    if (!inv.rowCount) return res.status(404).send("Invoice nicht gefunden");
+    const invoice = inv.rows[0];
+
+    const linesQ = await pool.query(
+      `SELECT description, quantity, unit, unit_price, amount
+       FROM invoice_lines
+       WHERE invoice_id=$1::bigint
+       ORDER BY id ASC`,
+      [id]
+    );
+    const lines = linesQ.rows || [];
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${invoice.invoice_number || "invoice_"+id}.pdf"`
+    );
+
+    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    doc.pipe(res);
+
+    // Titel
+    doc.fontSize(20).text("Rechnung", { align: "right" });
+    doc.moveDown();
+
+    // Meta
+    doc.fontSize(10);
+    doc.text(`Rechnungsnummer: ${invoice.invoice_number || "-"}`);
+    doc.text(`Kunde: ${invoice.customer || "-"}`);
+    doc.text(`Kunden-PO: ${invoice.customer_po}`);
+    doc.text(
+      `Leistungszeitraum: ${String(invoice.period_start).slice(0,10)} – ${String(invoice.period_end).slice(0,10)}`
+    );
+    doc.moveDown();
+
+    // Tabelle
+    doc.fontSize(10);
+    doc.text("Beschreibung", 50, doc.y);
+    doc.text("Menge", 350, doc.y);
+    doc.text("Einheit", 420, doc.y);
+    doc.text("Betrag", 480, doc.y);
+    doc.moveDown();
+
+    for (const l of lines) {
+      doc.text(l.description, 50, doc.y, { width: 280 });
+      doc.text(l.quantity ?? "", 350, doc.y);
+      doc.text(l.unit ?? "", 420, doc.y);
+      doc.text(l.amount ?? "", 480, doc.y);
+      doc.moveDown();
+    }
+
+    doc.moveDown();
+    doc.fontSize(11).text(`Gesamt: ${invoice.total_amount}`, { align: "right" });
+
+    doc.end();
+  } catch (e) {
+    console.error("PDF ERROR:", e);
+    res.status(500).send("PDF Fehler");
+  }
+});
+
+// ======================================================
 // A8: INVOICES - CSV export from invoice_lines (semicolon, Excel-DE)
 // GET /api/admin/invoices/:id.csv
 // ======================================================
