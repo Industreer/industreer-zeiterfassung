@@ -709,6 +709,8 @@ $("btnInvoiceDailyCsv").addEventListener("click", () => {
   setError("");
   openCsv("/api/admin/invoice/daily.csv", p);
 });
+
+</script>
 <!-- =======================================================
 U8.12 – Invoice UI (minimal)
 Fügt Buttons hinzu für: create-planned, finalize, pdf/csv, export
@@ -876,7 +878,6 @@ Fügt Buttons hinzu für: create-planned, finalize, pdf/csv, export
     } catch (e) { out("ERROR: " + e.message); }
   };
 })();
-</script>
-
+  </script>
 </body>
 </html>
