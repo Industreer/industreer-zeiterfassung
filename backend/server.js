@@ -277,6 +277,73 @@ async function migrate() {
     ALTER TABLE employees
     ADD COLUMN IF NOT EXISTS weekly_hours NUMERIC DEFAULT 40;
   `);
+  // ======================================================
+// A8.11: INVOICES - mark as exported
+// POST /api/admin/invoices/:id/export
+// Body: { note? }  (optional)
+// ======================================================
+app.post("/api/admin/invoices/:id/export", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!/^\d+$/.test(id)) return res.status(400).json({ ok: false, error: "id ungültig" });
+
+    const note = req.body?.note != null ? String(req.body.note).trim() : null;
+
+    await client.query("BEGIN");
+
+    const inv = await client.query(`SELECT * FROM invoices WHERE id=$1::bigint FOR UPDATE`, [id]);
+    if (!inv.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "Invoice nicht gefunden" });
+    }
+
+    const row = inv.rows[0];
+
+    if (row.status === "draft") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "Export nur möglich, wenn status=final (draft ist nicht erlaubt)" });
+    }
+
+    if (row.status === "exported") {
+      await client.query("ROLLBACK");
+      return res.json({
+        ok: true,
+        invoice_id: id,
+        status: "exported",
+        already_exported: true,
+        exported_at: row.exported_at,
+        note: row.export_note
+      });
+    }
+
+    await client.query(
+      `
+      UPDATE invoices
+      SET status='exported',
+          exported_at=NOW(),
+          export_note=COALESCE($2, export_note)
+      WHERE id=$1::bigint
+      `,
+      [id, note]
+    );
+
+    await client.query("COMMIT");
+
+    return res.json({ ok: true, invoice_id: id, status: "exported" });
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error("EXPORT INVOICE ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
+  // ======================================================
+  // A8.11: Invoice export tracking
+  // ======================================================
+  await ensureColumn("invoices", "exported_at", "TIMESTAMPTZ");
+  await ensureColumn("invoices", "export_note", "TEXT");
 
   // ===== STAFFPLAN: Duplikate entfernen + Unique Index (NULL-sicher) =====
   try {
@@ -375,6 +442,12 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS staffplan_by_date_emp
     ON staffplan (work_date, employee_id);
   `);
+    // ======================================================
+  // A8.11: Invoice export tracking
+  // ======================================================
+  await ensureColumn("invoices", "exported_at", "TIMESTAMPTZ");
+  await ensureColumn("invoices", "export_note", "TEXT");
+
 
   // ======================================================
   // PO WORK RULES
