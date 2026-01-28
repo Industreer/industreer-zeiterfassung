@@ -70,6 +70,28 @@
   const $ = (id) => document.getElementById(id);
   const out = (obj) => $("out").textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
   const status = (s) => $("status").textContent = s || "";
+  function setButtons(state){
+    const hasId = !!(state?.invoice_id || ($("invoice_id").value || "").trim());
+    const st = state?.status || null;
+
+    $("btn_csv").disabled = !hasId;
+    $("btn_pdf").disabled = !hasId;
+    $("btn_load").disabled = !hasId;
+
+    $("btn_finalize").disabled = !(st === "draft");
+    $("btn_export").disabled = !(st === "final");
+
+    // Optional: create immer erlaubt
+    $("btn_create").disabled = false;
+  }
+
+  function showState(j){
+    const inv = j?.invoice;
+    const st = inv?.status || j?.status || "";
+    const nr = inv?.invoice_number || j?.invoice_number || "";
+    status(`Status: ${st}${nr ? " | " + nr : ""}`);
+    setButtons({ status: st, invoice_id: inv?.id || j?.invoice_id });
+  }
 
   function todayIso(){ return new Date().toISOString().slice(0,10); }
 
@@ -137,9 +159,11 @@ function getCode(){
       const body = { customer_po, from, to };
       if (internal_po && String(internal_po).trim() !== "") body.internal_po = String(internal_po).trim();
 
-      const j = await api("/api/admin/invoices/create-planned", "POST", body);
-      $("invoice_id").value = j.invoice_id;
-      out(j);
+const j = await api("/api/admin/invoices/create-planned", "POST", body);
+$("invoice_id").value = j.invoice_id;
+out(j);
+showState(j); // smart buttons
+
     }catch(e){ out("ERROR: " + e.message); }
   };
 
@@ -148,8 +172,10 @@ function getCode(){
       out("Working…");
       const id = ($("invoice_id").value || "").trim();
       if(!id) throw new Error("Invoice ID fehlt");
-      const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}`);
-      out(j);
+const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}`);
+out(j);
+showState(j); // smart buttons
+
     }catch(e){ out("ERROR: " + e.message); }
   };
 
@@ -160,6 +186,11 @@ function getCode(){
       if(!id) throw new Error("Invoice ID fehlt");
       const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}/finalize`, "POST");
       out(j);
+      // reload to get latest status/number
+const full = await api(`/api/admin/invoices/${encodeURIComponent(id)}`);
+out(full);
+showState(full);
+
     }catch(e){ out("ERROR: " + e.message); }
   };
 
@@ -171,6 +202,10 @@ function getCode(){
       const note = ($("note").value || "").trim();
       const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}/export`, "POST", note ? { note } : {});
       out(j);
+      const full = await api(`/api/admin/invoices/${encodeURIComponent(id)}`);
+out(full);
+showState(full);
+
     }catch(e){ out("ERROR: " + e.message); }
   };
 
@@ -195,7 +230,7 @@ function getCode(){
   // init defaults + dropdowns
   $("from").value = todayIso();
   $("to").value = todayIso();
-
+  setButtons({ status: null, invoice_id: null });
   loadCustomerPos()
     .then(() => loadInternalPos($("customer_po").value))
     .catch(e => out("ERROR: " + e.message));
