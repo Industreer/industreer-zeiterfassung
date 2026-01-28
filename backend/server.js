@@ -3369,6 +3369,239 @@ app.get("/api/admin/invoice/summary.csv", async (req, res) => {
   }
 });
 
+// ======================================================
+// A8: INVOICES (Draft) - create invoice snapshot from existing clamped logic
+// POST /api/admin/invoices/create
+// Body: { customer_po, from, to, internal_po?, round_to?, round_mode?, min_day_hours?, cap_day_hours? }
+// NOTE: amount/total_amount are in "hours" for now (no hourly rate yet).
+// ======================================================
+app.post("/api/admin/invoices/create", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const customer_po = String(req.body?.customer_po || "").trim();
+    const from = String(req.body?.from || "").trim();
+    const to = String(req.body?.to || "").trim();
+    const internal_po = req.body?.internal_po != null ? String(req.body.internal_po).trim() : null; // can be "" or null
+
+    const round_to =
+      req.body?.round_to != null && String(req.body.round_to).trim() !== ""
+        ? Number(req.body.round_to)
+        : null; // e.g. 0.25
+    const round_mode = String(req.body?.round_mode || "nearest").trim(); // nearest|up|down
+    const min_day_hours =
+      req.body?.min_day_hours != null && String(req.body.min_day_hours).trim() !== ""
+        ? Number(req.body.min_day_hours)
+        : null;
+    const cap_day_hours =
+      req.body?.cap_day_hours != null && String(req.body.cap_day_hours).trim() !== ""
+        ? Number(req.body.cap_day_hours)
+        : null;
+
+    if (!customer_po) return res.status(400).json({ ok: false, error: "customer_po fehlt" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).json({ ok: false, error: "from ungültig (YYYY-MM-DD)" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
+    if (to < from) return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+
+    if (round_to !== null && (!isFinite(round_to) || round_to <= 0 || round_to > 4)) {
+      return res.status(400).json({ ok: false, error: "round_to ungültig (z.B. 0.25)" });
+    }
+    if (!["nearest", "up", "down"].includes(round_mode)) {
+      return res.status(400).json({ ok: false, error: "round_mode ungültig (nearest|up|down)" });
+    }
+    for (const [k, v] of [["min_day_hours", min_day_hours], ["cap_day_hours", cap_day_hours]]) {
+      if (v !== null && (!isFinite(v) || v < 0 || v > 24)) return res.status(400).json({ ok: false, error: `${k} ungültig (0..24)` });
+    }
+
+    function roundHours(val) {
+      const x = Number(val);
+      if (!isFinite(x)) return null;
+      if (round_to === null) return x;
+
+      const units = x / round_to;
+      let r;
+      if (round_mode === "up") r = Math.ceil(units);
+      else if (round_mode === "down") r = Math.floor(units);
+      else r = Math.round(units);
+
+      return r * round_to;
+    }
+
+    function applyMinCap(h) {
+      if (h === null) return null;
+      let x = h;
+      if (min_day_hours !== null) x = Math.max(x, min_day_hours);
+      if (cap_day_hours !== null) x = Math.min(x, cap_day_hours);
+      return x;
+    }
+
+    // bill_travel for this customer_po
+    const btRow = await client.query(
+      `SELECT bool_or(bill_travel) AS bill_travel FROM po_work_rules WHERE customer_po = $1`,
+      [customer_po]
+    );
+    const bill_travel = !!btRow.rows?.[0]?.bill_travel;
+
+    // pick customer label (best-effort)
+    const custRow = await client.query(
+      `
+      SELECT MAX(customer) AS customer
+      FROM staffplan
+      WHERE customer_po = $1 AND customer IS NOT NULL AND customer <> ''
+      `,
+      [customer_po]
+    );
+    const customer = custRow.rows?.[0]?.customer || null;
+
+    // daily base rows (same source as your CSV endpoints)
+    const where = [];
+    const params = [from, to, customer_po];
+
+    where.push(`work_date BETWEEN $1::date AND $2::date`);
+    where.push(`clamped_hours IS NOT NULL`);
+    where.push(`mapped_customer_po = $3`);
+
+    if (internal_po !== null) {
+      params.push(internal_po);
+      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
+    }
+
+    const daily = await client.query(
+      `
+      SELECT
+        work_date,
+        te.employee_id,
+        COALESCE(e.name, te.employee_id) AS employee_name,
+        COALESCE(te.mapped_internal_po,'') AS internal_po,
+        SUM(te.clamped_hours)::numeric AS hours,
+        SUM(COALESCE(te.travel_hours,0))::numeric AS travel_hours
+      FROM v_time_entries_clamped te
+      LEFT JOIN employees e ON e.employee_id = te.employee_id
+      WHERE ${where.join(" AND ")}
+      GROUP BY work_date, te.employee_id, employee_name, COALESCE(te.mapped_internal_po,'')
+      ORDER BY work_date ASC, te.employee_id ASC, internal_po ASC
+      `,
+      params
+    );
+
+    // bucket per employee + internal_po; rounding is applied DAILY (like your summary logic)
+    const bucket = new Map();
+
+    for (const r of (daily.rows || [])) {
+      const day = String(r.work_date).slice(0, 10);
+      const rawHours = Number(r.hours) || 0;
+
+      const rounded = roundHours(rawHours);
+      const billedHours = applyMinCap(rounded);
+      if (billedHours === null) continue;
+
+      const travelRaw = Number(r.travel_hours) || 0;
+      const travelBilled = bill_travel ? travelRaw : 0;
+
+      const key = `${r.employee_id}||${r.internal_po}`;
+      const prev = bucket.get(key) || {
+        employee_id: r.employee_id,
+        employee_name: r.employee_name,
+        internal_po: r.internal_po,
+        days: new Set(),
+        hours_raw: 0,
+        hours_billed: 0,
+        travel_raw: 0,
+        travel_billed: 0,
+      };
+
+      prev.days.add(day);
+      prev.hours_raw += rawHours;
+      prev.hours_billed += Number(billedHours) || 0;
+      prev.travel_raw += travelRaw;
+      prev.travel_billed += travelBilled;
+
+      bucket.set(key, prev);
+    }
+
+    const lineItems = [];
+    let totalHours = 0;
+
+    for (const x of bucket.values()) {
+      const h = Math.round((Number(x.hours_billed) || 0) * 100) / 100;
+      const t = Math.round((Number(x.travel_billed) || 0) * 100) / 100;
+
+      if (h > 0) {
+        lineItems.push({
+          description: `Arbeitszeit – ${x.employee_name} (${x.employee_id})${x.internal_po ? ` / Internal PO: ${x.internal_po}` : ""}`,
+          quantity: h,
+          unit: "h",
+          unit_price: null,
+          amount: h,
+        });
+        totalHours += h;
+      }
+
+      if (t > 0) {
+        lineItems.push({
+          description: `Reisezeit – ${x.employee_name} (${x.employee_id})${x.internal_po ? ` / Internal PO: ${x.internal_po}` : ""}`,
+          quantity: t,
+          unit: "h",
+          unit_price: null,
+          amount: t,
+        });
+        totalHours += t;
+      }
+    }
+
+    if (!lineItems.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "Keine abrechenbaren Daten im Zeitraum (nach Regeln/Rundung).",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    // create invoice (draft, no number)
+    const inv = await client.query(
+      `
+      INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount)
+      VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5)
+      RETURNING id
+      `,
+      [customer_po, customer, from, to, Math.round(totalHours * 100) / 100]
+    );
+    const invoice_id = inv.rows[0].id;
+
+    // insert lines
+    for (const li of lineItems) {
+      await client.query(
+        `
+        INSERT INTO invoice_lines (invoice_id, description, quantity, unit, unit_price, amount)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        `,
+        [invoice_id, li.description, li.quantity, li.unit, li.unit_price, li.amount]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      invoice_id,
+      status: "draft",
+      customer_po,
+      customer,
+      period_start: from,
+      period_end: to,
+      currency: "EUR",
+      total_amount: Math.round(totalHours * 100) / 100,
+      lines: lineItems.length,
+      note: "total_amount/amount sind aktuell Stunden (noch kein Stundensatz hinterlegt).",
+    });
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error("INVOICE CREATE ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
 
 
 // ======================================================
