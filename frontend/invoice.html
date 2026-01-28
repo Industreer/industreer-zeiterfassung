@@ -25,11 +25,9 @@
 <div class="card">
   <div class="row">
     <label>Admin-Code</label>
-    <input id="code" type="password" placeholder="2012" style="width:120px">
-
+  <input id="code" type="password" value="2012" placeholder="2012" style="width:120px">
     <label>Invoice ID</label>
     <input id="invoice_id" type="text" placeholder="z.B. 1" style="width:120px">
-
     <label>Von</label>
     <input id="from" type="date">
 
@@ -75,11 +73,10 @@
 
   function todayIso(){ return new Date().toISOString().slice(0,10); }
 
-  function getCode(){
-    const c = ($("code").value || "").trim();
-    if (!c) throw new Error("Admin-Code fehlt");
-    return c;
-  }
+function getCode(){
+  return (($("code").value || "").trim() || "2012");
+}
+
 
   async function api(path, method="GET", body=null){
     const code = getCode();
