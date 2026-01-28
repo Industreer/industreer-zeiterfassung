@@ -709,7 +709,173 @@ $("btnInvoiceDailyCsv").addEventListener("click", () => {
   setError("");
   openCsv("/api/admin/invoice/daily.csv", p);
 });
+<!-- =======================================================
+U8.12 – Invoice UI (minimal)
+Fügt Buttons hinzu für: create-planned, finalize, pdf/csv, export
+======================================================= -->
+<div style="max-width: 900px; margin: 20px auto; padding: 16px; border: 1px solid #ddd; border-radius: 10px;">
+  <h2 style="margin: 0 0 12px 0;">Rechnung (A8)</h2>
 
+  <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+    <label>
+      <div>Admin-Code (2012)</div>
+      <input id="inv_code" type="password" placeholder="2012" style="width:100%; padding:8px;">
+    </label>
+    <label>
+      <div>Invoice ID (für Laden/Finalize/Export)</div>
+      <input id="inv_id" type="text" placeholder="z.B. 1" style="width:100%; padding:8px;">
+    </label>
+
+    <label>
+      <div>Customer PO</div>
+      <input id="inv_customer_po" type="text" placeholder="z.B. 5100860011" style="width:100%; padding:8px;">
+    </label>
+    <label>
+      <div>Internal PO (optional)</div>
+      <input id="inv_internal_po" type="text" placeholder="optional (leer lassen)" style="width:100%; padding:8px;">
+    </label>
+
+    <label>
+      <div>Von (YYYY-MM-DD)</div>
+      <input id="inv_from" type="text" placeholder="2026-01-01" style="width:100%; padding:8px;">
+    </label>
+    <label>
+      <div>Bis (YYYY-MM-DD)</div>
+      <input id="inv_to" type="text" placeholder="2026-01-31" style="width:100%; padding:8px;">
+    </label>
+
+    <label style="grid-column: 1 / span 2;">
+      <div>Export-Notiz (optional)</div>
+      <input id="inv_note" type="text" placeholder="z.B. PDF+CSV an Buchhaltung übergeben" style="width:100%; padding:8px;">
+    </label>
+  </div>
+
+  <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top: 12px;">
+    <button id="btn_create_planned">Draft erstellen (Planstunden)</button>
+    <button id="btn_load">Invoice laden</button>
+    <button id="btn_finalize">Finalisieren (Rechnungsnummer)</button>
+    <button id="btn_exported">Als exported markieren</button>
+    <button id="btn_csv">CSV downloaden</button>
+    <button id="btn_pdf">PDF downloaden</button>
+  </div>
+
+  <pre id="inv_out" style="margin-top:12px; background:#111; color:#0f0; padding:12px; border-radius:8px; overflow:auto; max-height: 320px;"></pre>
+</div>
+
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const out = (obj) => { $("inv_out").textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); };
+
+  function baseUrl(){
+    // same origin
+    return "";
+  }
+
+  function getCode(){
+    const c = $("inv_code").value.trim();
+    if (!c) throw new Error("Admin-Code fehlt (2012)");
+    return c;
+  }
+
+  function getBodyCreate(){
+    const customer_po = $("inv_customer_po").value.trim();
+    const from = $("inv_from").value.trim();
+    const to = $("inv_to").value.trim();
+    const internal_po = $("inv_internal_po").value; // can be empty string
+
+    if (!customer_po) throw new Error("customer_po fehlt");
+    if (!from) throw new Error("from fehlt");
+    if (!to) throw new Error("to fehlt");
+
+    const body = { customer_po, from, to };
+    if (internal_po != null && internal_po.trim() !== "") body.internal_po = internal_po.trim();
+    return body;
+  }
+
+  async function api(path, method, body){
+    const code = getCode();
+    const res = await fetch(baseUrl() + path, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-code": code
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const j = await res.json();
+      if (!res.ok || j.ok === false) throw new Error(j.error || ("HTTP " + res.status));
+      return j;
+    } else {
+      const t = await res.text();
+      if (!res.ok) throw new Error(t || ("HTTP " + res.status));
+      return t;
+    }
+  }
+
+  async function loadInvoice(){
+    const id = $("inv_id").value.trim();
+    if (!id) throw new Error("Invoice ID fehlt");
+    const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}`, "GET");
+    out(j);
+    return j;
+  }
+
+  $("btn_create_planned").onclick = async () => {
+    try {
+      out("Working...");
+      const j = await api("/api/admin/invoices/create-planned", "POST", getBodyCreate());
+      $("inv_id").value = j.invoice_id;
+      out(j);
+    } catch (e) { out("ERROR: " + e.message); }
+  };
+
+  $("btn_load").onclick = async () => {
+    try { out("Working..."); await loadInvoice(); } catch (e) { out("ERROR: " + e.message); }
+  };
+
+  $("btn_finalize").onclick = async () => {
+    try {
+      out("Working...");
+      const id = $("inv_id").value.trim();
+      if (!id) throw new Error("Invoice ID fehlt");
+      const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}/finalize`, "POST");
+      out(j);
+    } catch (e) { out("ERROR: " + e.message); }
+  };
+
+  $("btn_exported").onclick = async () => {
+    try {
+      out("Working...");
+      const id = $("inv_id").value.trim();
+      if (!id) throw new Error("Invoice ID fehlt");
+      const note = $("inv_note").value.trim();
+      const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}/export`, "POST", note ? { note } : {});
+      out(j);
+    } catch (e) { out("ERROR: " + e.message); }
+  };
+
+  $("btn_csv").onclick = async () => {
+    try {
+      const id = $("inv_id").value.trim();
+      if (!id) throw new Error("Invoice ID fehlt");
+      const code = getCode();
+      window.open(`/api/admin/invoices/${encodeURIComponent(id)}.csv?code=${encodeURIComponent(code)}`, "_blank");
+    } catch (e) { out("ERROR: " + e.message); }
+  };
+
+  $("btn_pdf").onclick = async () => {
+    try {
+      const id = $("inv_id").value.trim();
+      if (!id) throw new Error("Invoice ID fehlt");
+      const code = getCode();
+      window.open(`/api/admin/invoices/${encodeURIComponent(id)}.pdf?code=${encodeURIComponent(code)}`, "_blank");
+    } catch (e) { out("ERROR: " + e.message); }
+  };
+})();
 </script>
 
 </body>
