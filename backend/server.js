@@ -4484,6 +4484,30 @@ app.post("/api/admin/automation/run", async (req, res) => {
     client.release();
   }
 });
+// ======================================================
+// A9.9: CRON endpoints (weekly + monthly)
+// ======================================================
+app.get("/api/admin/cron/weekly", async (req, res) => {
+  try {
+    const today = todayIsoBerlin();
+    req.body = { mode: "weekly", date: today };
+    return app._router.handle(req, res, () => {});
+  } catch (e) {
+    console.error("CRON WEEKLY ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/admin/cron/monthly", async (req, res) => {
+  try {
+    const today = todayIsoBerlin();
+    req.body = { mode: "monthly", date: today };
+    return app._router.handle(req, res, () => {});
+  } catch (e) {
+    console.error("CRON MONTHLY ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ======================================================
 // START
