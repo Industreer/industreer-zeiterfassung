@@ -487,6 +487,16 @@ app.post("/api/admin/invoices/:id/export", async (req, res) => {
   // ======================================================
   await ensureColumn("invoices", "exported_at", "TIMESTAMPTZ");
   await ensureColumn("invoices", "export_note", "TEXT");
+  // ======================================================
+  // A9.10: Prevent duplicate invoices (source + unique key)
+  // ======================================================
+  await ensureColumn("invoices", "source", "TEXT");
+    // Unique per PO + period + source (only for draft/final/exported equally)
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS invoices_uniq_po_period_source
+    ON invoices (customer_po, period_start, period_end, COALESCE(source,''));
+  `);
+
 
 
   // ======================================================
@@ -3674,11 +3684,12 @@ app.post("/api/admin/invoices/create", async (req, res) => {
     // create invoice (draft, no number)
     const inv = await client.query(
       `
-      INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount)
-      VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5)
+INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
+      VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5, $6)
       RETURNING id
       `,
-      [customer_po, customer, from, to, Math.round(totalHours * 100) / 100]
+[customer_po, customer, from, to, Math.round(totalHours * 100) / 100, "staffplan"]
+
     );
     const invoice_id = inv.rows[0].id;
 
@@ -3969,8 +3980,10 @@ app.post("/api/admin/invoices/create-planned", async (req, res) => {
 
     const inv = await client.query(
       `
-      INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount)
-      VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5)
+INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
+
+      VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5, $6)
+
       RETURNING id
       `,
       [customer_po, customer, from, to, totalHours]
@@ -4483,11 +4496,13 @@ app.post("/api/admin/automation/run", async (req, res) => {
       // create invoice draft
       const inv = await client.query(
         `
-        INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount)
-        VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5)
-        RETURNING id
+INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
+VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5, $6)
+RETURNING id
+
         `,
-        [customer_po, customer, from, to, total]
+       [customer_po, customer, from, to, total, "clamped"]
+
       );
       const invoice_id = inv.rows[0].id;
 
