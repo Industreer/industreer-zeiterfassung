@@ -4267,6 +4267,223 @@ app.post("/api/admin/invoices/:id/finalize", async (req, res) => {
     client.release();
   }
 });
+// ======================================================
+// A9: AUTOMATION - run billing draft creation from REAL TIMES (v_time_entries_clamped)
+// POST /api/admin/automation/run
+// Body:
+// {
+//   "mode": "monthly" | "weekly" | "project",
+//   "date": "YYYY-MM-DD",              // required for monthly/weekly
+//   "from": "YYYY-MM-DD",              // required for project
+//   "to": "YYYY-MM-DD",                // required for project
+//   "customer_pos": ["..."]            // optional (else: auto-detect POs with hours)
+// }
+// Rules: if no hours for a PO in range => skip (Option A)
+// ======================================================
+app.post("/api/admin/automation/run", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const mode = String(req.body?.mode || "").trim(); // monthly|weekly|project
+    const date = req.body?.date != null ? String(req.body.date).trim() : null;
+    const fromIn = req.body?.from != null ? String(req.body.from).trim() : null;
+    const toIn = req.body?.to != null ? String(req.body.to).trim() : null;
+
+    if (!["monthly", "weekly", "project"].includes(mode)) {
+      return res.status(400).json({ ok: false, error: "mode muss monthly|weekly|project sein" });
+    }
+
+    function isIso(d){ return /^\d{4}-\d{2}-\d{2}$/.test(String(d||"")); }
+
+    // compute range
+    let from, to;
+    if (mode === "project") {
+      if (!isIso(fromIn) || !isIso(toIn) || toIn < fromIn) {
+        return res.status(400).json({ ok: false, error: "project braucht from/to (YYYY-MM-DD), to>=from" });
+      }
+      from = fromIn; to = toIn;
+    } else {
+      if (!isIso(date)) return res.status(400).json({ ok: false, error: "monthly/weekly braucht date (YYYY-MM-DD)" });
+
+      const d = new Date(date + "T00:00:00.000Z");
+
+      if (mode === "monthly") {
+        const y = d.getUTCFullYear();
+        const m = d.getUTCMonth();
+        const first = new Date(Date.UTC(y, m, 1));
+        const last = new Date(Date.UTC(y, m + 1, 0));
+        from = first.toISOString().slice(0, 10);
+        to = last.toISOString().slice(0, 10);
+      }
+
+      if (mode === "weekly") {
+        // ISO week: Monday..Sunday
+        const day = d.getUTCDay() || 7; // 1..7
+        const monday = new Date(d);
+        monday.setUTCDate(d.getUTCDate() - (day - 1));
+        const sunday = new Date(monday);
+        sunday.setUTCDate(monday.getUTCDate() + 6);
+        from = monday.toISOString().slice(0, 10);
+        to = sunday.toISOString().slice(0, 10);
+      }
+    }
+
+    // customer_pos: optional
+    const bodyPos = Array.isArray(req.body?.customer_pos) ? req.body.customer_pos.map(x => String(x).trim()).filter(Boolean) : null;
+
+    await client.query("BEGIN");
+
+    // Determine which POs have real hours in range (Option A: skip zero)
+    // Use v_time_entries_clamped as single source of truth
+    let pos = bodyPos;
+
+    if (!pos || pos.length === 0) {
+      const qPos = await client.query(
+        `
+        SELECT mapped_customer_po AS customer_po
+        FROM v_time_entries_clamped
+        WHERE work_date BETWEEN $1::date AND $2::date
+          AND clamped_hours IS NOT NULL
+          AND COALESCE(mapped_customer_po,'') <> ''
+        GROUP BY mapped_customer_po
+        ORDER BY mapped_customer_po ASC
+        `,
+        [from, to]
+      );
+      pos = qPos.rows.map(r => r.customer_po).filter(Boolean);
+    }
+
+    const created = [];
+    const skipped = [];
+
+    for (const customer_po of pos) {
+      // bill_travel for this PO
+      const bt = await client.query(
+        `SELECT bool_or(bill_travel) AS bill_travel FROM po_work_rules WHERE customer_po = $1`,
+        [customer_po]
+      );
+      const bill_travel = !!bt.rows?.[0]?.bill_travel;
+
+      // Aggregate per employee + internal_po (like your existing invoice CSV logic)
+      const daily = await client.query(
+        `
+        SELECT
+          te.employee_id,
+          COALESCE(e.name, te.employee_id) AS employee_name,
+          COALESCE(te.mapped_internal_po,'') AS internal_po,
+          COUNT(DISTINCT te.work_date)::int AS days,
+          SUM(te.clamped_hours)::numeric AS hours_raw,
+          SUM(COALESCE(te.travel_hours,0))::numeric AS travel_raw
+        FROM v_time_entries_clamped te
+        LEFT JOIN employees e ON e.employee_id = te.employee_id
+        WHERE te.work_date BETWEEN $1::date AND $2::date
+          AND te.clamped_hours IS NOT NULL
+          AND te.mapped_customer_po = $3
+        GROUP BY te.employee_id, employee_name, COALESCE(te.mapped_internal_po,'')
+        ORDER BY te.employee_id ASC, internal_po ASC
+        `,
+        [from, to, customer_po]
+      );
+
+      // Option A: if no rows => skip
+      if (!daily.rowCount) {
+        skipped.push({ customer_po, reason: "no_hours_in_range" });
+        continue;
+      }
+
+      // total billed hours = clamped_hours + (optional) travel_hours
+      let total = 0;
+      const lines = [];
+
+      // best-effort customer label
+      const cust = await client.query(
+        `
+        SELECT MAX(customer) AS customer
+        FROM staffplan
+        WHERE customer_po = $1 AND customer IS NOT NULL AND customer <> ''
+        `,
+        [customer_po]
+      );
+      const customer = cust.rows?.[0]?.customer || null;
+
+      for (const r of daily.rows) {
+        const hours = Math.round((Number(r.hours_raw) || 0) * 100) / 100;
+        const travel = Math.round((Number(r.travel_raw) || 0) * 100) / 100;
+        const travel_billed = bill_travel ? travel : 0;
+
+        if (hours > 0) {
+          lines.push({
+            description: `Arbeitszeit – ${r.employee_name} (${r.employee_id})${r.internal_po ? ` / Internal PO: ${r.internal_po}` : ""} / Tage: ${r.days}`,
+            quantity: hours,
+            unit: "h",
+            unit_price: null,
+            amount: hours,
+          });
+          total += hours;
+        }
+
+        if (travel_billed > 0) {
+          lines.push({
+            description: `Reisezeit – ${r.employee_name} (${r.employee_id})${r.internal_po ? ` / Internal PO: ${r.internal_po}` : ""} / Tage: ${r.days}`,
+            quantity: travel_billed,
+            unit: "h",
+            unit_price: null,
+            amount: travel_billed,
+          });
+          total += travel_billed;
+        }
+      }
+
+      // If total is 0 after travel rule => skip (still Option A)
+      total = Math.round(total * 100) / 100;
+      if (total <= 0 || lines.length === 0) {
+        skipped.push({ customer_po, reason: "total_zero_after_rules" });
+        continue;
+      }
+
+      // create invoice draft
+      const inv = await client.query(
+        `
+        INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount)
+        VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5)
+        RETURNING id
+        `,
+        [customer_po, customer, from, to, total]
+      );
+      const invoice_id = inv.rows[0].id;
+
+      for (const li of lines) {
+        await client.query(
+          `
+          INSERT INTO invoice_lines (invoice_id, description, quantity, unit, unit_price, amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+          `,
+          [invoice_id, li.description, li.quantity, li.unit, li.unit_price, li.amount]
+        );
+      }
+
+      created.push({ invoice_id: String(invoice_id), customer_po, total_amount: total, lines: lines.length });
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      mode,
+      period: { from, to },
+      created_count: created.length,
+      skipped_count: skipped.length,
+      created,
+      skipped,
+      note: "Draft-only. Quelle: v_time_entries_clamped. Wenn keine Stunden -> keine Rechnung (Option A).",
+    });
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error("AUTOMATION RUN ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
 
 // ======================================================
 // START
