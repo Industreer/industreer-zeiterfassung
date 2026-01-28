@@ -1,1 +1,213 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Rechnungen</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:1000px}
+    .card{border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0;background:#fff}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    input,select,button{font-size:14px;padding:10px 12px}
+    button{cursor:pointer;border:1px solid #ddd;border-radius:8px;background:#fff}
+    button.primary{border-color:#b4d6f0;background:#f5fbff}
+    label{font-size:13px;color:#333}
+    .muted{color:#666}
+    .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+    pre{background:#111;color:#0f0;padding:12px;border-radius:8px;overflow:auto;max-height:340px}
+  </style>
+</head>
+<body>
+
+<h1>Rechnungen (A8)</h1>
+<div class="muted">Erzeugen (Planstunden), Finalisieren, PDF/CSV, Exported – ohne Shell.</div>
+
+<div class="card">
+  <div class="row">
+    <label>Admin-Code</label>
+    <input id="code" type="password" placeholder="2012" style="width:120px">
+
+    <label>Invoice ID</label>
+    <input id="invoice_id" type="text" placeholder="z.B. 1" style="width:120px">
+
+    <label>Von</label>
+    <input id="from" type="date">
+
+    <label>Bis</label>
+    <input id="to" type="date">
+  </div>
+
+  <div class="row" style="margin-top:10px;">
+    <label>Customer PO</label>
+    <select id="customer_po" style="min-width:260px;"></select>
+
+    <label>Internal PO</label>
+    <select id="internal_po" style="min-width:260px;"></select>
+  </div>
+
+  <div class="row" style="margin-top:10px;">
+    <label style="flex:1; min-width:320px;">
+      Export-Notiz
+      <input id="note" type="text" placeholder="z.B. PDF+CSV an Buchhaltung übergeben" style="width:100%">
+    </label>
+  </div>
+
+  <div class="row" style="margin-top:12px;">
+    <button class="primary" id="btn_create">Draft erstellen (Planstunden)</button>
+    <button id="btn_load">Invoice laden</button>
+    <button id="btn_finalize">Finalisieren</button>
+    <button id="btn_csv">CSV</button>
+    <button id="btn_pdf">PDF</button>
+    <button id="btn_export">Exported</button>
+  </div>
+
+  <div class="row" style="margin-top:10px;">
+    <span class="muted" id="status"></span>
+  </div>
+
+  <pre id="out"></pre>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const out = (obj) => $("out").textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
+  const status = (s) => $("status").textContent = s || "";
+
+  function todayIso(){ return new Date().toISOString().slice(0,10); }
+
+  function getCode(){
+    const c = ($("code").value || "").trim();
+    if (!c) throw new Error("Admin-Code fehlt");
+    return c;
+  }
+
+  async function api(path, method="GET", body=null){
+    const code = getCode();
+    const r = await fetch(path, {
+      method,
+      headers: {
+        "x-admin-code": code,
+        ...(body ? {"Content-Type":"application/json"} : {})
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const t = await r.text();
+    let j;
+    try { j = JSON.parse(t); } catch { j = { ok:false, error:t }; }
+    if (!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
+    return j;
+  }
+
+  async function loadCustomerPos(){
+    status("Lade Customer POs…");
+    const j = await api("/api/admin/customer-pos?limit=300");
+    const sel = $("customer_po");
+    sel.innerHTML = `<option value="">– Customer PO wählen –</option>` + (j.rows||[]).map(r =>
+      `<option value="${r.customer_po}">${r.customer_po} (${r.cnt})</option>`
+    ).join("");
+    status("");
+  }
+
+  async function loadInternalPos(po){
+    const sel = $("internal_po");
+    sel.innerHTML = `<option value="">(alle)</option>`;
+    if (!po) return;
+    status("Lade Internal POs…");
+    const j = await api(`/api/admin/internal-pos?customer_po=${encodeURIComponent(po)}`);
+    sel.innerHTML = `<option value="">(alle)</option>` + (j.rows||[]).map(r => {
+      const v = r.internal_po || "";
+      const label = v ? `${v} (${r.cnt})` : `(leer) (${r.cnt})`;
+      return `<option value="${v}">${label}</option>`;
+    }).join("");
+    status("");
+  }
+
+  function getRange(){
+    const from = $("from").value;
+    const to = $("to").value;
+    if(!from || !to) throw new Error("Zeitraum fehlt");
+    return { from, to };
+  }
+
+  $("btn_create").onclick = async () => {
+    try{
+      out("Working…");
+      const {from,to} = getRange();
+      const customer_po = ($("customer_po").value || "").trim();
+      const internal_po = $("internal_po").value; // can be ""
+      if(!customer_po) throw new Error("Customer PO wählen");
+
+      const body = { customer_po, from, to };
+      if (internal_po && String(internal_po).trim() !== "") body.internal_po = String(internal_po).trim();
+
+      const j = await api("/api/admin/invoices/create-planned", "POST", body);
+      $("invoice_id").value = j.invoice_id;
+      out(j);
+    }catch(e){ out("ERROR: " + e.message); }
+  };
+
+  $("btn_load").onclick = async () => {
+    try{
+      out("Working…");
+      const id = ($("invoice_id").value || "").trim();
+      if(!id) throw new Error("Invoice ID fehlt");
+      const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}`);
+      out(j);
+    }catch(e){ out("ERROR: " + e.message); }
+  };
+
+  $("btn_finalize").onclick = async () => {
+    try{
+      out("Working…");
+      const id = ($("invoice_id").value || "").trim();
+      if(!id) throw new Error("Invoice ID fehlt");
+      const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}/finalize`, "POST");
+      out(j);
+    }catch(e){ out("ERROR: " + e.message); }
+  };
+
+  $("btn_export").onclick = async () => {
+    try{
+      out("Working…");
+      const id = ($("invoice_id").value || "").trim();
+      if(!id) throw new Error("Invoice ID fehlt");
+      const note = ($("note").value || "").trim();
+      const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}/export`, "POST", note ? { note } : {});
+      out(j);
+    }catch(e){ out("ERROR: " + e.message); }
+  };
+
+  $("btn_csv").onclick = () => {
+    try{
+      const id = ($("invoice_id").value || "").trim();
+      if(!id) throw new Error("Invoice ID fehlt");
+      const code = getCode();
+      window.open(`/api/admin/invoices/${encodeURIComponent(id)}.csv?code=${encodeURIComponent(code)}`, "_blank");
+    }catch(e){ out("ERROR: " + e.message); }
+  };
+
+  $("btn_pdf").onclick = () => {
+    try{
+      const id = ($("invoice_id").value || "").trim();
+      if(!id) throw new Error("Invoice ID fehlt");
+      const code = getCode();
+      window.open(`/api/admin/invoices/${encodeURIComponent(id)}.pdf?code=${encodeURIComponent(code)}`, "_blank");
+    }catch(e){ out("ERROR: " + e.message); }
+  };
+
+  // init defaults + dropdowns
+  $("from").value = todayIso();
+  $("to").value = todayIso();
+
+  loadCustomerPos()
+    .then(() => loadInternalPos($("customer_po").value))
+    .catch(e => out("ERROR: " + e.message));
+
+  $("customer_po").addEventListener("change", () => {
+    loadInternalPos($("customer_po").value).catch(e => out("ERROR: " + e.message));
+  });
+</script>
+
+</body>
+</html>
 
