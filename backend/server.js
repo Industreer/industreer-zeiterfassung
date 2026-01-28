@@ -456,7 +456,31 @@ app.post("/api/admin/invoices/:id/export", async (req, res) => {
 
     console.log("🧹 staffplan dedupe deleted:", dedupe.rowCount);
 
-    await pool.query(`
+      // Backfill: set source for existing rows where NULL/empty
+  await pool.query(`
+    UPDATE invoices
+    SET source = 'legacy'
+    WHERE source IS NULL OR source = '';
+  `);
+      // Dedupe invoices for same (customer_po, period_start, period_end, source)
+  // Keep the newest (highest id), delete older ones + their lines cascade
+  await pool.query(`
+    WITH ranked AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (
+          PARTITION BY customer_po, period_start, period_end, COALESCE(source,'')
+          ORDER BY id DESC
+        ) AS rn
+      FROM invoices
+    )
+    DELETE FROM invoices i
+    USING ranked r
+    WHERE i.id = r.id
+      AND r.rn > 1;
+  `);
+
+await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq2
       ON staffplan (
         employee_id,
