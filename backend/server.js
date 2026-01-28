@@ -301,6 +301,50 @@ async function migrate() {
         AND r.rn > 1
       RETURNING s.id;
     `);
+  // ======================================================
+  // INVOICES (A8 – Abrechnung & Go-Live)
+  // ======================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id BIGSERIAL PRIMARY KEY,
+      invoice_number TEXT UNIQUE,
+      customer_po TEXT NOT NULL,
+      customer TEXT,
+      period_start DATE NOT NULL,
+      period_end DATE NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft','final','exported')),
+      currency TEXT DEFAULT 'EUR',
+      total_amount NUMERIC,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      finalized_at TIMESTAMPTZ
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_lines (
+      id BIGSERIAL PRIMARY KEY,
+      invoice_id BIGINT NOT NULL
+        REFERENCES invoices(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      quantity NUMERIC,
+      unit TEXT,
+      unit_price NUMERIC,
+      amount NUMERIC NOT NULL
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_counters (
+      year INT PRIMARY KEY,
+      last_number INT NOT NULL
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS invoice_lines_by_invoice
+    ON invoice_lines (invoice_id);
+  `);
 
     console.log("🧹 staffplan dedupe deleted:", dedupe.rowCount);
 
