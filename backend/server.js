@@ -4464,8 +4464,6 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
   }
 });
 
-}
-
     // Dateiname: Erfassungsbogen_...
     const safePo = String(invoice.customer_po || "PO").replace(/[^0-9A-Za-z_-]/g, "");
     res.setHeader("Content-Type", "application/pdf");
