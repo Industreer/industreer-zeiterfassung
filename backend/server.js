@@ -4243,6 +4243,18 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
       `,
       [fromIso, toIso, invoice.customer_po]
     );
+// DEBUG: wenn ?debug=1, dann KEIN PDF sondern JSON zurückgeben
+if (String(req.query.debug || "") === "1") {
+  return res.json({
+    ok: true,
+    invoice_id: id,
+    customer_po: invoice.customer_po,
+    period: { from: fromIso, to: toIso },
+    daily_rows: (daily.rows || []).length,
+    daily_sample: (daily.rows || []).slice(0, 5),
+    note: "Debug mode: PDF generation skipped.",
+  });
+}
 
     // Dateiname: Erfassungsbogen_...
     const safePo = String(invoice.customer_po || "PO").replace(/[^0-9A-Za-z_-]/g, "");
