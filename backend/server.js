@@ -4585,6 +4585,8 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
     doc.fillColor("black");
 
     doc.end();
+try {
+}
 catch (e) {
     console.error("PDF ERROR:", e);
     return res.status(500).send("PDF Fehler: " + (e.message || ""));
