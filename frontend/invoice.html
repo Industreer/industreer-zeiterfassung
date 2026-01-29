@@ -109,7 +109,7 @@
     // Optional: create immer erlaubt
     $("btn_create").disabled = false;
   }
-function renderReview(rows){
+  function renderReview(rows){
   const tb = document.getElementById("review_tbody");
   if(!rows || rows.length === 0){
     tb.innerHTML = `<tr><td colspan="7" class="muted" style="padding:8px;">Keine Drafts in den letzten 24h.</td></tr>`;
@@ -321,7 +321,8 @@ $("btn_review").onclick = async () => {
     out("Working…");
     const j = await api("/api/admin/review/invoices?minutes=1440&status=draft");
     out(j);
-    renderReview(j.rows || []);
+    console.log("REVIEW ROWS:", (j.rows || []).length, j.rows);
+renderReview(j.rows || []);
   }catch(e){
     out("ERROR: " + e.message);
   }
