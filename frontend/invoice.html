@@ -228,6 +228,13 @@ showState(full);
       window.open(`/api/admin/invoices/${encodeURIComponent(id)}.pdf?code=${encodeURIComponent(code)}`, "_blank");
     }catch(e){ out("ERROR: " + e.message); }
   };
+$("btn_review").onclick = async () => {
+  try{
+    out("Working…");
+    const j = await api("/api/admin/review/invoices?minutes=1440&status=draft");
+    out(j);
+  }catch(e){ out("ERROR: " + e.message); }
+};
 
   // init defaults + dropdowns
   $("from").value = todayIso();
