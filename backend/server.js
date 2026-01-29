@@ -4132,7 +4132,7 @@ app.post("/api/admin/import/employees", upload.single("file"), async (req, res) 
 // GET /api/admin/invoices/review?minutes=60
 // optional: &status=draft|final|exported
 // ======================================================
-app.get("/api/admin/invoices/review", async (req, res) => {
+app.get("/api/admin/review/invoices", async (req, res) => {
   try {
     const minutes = Math.max(1, Math.min(10080, Number(req.query.minutes) || 60)); // up to 7 days
     const status = req.query.status ? String(req.query.status).trim() : "draft";
