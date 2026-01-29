@@ -199,7 +199,7 @@
 $("btn_review").onclick = async () => {
   try{
     out("Working…");
-    const j = await api("/api/admin/review/invoices?minutes=1440&status=draft");
+const j = await api("/api/admin/review/invoices?minutes=1440&status=all");
     out(j);
     renderReview(j.rows || []);
     // buttons state for current invoice box bleibt wie er ist
