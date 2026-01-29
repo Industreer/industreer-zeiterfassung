@@ -318,6 +318,29 @@ async function migrate() {
     ADD COLUMN IF NOT EXISTS weekly_hours NUMERIC DEFAULT 40;
   `);
   // ======================================================
+// A9.12: Automation run log (notifications)
+// ======================================================
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS automation_runs (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    mode TEXT NOT NULL,
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    created_count INT NOT NULL DEFAULT 0,
+    skipped_count INT NOT NULL DEFAULT 0,
+    created_json JSONB,
+    skipped_json JSONB,
+    note TEXT
+  );
+`);
+
+await pool.query(`
+  CREATE INDEX IF NOT EXISTS automation_runs_by_created_at
+  ON automation_runs (created_at DESC);
+`);
+
+  // ======================================================
 // A8.11: INVOICES - mark as exported
 // POST /api/admin/invoices/:id/export
 // Body: { note? }  (optional)
@@ -4607,6 +4630,29 @@ try {
 
       created.push({ invoice_id: String(invoice_id), customer_po, total_amount: total, lines: lines.length });
     }
+// save run log (for notifications)
+try {
+  await pool.query(
+    `
+    INSERT INTO automation_runs
+      (mode, period_start, period_end, created_count, skipped_count, created_json, skipped_json, note)
+    VALUES
+      ($1, $2::date, $3::date, $4, $5, $6::jsonb, $7::jsonb, $8)
+    `,
+    [
+      mode,
+      from,
+      to,
+      created.length,
+      skipped.length,
+      JSON.stringify(created || []),
+      JSON.stringify(skipped || []),
+      "automation/run logged"
+    ]
+  );
+} catch (e) {
+  console.warn("automation_runs insert failed:", e.message);
+}
 
     await client.query("COMMIT");
 
@@ -4649,6 +4695,26 @@ app.get("/api/admin/cron/monthly", async (req, res) => {
     return app._router.handle(req, res, () => {});
   } catch (e) {
     console.error("CRON MONTHLY ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// ======================================================
+// A9.12: Get last automation run
+// ======================================================
+app.get("/api/admin/automation/last-run", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT *
+      FROM automation_runs
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+
+    if (!r.rowCount) return res.json({ ok: true, run: null });
+
+    res.json({ ok: true, run: r.rows[0] });
+  } catch (e) {
+    console.error("LAST RUN ERROR:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
