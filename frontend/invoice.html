@@ -58,6 +58,7 @@
     <button id="btn_pdf">PDF</button>
     <button id="btn_export">Exported</button>
 <button id="btn_review">Review 24h</button>
+<button id="btn_review">Review 24h</button>
 
   </div>
 
@@ -66,6 +67,28 @@
   </div>
 
   <pre id="out"></pre>
+  <div style="margin-top:14px;">
+  <h3 style="margin:0 0 8px 0;">Review Queue (Drafts)</h3>
+  <div class="muted" style="margin-bottom:8px;">Letzte 24h – Quelle: clamped/staffplan</div>
+
+  <table style="width:100%; border-collapse:collapse;">
+    <thead>
+      <tr>
+        <th style="text-align:left; border-bottom:1px solid #eee; padding:8px;">ID</th>
+        <th style="text-align:left; border-bottom:1px solid #eee; padding:8px;">Status</th>
+        <th style="text-align:left; border-bottom:1px solid #eee; padding:8px;">PO</th>
+        <th style="text-align:left; border-bottom:1px solid #eee; padding:8px;">Zeitraum</th>
+        <th style="text-align:left; border-bottom:1px solid #eee; padding:8px;">Quelle</th>
+        <th style="text-align:right; border-bottom:1px solid #eee; padding:8px;">Summe</th>
+        <th style="text-align:left; border-bottom:1px solid #eee; padding:8px;">Aktionen</th>
+      </tr>
+    </thead>
+    <tbody id="review_tbody">
+      <tr><td colspan="7" class="muted" style="padding:8px;">Noch keine Daten. Klick „Review 24h“.</td></tr>
+    </tbody>
+  </table>
+</div>
+
 </div>
 
 <script>
@@ -86,6 +109,104 @@
     // Optional: create immer erlaubt
     $("btn_create").disabled = false;
   }
+function renderReview(rows){
+  const tb = document.getElementById("review_tbody");
+  if(!rows || rows.length === 0){
+    tb.innerHTML = `<tr><td colspan="7" class="muted" style="padding:8px;">Keine Drafts in den letzten 24h.</td></tr>`;
+    return;
+  }
+
+  tb.innerHTML = rows.map(r => {
+    const id = String(r.id);
+    const st = r.status || "";
+    const po = r.customer_po || "";
+    const src = r.source || "";
+    const from = String(r.period_start || "").slice(0,10);
+    const to = String(r.period_end || "").slice(0,10);
+    const sum = Number(r.total_amount || 0).toFixed(2);
+
+    // Buttons: Finalize nur wenn draft, Exported nur wenn final
+    const canFinalize = st === "draft";
+    const canExport = st === "final";
+
+    return `
+      <tr>
+        <td class="mono" style="padding:8px; border-bottom:1px solid #f2f2f2;">${id}</td>
+        <td style="padding:8px; border-bottom:1px solid #f2f2f2;">${st}</td>
+        <td class="mono" style="padding:8px; border-bottom:1px solid #f2f2f2;">${po}</td>
+        <td style="padding:8px; border-bottom:1px solid #f2f2f2;">${from} – ${to}</td>
+        <td class="mono" style="padding:8px; border-bottom:1px solid #f2f2f2;">${src}</td>
+        <td style="padding:8px; border-bottom:1px solid #f2f2f2; text-align:right;">${sum}</td>
+        <td style="padding:8px; border-bottom:1px solid #f2f2f2;">
+          <button data-act="load" data-id="${id}">Load</button>
+          <button data-act="finalize" data-id="${id}" ${canFinalize ? "" : "disabled"}>Finalize</button>
+          <button data-act="pdf" data-id="${id}">PDF</button>
+          <button data-act="csv" data-id="${id}">CSV</button>
+          <button data-act="export" data-id="${id}" ${canExport ? "" : "disabled"}>Exported</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  // Event delegation
+  tb.querySelectorAll("button[data-act]").forEach(btn => {
+    btn.onclick = async () => {
+      const act = btn.getAttribute("data-act");
+      const id = btn.getAttribute("data-id");
+      try {
+        if(act === "load"){
+          $("invoice_id").value = id;
+          out("Working…");
+          const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}`);
+          out(j);
+          showState(j);
+          return;
+        }
+        if(act === "finalize"){
+          out("Working…");
+          await api(`/api/admin/invoices/${encodeURIComponent(id)}/finalize`, "POST");
+          const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}`);
+          out(j);
+          showState(j);
+          return;
+        }
+        if(act === "export"){
+          const note = ($("note").value || "").trim();
+          out("Working…");
+          await api(`/api/admin/invoices/${encodeURIComponent(id)}/export`, "POST", note ? { note } : {});
+          const j = await api(`/api/admin/invoices/${encodeURIComponent(id)}`);
+          out(j);
+          showState(j);
+          return;
+        }
+        if(act === "csv"){
+          const code = getCode();
+          window.open(`/api/admin/invoices/${encodeURIComponent(id)}.csv?code=${encodeURIComponent(code)}`, "_blank");
+          return;
+        }
+        if(act === "pdf"){
+          const code = getCode();
+          window.open(`/api/admin/invoices/${encodeURIComponent(id)}.pdf?code=${encodeURIComponent(code)}`, "_blank");
+          return;
+        }
+      } catch(e) {
+        out("ERROR: " + e.message);
+      }
+    };
+  });
+}
+
+$("btn_review").onclick = async () => {
+  try{
+    out("Working…");
+    const j = await api("/api/admin/review/invoices?minutes=1440&status=draft");
+    out(j);
+    renderReview(j.rows || []);
+    // buttons state for current invoice box bleibt wie er ist
+  }catch(e){
+    out("ERROR: " + e.message);
+  }
+};
 
   function showState(j){
     const inv = j?.invoice;
