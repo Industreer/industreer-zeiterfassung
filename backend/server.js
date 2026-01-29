@@ -4208,7 +4208,7 @@ app.get("/api/admin/review/invoices", async (req, res) => {
 });
 
 // ======================================================
-// PDF: Erfassungsbogen für Rechnungserstellung
+// A8: INVOICES - PDF export (Erfassungsbogen)
 // GET /api/admin/invoices/:id.pdf?code=2012
 // ======================================================
 app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
@@ -4222,17 +4222,26 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
     if (!inv.rowCount) return res.status(404).send("Invoice nicht gefunden");
     const invoice = inv.rows[0];
 
-// ✅ PG liefert DATE oft als JS Date -> String(date) ist "Thu Jan 01..." (kein SQL date)
-// Deshalb immer ISO "YYYY-MM-DD" bauen:
-const fromIso =
-  invoice.period_start instanceof Date
-    ? invoice.period_start.toISOString().slice(0, 10)
-    : String(invoice.period_start).slice(0, 10);
+    // ✅ PG liefert DATE oft als JS Date -> String(date) ist "Thu Jan 01..." (kein SQL date)
+    // Deshalb immer ISO "YYYY-MM-DD" bauen:
+    const fromIso =
+      invoice.period_start instanceof Date
+        ? invoice.period_start.toISOString().slice(0, 10)
+        : String(invoice.period_start).slice(0, 10);
 
-const toIso =
-  invoice.period_end instanceof Date
-    ? invoice.period_end.toISOString().slice(0, 10)
-    : String(invoice.period_end).slice(0, 10);
+    const toIso =
+      invoice.period_end instanceof Date
+        ? invoice.period_end.toISOString().slice(0, 10)
+        : String(invoice.period_end).slice(0, 10);
+
+    const linesQ = await pool.query(
+      `SELECT description, quantity, unit, unit_price, amount
+       FROM invoice_lines
+       WHERE invoice_id=$1::bigint
+       ORDER BY id ASC`,
+      [id]
+    );
+    const lines = linesQ.rows || [];
 
     // Tagesdaten (echte Zeiten) aus v_time_entries_clamped
     const daily = await pool.query(
@@ -4252,17 +4261,209 @@ const toIso =
       `,
       [fromIso, toIso, invoice.customer_po]
     );
-// DEBUG: wenn ?debug=1, dann KEIN PDF sondern JSON zurückgeben
-if (String(req.query.debug || "") === "1") {
-  return res.json({
-    ok: true,
-    invoice_id: id,
-    customer_po: invoice.customer_po,
-    period: { from: fromIso, to: toIso },
-    daily_rows: (daily.rows || []).length,
-    daily_sample: (daily.rows || []).slice(0, 5),
-    note: "Debug mode: PDF generation skipped.",
-  });
+
+    // Filename
+    const safePo = String(invoice.customer_po || "PO").replace(/[^0-9A-Za-z_\-]/g, "_");
+    const filename = `Erfassungsbogen_${safePo}_${fromIso}_bis_${toIso}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    doc.pipe(res);
+
+    // Helpers (innerhalb, damit doc verfügbar ist)
+    const PAGE_BOTTOM = 760;
+    function ensureSpace(minBottom = 80) {
+      if (doc.y > (PAGE_BOTTOM - minBottom)) {
+        doc.addPage();
+        drawHeader();
+      }
+    }
+
+    function hr() {
+      const y = doc.y;
+      doc
+        .moveTo(50, y)
+        .lineTo(545, y)
+        .strokeColor("#e5e5e5")
+        .lineWidth(1)
+        .stroke();
+      doc.strokeColor("black").lineWidth(1);
+      doc.moveDown(0.6);
+    }
+
+    function moneyOrHours(v) {
+      if (v === null || v === undefined || v === "") return "";
+      const n = Number(v);
+      if (!isFinite(n)) return String(v);
+      return n.toFixed(2);
+    }
+
+    function drawHeader() {
+      // Logo links oben
+      if (fs.existsSync(LOGO_FILE)) {
+        doc.image(LOGO_FILE, 50, 35, { width: 120 });
+      }
+
+      // Titel rechts
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(18)
+        .text("Erfassungsbogen für Rechnungserstellung", 50, 40, { align: "right" });
+
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor("#444")
+        .text("Dieses Dokument ist keine Rechnung. Es dient als Grundlage zur Rechnungserstellung.", { align: "right" });
+
+      doc.fillColor("black");
+
+      // Cursor unter Kopf
+      doc.y = 120;
+    }
+
+    // Start
+    drawHeader();
+
+    // Meta-Block
+    doc.font("Helvetica-Bold").fontSize(11).text("Daten", { underline: true });
+    doc.moveDown(0.4);
+
+    doc.font("Helvetica").fontSize(10);
+    doc.text(`Kunde: ${invoice.customer || "-"}`);
+    doc.text(`Kunden-PO: ${invoice.customer_po || "-"}`);
+    doc.text(`Zeitraum: ${fromIso} – ${toIso}`);
+    doc.text(`Quelle: ${invoice.source === "clamped" ? "Echte Zeiten (erfasst)" : "Planstunden"}`);
+    doc.moveDown(0.6);
+    hr();
+
+    // ===== Block 1: Positionen (invoice_lines) =====
+    doc.font("Helvetica-Bold").fontSize(11).text("Positionen (kompakt)");
+    doc.moveDown(0.5);
+
+    // Table header
+    const xDesc = 50;
+    const xQty = 430;
+    const xUnit = 470;
+    const xAmt = 505;
+
+    doc.font("Helvetica-Bold").fontSize(9);
+    doc.text("Beschreibung", xDesc, doc.y);
+    doc.text("Menge", xQty, doc.y, { width: 40, align: "right" });
+    doc.text("Einheit", xUnit, doc.y, { width: 35, align: "right" });
+    doc.text("Summe", xAmt, doc.y, { width: 40, align: "right" });
+    doc.moveDown(0.4);
+    hr();
+
+    doc.font("Helvetica").fontSize(9);
+
+    let totalLines = 0;
+    for (const li of lines) {
+      ensureSpace(120);
+
+      const y = doc.y;
+      const desc = String(li.description || "");
+      const qty = moneyOrHours(li.quantity);
+      const unit = String(li.unit || "");
+      const amt = moneyOrHours(li.amount);
+
+      // Beschreibung kann umbrechen
+      doc.text(desc, xDesc, y, { width: 365 });
+
+      // Werte rechts
+      doc.text(qty, xQty, y, { width: 40, align: "right" });
+      doc.text(unit, xUnit, y, { width: 35, align: "right" });
+      doc.text(amt, xAmt, y, { width: 40, align: "right" });
+
+      // Abstand: orientiert sich an Text-Höhe
+      const h = doc.heightOfString(desc, { width: 365 });
+      doc.y = y + Math.max(14, h) + 6;
+
+      totalLines += Number(li.amount || 0) || 0;
+    }
+
+    hr();
+    doc.font("Helvetica-Bold").fontSize(10);
+    doc.text(`Gesamtsumme (aus Positionen): ${moneyOrHours(totalLines)} h`, { align: "right" });
+
+    doc.moveDown(0.8);
+
+    // ===== Block 2: Stundenübersicht (nach Datum) =====
+    ensureSpace(160);
+    doc.font("Helvetica-Bold").fontSize(11).text("Stundenübersicht (nach Datum)");
+    doc.moveDown(0.5);
+
+    const xDate = 50;
+    const xEmp = 120;
+    const xIPO = 260;
+    const xH = 470;
+    const xT = 520;
+
+    doc.font("Helvetica-Bold").fontSize(9);
+    doc.text("Datum", xDate, doc.y);
+    doc.text("Mitarbeiter", xEmp, doc.y);
+    doc.text("Internal PO", xIPO, doc.y);
+    doc.text("Std", xH, doc.y, { width: 40, align: "right" });
+    doc.text("Reise", xT, doc.y, { width: 40, align: "right" });
+    doc.moveDown(0.4);
+    hr();
+
+    doc.font("Helvetica").fontSize(9);
+
+    let sumHours = 0;
+    let sumTravel = 0;
+
+    for (const r of (daily.rows || [])) {
+      ensureSpace(140);
+
+      const date = (r.work_date instanceof Date)
+        ? r.work_date.toISOString().slice(0, 10)
+        : String(r.work_date).slice(0, 10);
+
+      const emp = String(r.employee_id || "");
+      const ipo = String(r.internal_po || "-");
+      const h = Number(r.hours || 0) || 0;
+      const t = Number(r.travel_hours || 0) || 0;
+
+      const y = doc.y;
+
+      doc.text(date, xDate, y, { width: 65 });
+      doc.text(emp, xEmp, y, { width: 130 });
+      doc.text(ipo || "-", xIPO, y, { width: 190 });
+
+      doc.text(h.toFixed(2), xH, y, { width: 40, align: "right" });
+      doc.text(t.toFixed(2), xT, y, { width: 40, align: "right" });
+
+      doc.y = y + 16;
+
+      sumHours += h;
+      sumTravel += t;
+    }
+
+    hr();
+    doc.font("Helvetica-Bold").fontSize(10);
+    doc.text(`Summe Arbeitszeit: ${sumHours.toFixed(2)} h`, { align: "right" });
+    doc.text(`Summe Reisezeit:  ${sumTravel.toFixed(2)} h`, { align: "right" });
+    doc.text(`Gesamt:           ${(sumHours + sumTravel).toFixed(2)} h`, { align: "right" });
+
+    doc.moveDown(0.8);
+    doc.font("Helvetica").fontSize(8).fillColor("#555");
+    doc.text("Hinweis: Dieser Erfassungsbogen ist keine Rechnung und dient ausschließlich als Grundlage zur Rechnungserstellung.");
+    doc.fillColor("black");
+
+    doc.end();
+  } catch (e) {
+    console.error("PDF ERROR:", e);
+    // Debug optional
+    if (String(req.query.debug || "") === "1") {
+      return res.status(500).send("PDF Fehler: " + e.message);
+    }
+    return res.status(500).send("PDF Fehler");
+  }
+});
+
 }
 
     // Dateiname: Erfassungsbogen_...
