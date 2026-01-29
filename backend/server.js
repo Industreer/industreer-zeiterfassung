@@ -4518,17 +4518,25 @@ app.post("/api/admin/automation/run", async (req, res) => {
       }
 
       // create invoice draft
-      const inv = await client.query(
-        `
-INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
-VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5, $6)
-RETURNING id
+     let invoice_id = null;
+try {
+  const inv = await client.query(
+    `
+    INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
+    VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5, $6)
+    RETURNING id
+    `,
+    [customer_po, customer, from, to, total, "clamped"]
+  );
+  invoice_id = inv.rows[0].id;
+} catch (e) {
+  if (String(e.code) === "23505") {
+    skipped.push({ customer_po, reason: "duplicate_po_period_source" });
+    continue; // next PO
+  }
+  throw e;
+}
 
-        `,
-       [customer_po, customer, from, to, total, "clamped"]
-
-      );
-      const invoice_id = inv.rows[0].id;
 
       for (const li of lines) {
         await client.query(
