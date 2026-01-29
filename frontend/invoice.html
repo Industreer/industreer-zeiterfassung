@@ -57,6 +57,7 @@
     <button id="btn_csv">CSV</button>
     <button id="btn_pdf">PDF</button>
     <button id="btn_export">Exported</button>
+<button id="btn_last_run">Last Run</button>
 
 <button id="btn_review">Review 24h</button>
 
@@ -65,6 +66,7 @@
   <div class="row" style="margin-top:10px;">
     <span class="muted" id="status"></span>
   </div>
+<div class="muted" id="auto_status_text" style="margin-top:6px;">Automation: (noch kein Run)</div>
 
   <pre id="out"></pre>
   <div style="margin-top:14px;">
@@ -162,6 +164,30 @@
           showState(j);
           return;
         }
+async function loadLastRun(){
+  const el = document.getElementById("auto_status_text");
+  try{
+    const j = await api("/api/admin/automation/last-run");
+    if(!j.run){
+      el.textContent = "Automation: noch kein Run geloggt.";
+      return;
+    }
+    const r = j.run;
+    const ts = String(r.created_at || "").replace("T"," ").slice(0,19);
+    el.textContent =
+      `Automation: ${ts} | ${r.mode} | ${String(r.period_start).slice(0,10)}–${String(r.period_end).slice(0,10)} | created=${r.created_count} skipped=${r.skipped_count}`;
+  }catch(e){
+    el.textContent = "Automation: Fehler beim Laden (siehe Output).";
+    out("ERROR: " + e.message);
+  }
+}
+$("btn_last_run").onclick = async () => {
+  out("Working…");
+  const j = await api("/api/admin/automation/last-run");
+  out(j);
+  await loadLastRun();
+};
+
         if(act === "finalize"){
           out("Working…");
           await api(`/api/admin/invoices/${encodeURIComponent(id)}/finalize`, "POST");
@@ -195,19 +221,29 @@
     };
   });
 }
-
-$("btn_review").onclick = async () => {
+async function loadLastRun(){
   try{
-    out("Working…");
-const j = await api("/api/admin/review/invoices?minutes=1440&status=all");
-    out(j);
-    renderReview(j.rows || []);
-    // buttons state for current invoice box bleibt wie er ist
+    const j = await api("/api/admin/automation/last-run");
+    const el = document.getElementById("auto_status_text");
+
+    if(!j.run){
+      el.textContent = "Noch kein Run geloggt.";
+      return;
+    }
+    const r = j.run;
+    const ts = String(r.created_at || "").replace("T"," ").slice(0,19);
+    el.textContent = `Letzter Run: ${ts} | Mode: ${r.mode} | ${String(r.period_start).slice(0,10)}–${String(r.period_end).slice(0,10)} | created=${r.created_count} skipped=${r.skipped_count}`;
   }catch(e){
     out("ERROR: " + e.message);
   }
-};
+}
 
+document.getElementById("btn_last_run").onclick = async () => {
+  out("Working…");
+  const j = await api("/api/admin/automation/last-run");
+  out(j);
+  await loadLastRun();
+};
   function showState(j){
     const inv = j?.invoice;
     const st = inv?.status || j?.status || "";
@@ -319,10 +355,9 @@ showState(full);
 $("btn_review").onclick = async () => {
   try{
     out("Working…");
-    const j = await api("/api/admin/review/invoices?minutes=1440&status=draft");
+    const j = await api("/api/admin/review/invoices?minutes=1440&status=all");
     out(j);
-    console.log("REVIEW ROWS:", (j.rows || []).length, j.rows);
-renderReview(j.rows || []);
+    renderReview(j.rows || []);
   }catch(e){
     out("ERROR: " + e.message);
   }
