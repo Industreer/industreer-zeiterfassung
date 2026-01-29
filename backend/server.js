@@ -4222,8 +4222,17 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
     if (!inv.rowCount) return res.status(404).send("Invoice nicht gefunden");
     const invoice = inv.rows[0];
 
-    const fromIso = String(invoice.period_start).slice(0, 10);
-    const toIso   = String(invoice.period_end).slice(0, 10);
+// ✅ PG liefert DATE oft als JS Date -> String(date) ist "Thu Jan 01..." (kein SQL date)
+// Deshalb immer ISO "YYYY-MM-DD" bauen:
+const fromIso =
+  invoice.period_start instanceof Date
+    ? invoice.period_start.toISOString().slice(0, 10)
+    : String(invoice.period_start).slice(0, 10);
+
+const toIso =
+  invoice.period_end instanceof Date
+    ? invoice.period_end.toISOString().slice(0, 10)
+    : String(invoice.period_end).slice(0, 10);
 
     // Tagesdaten (echte Zeiten) aus v_time_entries_clamped
     const daily = await pool.query(
