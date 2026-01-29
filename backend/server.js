@@ -4128,6 +4128,63 @@ app.post("/api/admin/import/employees", upload.single("file"), async (req, res) 
   }
 });
 // ======================================================
+// A9.11: Review Queue - list recent draft invoices
+// GET /api/admin/invoices/review?minutes=60
+// optional: &status=draft|final|exported
+// ======================================================
+app.get("/api/admin/invoices/review", async (req, res) => {
+  try {
+    const minutes = Math.max(1, Math.min(10080, Number(req.query.minutes) || 60)); // up to 7 days
+    const status = req.query.status ? String(req.query.status).trim() : "draft";
+
+    const allowed = new Set(["draft", "final", "exported", "all"]);
+    if (!allowed.has(status)) {
+      return res.status(400).json({ ok: false, error: "status muss draft|final|exported|all sein" });
+    }
+
+    const where = [];
+    const params = [minutes];
+
+    where.push(`created_at >= NOW() - ($1::int * INTERVAL '1 minute')`);
+
+    if (status !== "all") {
+      params.push(status);
+      where.push(`status = $${params.length}`);
+    }
+
+    const q = await pool.query(
+      `
+      SELECT
+        id,
+        invoice_number,
+        customer_po,
+        customer,
+        period_start,
+        period_end,
+        status,
+        currency,
+        total_amount,
+        source,
+        created_at,
+        finalized_at,
+        exported_at,
+        export_note
+      FROM invoices
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC, id DESC
+      LIMIT 300
+      `,
+      params
+    );
+
+    res.json({ ok: true, minutes, status, rows: q.rows });
+  } catch (e) {
+    console.error("REVIEW LIST ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================
 // A8: INVOICES - PDF export
 // GET /api/admin/invoices/:id.pdf?code=2012
 // ======================================================
@@ -4592,62 +4649,6 @@ app.get("/api/admin/cron/monthly", async (req, res) => {
     return app._router.handle(req, res, () => {});
   } catch (e) {
     console.error("CRON MONTHLY ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// ======================================================
-// A9.11: Review Queue - list recent draft invoices
-// GET /api/admin/invoices/review?minutes=60
-// optional: &status=draft|final|exported
-// ======================================================
-app.get("/api/admin/invoices/review", async (req, res) => {
-  try {
-    const minutes = Math.max(1, Math.min(10080, Number(req.query.minutes) || 60)); // up to 7 days
-    const status = req.query.status ? String(req.query.status).trim() : "draft";
-
-    const allowed = new Set(["draft", "final", "exported", "all"]);
-    if (!allowed.has(status)) {
-      return res.status(400).json({ ok: false, error: "status muss draft|final|exported|all sein" });
-    }
-
-    const where = [];
-    const params = [minutes];
-
-    where.push(`created_at >= NOW() - ($1::int * INTERVAL '1 minute')`);
-
-    if (status !== "all") {
-      params.push(status);
-      where.push(`status = $${params.length}`);
-    }
-
-    const q = await pool.query(
-      `
-      SELECT
-        id,
-        invoice_number,
-        customer_po,
-        customer,
-        period_start,
-        period_end,
-        status,
-        currency,
-        total_amount,
-        source,
-        created_at,
-        finalized_at,
-        exported_at,
-        export_note
-      FROM invoices
-      WHERE ${where.join(" AND ")}
-      ORDER BY created_at DESC, id DESC
-      LIMIT 300
-      `,
-      params
-    );
-
-    res.json({ ok: true, minutes, status, rows: q.rows });
-  } catch (e) {
-    console.error("REVIEW LIST ERROR:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
