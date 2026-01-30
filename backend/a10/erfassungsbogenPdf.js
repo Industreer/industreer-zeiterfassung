@@ -285,14 +285,16 @@ function buildErfassungsbogenPdf(res, rows, opts = {}) {
 
   const grouped = groupRows(rows, groupMode);
 
-  for (let i = 0; i < grouped.length; i++) {
-    const [groupTitle, items] = grouped[i];
+ for (let i = 0; i < grouped.length; i++) {
+  const [groupTitle, items] = grouped[i];
 
-    // Group title
+  // Group title – NICHT direkt unter dem Header
+  if (i > 0) {
+    doc.moveDown(0.5);
     doc.font("Helvetica-Bold").fontSize(11).fillColor("#111");
     doc.text(groupTitle);
-    doc.moveDown(0.5);
-
+    doc.moveDown(0.25);
+  }
     const sorted = [...items].sort(
       (a, b) =>
         (a.date || "").localeCompare(b.date || "") ||
