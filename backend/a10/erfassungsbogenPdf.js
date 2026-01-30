@@ -4,6 +4,7 @@ const PDFDocument = require("pdfkit");
  * rows: Array of
  * { date:"YYYY-MM-DD", project:string, internal_po?:string|null, task?:string|null, minutes:number }
  */
+
 function minutesToHHMM(mins) {
   const h = Math.floor(mins / 60);
   const m = mins % 60;
@@ -46,9 +47,11 @@ function groupRows(rows, mode) {
   const keys = Array.from(map.keys()).sort((a, b) => a.localeCompare(b, "de"));
   return keys.map((k) => [k, map.get(k)]);
 }
+
 function sumMinutes(rows) {
   return rows.reduce((acc, r) => acc + Number(r.minutes || 0), 0);
 }
+
 function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
   const margin = 48; // pt
   const pageW = doc.page.width;
@@ -85,7 +88,6 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
     const boxX = margin + contentW - boxW;
     const boxY = margin - 2;
 
-    // Box
     doc.save();
     doc.roundedRect(boxX, boxY, boxW, 46, 6).fill("#F8FAFC");
     doc.restore();
@@ -104,7 +106,8 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
 
   // Trennlinie unter Header
   const lineY = margin + 64;
-  doc.moveTo(margin, lineY)
+  doc
+    .moveTo(margin, lineY)
     .lineTo(margin + contentW, lineY)
     .strokeColor("#E4E7EC")
     .lineWidth(1)
@@ -113,40 +116,27 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
   doc.y = margin + 76;
 }
 
-  const titleX = margin + (logoPath ? 160 : 0);
-  doc.text(title, titleX, margin);
-
-  if (periodLabel) {
-    doc.fontSize(10).font("Helvetica").fillColor("#444");
-    doc.text(periodLabel, titleX, margin + 26);
-    doc.fillColor("#000");
-  doc.moveDown(2);
-  doc.y = margin + 70;
-}
-
 function drawTable(doc, { rows, showKwColumn = false }) {
   const margin = 48;
   const pageWidth = doc.page.width;
   const usable = pageWidth - margin * 2;
 
-  // Column widths (tuned for calm layout)
-const colW = showKwColumn
-  ? {
-      kw: 56,
-      date: 72,
-      project: 160,
-      po: 68,
-      task: usable - (56 + 72 + 160 + 68 + 70),
-      time: 70,
-    }
-  : {
-      date: 72,
-      project: 170,
-      po: 70,
-      task: usable - (72 + 170 + 70 + 70),
-      time: 70,
-    };
-
+  const colW = showKwColumn
+    ? {
+        kw: 56,
+        date: 72,
+        project: 160,
+        po: 68,
+        task: usable - (56 + 72 + 160 + 68 + 70),
+        time: 70,
+      }
+    : {
+        date: 72,
+        project: 170,
+        po: 70,
+        task: usable - (72 + 170 + 70 + 70),
+        time: 70,
+      };
 
   const startX = margin;
   let y = doc.y;
@@ -158,28 +148,35 @@ const colW = showKwColumn
 
   doc.fontSize(9).font("Helvetica-Bold");
   doc.fillColor("#111");
-let x = startX;
 
-doc.text(showKwColumn ? "KW" : "Datum", x + 6, y + 6, { width: (showKwColumn ? colW.kw : colW.date) - 10 });
-x += showKwColumn ? colW.kw : colW.date;
+  let x = startX;
 
-doc.text(showKwColumn ? "Datum" : "Projekt", x + 6, y + 6, { width: (showKwColumn ? colW.date : colW.project) - 10 });
-x += showKwColumn ? colW.date : colW.project;
+  if (showKwColumn) {
+    doc.text("KW", x + 6, y + 6, { width: colW.kw - 10 });
+    x += colW.kw;
+  }
 
-doc.text(showKwColumn ? "Projekt" : "PO", x + 6, y + 6, { width: (showKwColumn ? colW.project : colW.po) - 10 });
-x += showKwColumn ? colW.project : colW.po;
+  doc.text("Datum", x + 6, y + 6, { width: colW.date - 10 });
+  x += colW.date;
 
-doc.text(showKwColumn ? "PO" : "Tätigkeit", x + 6, y + 6, { width: (showKwColumn ? colW.po : colW.task) - 10 });
-x += showKwColumn ? colW.po : colW.task;
+  doc.text("Projekt", x + 6, y + 6, { width: colW.project - 10 });
+  x += colW.project;
 
-doc.text("Tätigkeit", x + 6, y + 6, { width: colW.task - 10 });
-x += colW.task;
+  doc.text("PO", x + 6, y + 6, { width: colW.po - 10 });
+  x += colW.po;
 
-doc.text("Zeit", x + 6, y + 6, { width: colW.time - 10, align: "right" });
+  doc.text("Tätigkeit", x + 6, y + 6, { width: colW.task - 10 });
+  x += colW.task;
 
+  doc.text("Zeit", x + 6, y + 6, { width: colW.time - 10, align: "right" });
 
   // Lines
-  doc.moveTo(startX, y + 20).lineTo(startX + usable, y + 20).strokeColor("#D0D5DD").lineWidth(1).stroke();
+  doc
+    .moveTo(startX, y + 20)
+    .lineTo(startX + usable, y + 20)
+    .strokeColor("#D0D5DD")
+    .lineWidth(1)
+    .stroke();
 
   y += 24;
   doc.font("Helvetica").fontSize(9).fillColor("#000");
@@ -203,35 +200,38 @@ doc.text("Zeit", x + 6, y + 6, { width: colW.time - 10, align: "right" });
     const yyyy = d.getFullYear();
     const dateLabel = `${dd}.${mm}.${yyyy}`;
 
-let xx = startX;
+    let xx = startX;
 
-if (showKwColumn) {
-  const { year, week } = isoWeek(r.date);
-  doc.text(`KW${String(week).padStart(2, "0")}`, xx + 6, y, { width: colW.kw - 10 });
-  xx += colW.kw;
-}
+    if (showKwColumn) {
+      const { week } = isoWeek(r.date);
+      doc.text(`KW${String(week).padStart(2, "0")}`, xx + 6, y, { width: colW.kw - 10 });
+      xx += colW.kw;
+    }
 
-doc.text(dateLabel, xx + 6, y, { width: colW.date - 10 });
-xx += colW.date;
+    doc.text(dateLabel, xx + 6, y, { width: colW.date - 10 });
+    xx += colW.date;
 
-doc.text(r.project || "—", xx + 6, y, { width: colW.project - 10 });
-xx += colW.project;
+    doc.text(r.project || "—", xx + 6, y, { width: colW.project - 10 });
+    xx += colW.project;
 
-doc.text(r.internal_po || "—", xx + 6, y, { width: colW.po - 10 });
-xx += colW.po;
+    doc.text(r.internal_po || "—", xx + 6, y, { width: colW.po - 10 });
+    xx += colW.po;
 
-doc.text(r.task || "—", xx + 6, y, { width: colW.task - 10 });
-xx += colW.task;
+    doc.text(r.task || "—", xx + 6, y, { width: colW.task - 10 });
+    xx += colW.task;
 
-doc.text(
-  minutesToHHMM(Number(r.minutes || 0)),
-  xx + 6,
-  y,
-  { width: colW.time - 10, align: "right" }
-);
+    doc.text(minutesToHHMM(Number(r.minutes || 0)), xx + 6, y, {
+      width: colW.time - 10,
+      align: "right",
+    });
 
     // subtle row divider
-    doc.moveTo(startX, y + rowHeight).lineTo(startX + usable, y + rowHeight).strokeColor("#E4E7EC").lineWidth(0.7).stroke();
+    doc
+      .moveTo(startX, y + rowHeight)
+      .lineTo(startX + usable, y + rowHeight)
+      .strokeColor("#E4E7EC")
+      .lineWidth(0.7)
+      .stroke();
 
     y += rowHeight + 2;
   }
@@ -239,8 +239,11 @@ doc.text(
   // Sum row
   y += 6;
   doc.font("Helvetica-Bold");
-  doc.text("Summe", startX + colW.date + colW.project + colW.po + 6, y, { width: colW.task - 10, align: "right" });
-  doc.text(minutesToHHMM(total), startX + colW.date + colW.project + colW.po + colW.task + 6, y, {
+  doc.text("Summe", startX + usable - (colW.time + colW.task), y, {
+    width: colW.task - 10,
+    align: "right",
+  });
+  doc.text(minutesToHHMM(total), startX + usable - colW.time, y, {
     width: colW.time - 10,
     align: "right",
   });
@@ -250,22 +253,22 @@ doc.text(
 }
 
 function buildErfassungsbogenPdf(res, rows, opts = {}) {
-const {
-  title = "Erfassungsbogen",
-  groupMode = "week", // "date" | "week" | "project"
-  periodLabel = null,
-  logoPath = null,
-  meta = {},          // { customer, customerPo, internalPo }
-  showKwColumn = false, // optional
-} = opts;
-const totalAll = sumMinutes(rows);
-const metaLines = [
-  meta.customer ? `Kunde: ${meta.customer}` : null,
-  meta.customerPo ? `Kunden-PO: ${meta.customerPo}` : null,
-  meta.internalPo ? `Internal-PO: ${meta.internalPo}` : null,
-  `Gesamt: ${minutesToHHMM(totalAll)}`,
-].filter(Boolean);
+  const {
+    title = "Erfassungsbogen",
+    groupMode = "week", // "date" | "week" | "project"
+    periodLabel = null,
+    logoPath = null,
+    meta = {}, // { customer, customerPo, internalPo }
+    showKwColumn = false,
+  } = opts;
 
+  const totalAll = sumMinutes(rows);
+  const metaLines = [
+    meta.customer ? `Kunde: ${meta.customer}` : null,
+    meta.customerPo ? `Kunden-PO: ${meta.customerPo}` : null,
+    meta.internalPo ? `Internal-PO: ${meta.internalPo}` : null,
+    `Gesamt: ${minutesToHHMM(totalAll)}`,
+  ].filter(Boolean);
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", 'inline; filename="erfassungsbogen.pdf"');
@@ -278,7 +281,7 @@ const metaLines = [
 
   doc.pipe(res);
 
-  drawHeader(doc, { title, periodLabel, logoPath });
+  drawHeader(doc, { title, periodLabel, logoPath, metaLines });
 
   const grouped = groupRows(rows, groupMode);
 
@@ -290,15 +293,15 @@ const metaLines = [
     doc.text(groupTitle);
     doc.moveDown(0.5);
 
-    // Table
-    // sort rows inside group
-    const sorted = [...items].sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.project || "").localeCompare(b.project || "", "de"));
+    const sorted = [...items].sort(
+      (a, b) =>
+        (a.date || "").localeCompare(b.date || "") ||
+        (a.project || "").localeCompare(b.project || "", "de")
+    );
+
     drawTable(doc, { rows: sorted, showKwColumn });
 
-
-    if (i !== grouped.length - 1) {
-      doc.moveDown(0.5);
-    }
+    if (i !== grouped.length - 1) doc.moveDown(0.5);
   }
 
   doc.end();
