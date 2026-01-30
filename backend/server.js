@@ -14,6 +14,11 @@ const { buildErfassungsbogenPdf } = require("./a10/erfassungsbogenPdf");
 
 
 const app = express();
+// ======================================================
+// CONFIG
+// ======================================================
+const PORT = process.env.PORT || 10000;
+
 
 // ======================================================
 // BASE MIDDLEWARES (einmalig!)
@@ -82,29 +87,31 @@ app.get("/api/cron/run", async (req, res) => {
 });
 app.get("/a10/erfassungsbogen.pdf", async (req, res) => {
   try {
-    const group = ["date", "week", "project"].includes(req.query.group) ? req.query.group : "week";
+    const group = ["date", "week", "project"].includes(req.query.group)
+      ? req.query.group
+      : "week";
+
     const showKwColumn = String(req.query.kw || "") === "1";
 
-
-    // TODO: Hier später echte Zeiten aus DB holen
-    // Beispiel-rows (erstmal zum Proof)
     const rows = [
       { date: "2026-01-27", project: "Kunde A", internal_po: "PO-123", task: "Dev", minutes: 120 },
       { date: "2026-01-28", project: "Kunde A", internal_po: "PO-123", task: "QA", minutes: 90 },
       { date: "2026-01-29", project: "Internal", internal_po: null, task: "Admin", minutes: 45 },
     ];
 
-    const logoPath = path.join(__dirname, "static", "logo.png"); // optional
-buildErfassungsbogenPdf(res, rows, {
-  title: "Erfassungsbogen (Zeiten)",
-  groupMode: group,
-  periodLabel: "Zeitraum: automatisch",
-  logoPath: LOGO_FILE,
-  showKwColumn,
-  meta: { customer: "—" }
+    return buildErfassungsbogenPdf(res, rows, {
+      title: "Erfassungsbogen (Zeiten)",
+      groupMode: group,
+      periodLabel: "Zeitraum: automatisch",
+      logoPath: LOGO_FILE,
+      showKwColumn,
+      meta: { customer: "—" }
+    });
+  } catch (e) {
+    console.error("A10 PDF ERROR:", e);
+    return res.status(500).send("PDF generation failed");
+  }
 });
-
-
 // ======================================================
 // ADMIN ROUTE GUARD (VARIANTE B)
 // schützt automatisch alle /api/admin/* Endpunkte
@@ -122,10 +129,6 @@ app.use("/api/admin", (req, res, next) => {
 });
 console.log("🔐 Admin Route Guard aktiv");
 
-// ======================================================
-// CONFIG
-// ======================================================
-const PORT = process.env.PORT || 10000;
 
 // ======================================================
 // PATHS
@@ -268,6 +271,7 @@ async function ensureColumn(table, column, typeSql) {
     END $$;
   `);
 }
+
 // -------- Settings helpers --------
 async function getSetting(key) {
   const r = await pool.query(`SELECT value FROM app_settings WHERE key=$1`, [key]);
@@ -284,6 +288,7 @@ async function setSetting(key, value) {
     [key, value]
   );
 }
+
 async function ensureEmployeeExists(employee_id) {
   // Minimal: wenn nicht vorhanden, anlegen
   // Name = employee_id (kann später über Admin korrigiert werden)
@@ -303,6 +308,7 @@ async function ensureEmployeeExists(employee_id) {
 async function migrate() {
   console.log("🔧 DB migrate start");
 
+  // ===== Core tables =====
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       employee_id TEXT PRIMARY KEY,
@@ -339,125 +345,35 @@ async function migrate() {
     );
   `);
 
+  // legacy-sicher
   await pool.query(`
     ALTER TABLE employees
     ADD COLUMN IF NOT EXISTS weekly_hours NUMERIC DEFAULT 40;
   `);
-  // ======================================================
-// A9.12: Automation run log (notifications)
-// ======================================================
-await pool.query(`
-  CREATE TABLE IF NOT EXISTS automation_runs (
-    id BIGSERIAL PRIMARY KEY,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    mode TEXT NOT NULL,
-    period_start DATE NOT NULL,
-    period_end DATE NOT NULL,
-    created_count INT NOT NULL DEFAULT 0,
-    skipped_count INT NOT NULL DEFAULT 0,
-    created_json JSONB,
-    skipped_json JSONB,
-    note TEXT
-  );
-`);
-
-await pool.query(`
-  CREATE INDEX IF NOT EXISTS automation_runs_by_created_at
-  ON automation_runs (created_at DESC);
-`);
 
   // ======================================================
-// A8.11: INVOICES - mark as exported
-// POST /api/admin/invoices/:id/export
-// Body: { note? }  (optional)
-// ======================================================
-app.post("/api/admin/invoices/:id/export", async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const id = String(req.params.id || "").trim();
-    if (!/^\d+$/.test(id)) return res.status(400).json({ ok: false, error: "id ungültig" });
-
-    const note = req.body?.note != null ? String(req.body.note).trim() : null;
-
-    await client.query("BEGIN");
-
-    const inv = await client.query(`SELECT * FROM invoices WHERE id=$1::bigint FOR UPDATE`, [id]);
-    if (!inv.rowCount) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ ok: false, error: "Invoice nicht gefunden" });
-    }
-
-    const row = inv.rows[0];
-
-    if (row.status === "draft") {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ ok: false, error: "Export nur möglich, wenn status=final (draft ist nicht erlaubt)" });
-    }
-
-    if (row.status === "exported") {
-      await client.query("ROLLBACK");
-      return res.json({
-        ok: true,
-        invoice_id: id,
-        status: "exported",
-        already_exported: true,
-        exported_at: row.exported_at,
-        note: row.export_note
-      });
-    }
-
-    await client.query(
-      `
-      UPDATE invoices
-      SET status='exported',
-          exported_at=NOW(),
-          export_note=COALESCE($2, export_note)
-      WHERE id=$1::bigint
-      `,
-      [id, note]
+  // A9.12: Automation run log (notifications)
+  // ======================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id BIGSERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      mode TEXT NOT NULL,
+      period_start DATE NOT NULL,
+      period_end DATE NOT NULL,
+      created_count INT NOT NULL DEFAULT 0,
+      skipped_count INT NOT NULL DEFAULT 0,
+      created_json JSONB,
+      skipped_json JSONB,
+      note TEXT
     );
+  `);
 
-    await client.query("COMMIT");
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS automation_runs_by_created_at
+    ON automation_runs (created_at DESC);
+  `);
 
-    return res.json({ ok: true, invoice_id: id, status: "exported" });
-  } catch (e) {
-    try { await client.query("ROLLBACK"); } catch {}
-    console.error("EXPORT INVOICE ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
-  } finally {
-    client.release();
-  }
-});
-  // ======================================================
-  // A8.11: Invoice export tracking
-  // ======================================================
-  await ensureColumn("invoices", "exported_at", "TIMESTAMPTZ");
-  await ensureColumn("invoices", "export_note", "TEXT");
-
-  // ===== STAFFPLAN: Duplikate entfernen + Unique Index (NULL-sicher) =====
-  try {
-    await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
-
-    const dedupe = await pool.query(`
-      WITH ranked AS (
-        SELECT id,
-          ROW_NUMBER() OVER (
-            PARTITION BY
-              employee_id,
-              work_date,
-              COALESCE(customer_po,''),
-              COALESCE(internal_po,''),
-              COALESCE(project_short,'')
-            ORDER BY id DESC
-          ) AS rn
-        FROM staffplan
-      )
-      DELETE FROM staffplan s
-      USING ranked r
-      WHERE s.id = r.id
-        AND r.rn > 1
-      RETURNING s.id;
-    `);
   // ======================================================
   // INVOICES (A8 – Abrechnung & Go-Live)
   // ======================================================
@@ -503,17 +419,30 @@ app.post("/api/admin/invoices/:id/export", async (req, res) => {
     ON invoice_lines (invoice_id);
   `);
 
-    console.log("🧹 staffplan dedupe deleted:", dedupe.rowCount);
-      } catch (e) {
-    console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);
-  }
-      // Backfill: set source for existing rows where NULL/empty
+  // ======================================================
+  // A8.11: Invoice export tracking
+  // ======================================================
+  await ensureColumn("invoices", "exported_at", "TIMESTAMPTZ");
+  await ensureColumn("invoices", "export_note", "TEXT");
+
+  // ======================================================
+  // A9.10: Prevent duplicate invoices (source + unique key)
+  // ======================================================
+  await ensureColumn("invoices", "source", "TEXT");
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS invoices_uniq_po_period_source
+    ON invoices (customer_po, period_start, period_end, COALESCE(source,''));
+  `);
+
+  // Backfill: set source for existing rows where NULL/empty
   await pool.query(`
     UPDATE invoices
     SET source = 'legacy'
     WHERE source IS NULL OR source = '';
   `);
-      // Dedupe invoices for same (customer_po, period_start, period_end, source)
+
+  // Dedupe invoices for same (customer_po, period_start, period_end, source)
   // Keep the newest (highest id), delete older ones + their lines cascade
   await pool.query(`
     WITH ranked AS (
@@ -531,7 +460,42 @@ app.post("/api/admin/invoices/:id/export", async (req, res) => {
       AND r.rn > 1;
   `);
 
-await pool.query(`
+  // ===== STAFFPLAN: Duplikate entfernen + Unique Index (NULL-sicher) =====
+  try {
+    await pool.query(`DROP INDEX IF EXISTS staffplan_uniq;`);
+  } catch (e) {
+    // ignore
+  }
+
+  try {
+    const dedupe = await pool.query(`
+      WITH ranked AS (
+        SELECT id,
+          ROW_NUMBER() OVER (
+            PARTITION BY
+              employee_id,
+              work_date,
+              COALESCE(customer_po,''),
+              COALESCE(internal_po,''),
+              COALESCE(project_short,'')
+            ORDER BY id DESC
+          ) AS rn
+        FROM staffplan
+      )
+      DELETE FROM staffplan s
+      USING ranked r
+      WHERE s.id = r.id
+        AND r.rn > 1
+      RETURNING s.id;
+    `);
+
+    console.log("🧹 staffplan dedupe deleted:", dedupe.rowCount);
+  } catch (e) {
+    console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);
+  }
+
+  try {
+    await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS staffplan_uniq2
       ON staffplan (
         employee_id,
@@ -544,7 +508,7 @@ await pool.query(`
 
     console.log("✅ staffplan_uniq2 aktiv");
   } catch (e) {
-    console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);  
+    console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);
   }
 
   // normale Indizes (IMMER ausführen)
@@ -557,22 +521,6 @@ await pool.query(`
     CREATE INDEX IF NOT EXISTS staffplan_by_date_emp
     ON staffplan (work_date, employee_id);
   `);
-    // ======================================================
-  // A8.11: Invoice export tracking
-  // ======================================================
-  await ensureColumn("invoices", "exported_at", "TIMESTAMPTZ");
-  await ensureColumn("invoices", "export_note", "TEXT");
-  // ======================================================
-  // A9.10: Prevent duplicate invoices (source + unique key)
-  // ======================================================
-  await ensureColumn("invoices", "source", "TEXT");
-    // Unique per PO + period + source (only for draft/final/exported equally)
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS invoices_uniq_po_period_source
-    ON invoices (customer_po, period_start, period_end, COALESCE(source,''));
-  `);
-
-
 
   // ======================================================
   // PO WORK RULES
@@ -686,8 +634,6 @@ await pool.query(`
 
   console.log("✅ DB migrate finished");
 }
-
-
 
 // ======================================================
 // STATIC
@@ -3183,6 +3129,7 @@ app.get("/api/admin/report-hours/weekly.csv", async (req, res) => {
     res.status(500).send(e.message || "csv error");
   }
 });
+
 // ======================================================
 // ADMIN: Customer Invoice (DAILY) CSV
 // GET /api/admin/invoice/daily.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=...&code=2012
