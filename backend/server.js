@@ -436,32 +436,88 @@ if (project_short) {
   }
 
   const sql = `
+  WITH te_base AS (
     SELECT
+      te.employee_id,
       te.work_date::date AS work_date,
-      COALESCE(NULLIF(TRIM(sp.project_short), ''), '—') AS project,
-      NULLIF(TRIM(sp.internal_po), '') AS internal_po,
-      NULLIF(TRIM(sp.customer_po), '') AS customer_po,
-      COALESCE(NULLIF(TRIM(sp.customer), ''), NULL) AS customer,
-      SUM(
-        GREATEST(
-          0,
-          FLOOR(
-            (EXTRACT(EPOCH FROM (te.end_ts - te.start_ts)) / 60.0)
-            - COALESCE(te.break_minutes, 0)
-            - COALESCE(te.auto_break_minutes, 0)
-          )
-        )
-      )::int AS minutes
+      te.start_ts,
+      te.end_ts,
+      te.break_minutes,
+      te.auto_break_minutes
     FROM time_entries te
-    LEFT JOIN staffplan sp
-      ON sp.employee_id = te.employee_id
-     AND sp.work_date = te.work_date
-    WHERE ${where}
+    WHERE te.work_date BETWEEN $1::date AND $2::date
       AND te.start_ts IS NOT NULL
       AND te.end_ts IS NOT NULL
-    GROUP BY te.work_date, project, internal_po, customer_po, customer
-    ORDER BY te.work_date ASC, project ASC, internal_po ASC
-  `;
+  ),
+  te_proj AS (
+    -- project_id vom selben Tag (letzter clock_in des Tages)
+    SELECT
+      b.employee_id,
+      b.work_date,
+      (
+        SELECT NULLIF(TRIM(e.project_id), '')
+        FROM time_events e
+        WHERE e.employee_id = b.employee_id
+          AND (e.event_time AT TIME ZONE 'Europe/Berlin')::date = b.work_date
+          AND e.event_type = 'clock_in'
+          AND e.project_id IS NOT NULL
+        ORDER BY e.event_time DESC
+        LIMIT 1
+      ) AS project_id
+    FROM te_base b
+  )
+  SELECT
+    b.work_date::date AS work_date,
+
+    COALESCE(
+      NULLIF(TRIM(sp.project_short), ''),
+      NULLIF(TRIM(tp.project_id), ''),
+      '—'
+    ) AS project,
+
+    COALESCE(
+      NULLIF(TRIM(sp.internal_po), ''),
+      NULLIF(TRIM(p.internal_po), '')
+    ) AS internal_po,
+
+    COALESCE(
+      NULLIF(TRIM(sp.customer_po), ''),
+      NULLIF(TRIM(p.customer_po), '')
+    ) AS customer_po,
+
+    COALESCE(
+      NULLIF(TRIM(sp.customer), ''),
+      NULLIF(TRIM(p.customer), ''),
+      NULL
+    ) AS customer,
+
+    SUM(
+      GREATEST(
+        0,
+        FLOOR(
+          (EXTRACT(EPOCH FROM (b.end_ts - b.start_ts)) / 60.0)
+          - COALESCE(b.break_minutes, 0)
+          - COALESCE(b.auto_break_minutes, 0)
+        )
+      )
+    )::int AS minutes
+
+  FROM te_base b
+  LEFT JOIN staffplan sp
+    ON sp.employee_id = b.employee_id
+   AND sp.work_date = b.work_date
+
+  LEFT JOIN te_proj tp
+    ON tp.employee_id = b.employee_id
+   AND tp.work_date = b.work_date
+
+  LEFT JOIN projects p
+    ON TRIM(p.project_id) = TRIM(tp.project_id)
+
+  WHERE ${where}
+  GROUP BY b.work_date, project, internal_po, customer_po, customer
+  ORDER BY b.work_date ASC, project ASC, internal_po ASC
+`;
 
   const r = await pool.query(sql, params);
 
@@ -2057,8 +2113,9 @@ app.get("/api/admin/report-hours", async (req, res) => {
     }
     if (customer_po) {
       params.push(customer_po);
-      where.push(`mapped_customer_po = $${params.length}`);
-    }
+     where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
+
 
     const r = await pool.query(
       `
