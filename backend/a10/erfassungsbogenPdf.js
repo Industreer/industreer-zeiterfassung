@@ -109,8 +109,6 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
     doc.fontSize(10).font("Helvetica").fillColor("#444");
     doc.text(periodLabel, titleX, margin + 26);
     doc.fillColor("#000");
-  }
-
   doc.moveDown(2);
   doc.y = margin + 70;
 }
