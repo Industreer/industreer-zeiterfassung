@@ -68,20 +68,27 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
   }
 
   // Titel + Zeitraum (links, mit Platz für Meta rechts)
-  const titleX = margin + (logoPath ? 160 : 0);
-  doc.fillColor("#111").font("Helvetica-Bold").fontSize(16);
-  doc.text(title, titleX, margin, {
-    width: contentW - (logoPath ? 160 : 0) - 170,
-  });
+const titleX = margin + (logoPath ? 160 : 0);
+const titleWidth = contentW - (logoPath ? 160 : 0) - 170;
 
-  if (periodLabel) {
-    doc.font("Helvetica").fontSize(10).fillColor("#444");
-    doc.text(periodLabel, titleX, margin + 26, {
-      width: contentW - (logoPath ? 160 : 0) - 170,
+doc.fillColor("#111").font("Helvetica-Bold").fontSize(16);
+doc.text(title, titleX, margin, {
+  width: titleWidth,
+  align: "center",
+});
+if (periodLabel) {
+  const afterTitleY = doc.y + 4; // automatisch unter Titel
+
+  doc.font("Helvetica")
+    .fontSize(10)
+    .fillColor("#444")
+    .text(periodLabel, titleX, afterTitleY, {
+      width: titleWidth,
+      align: "center",
     });
-    doc.fillColor("#000");
-  }
 
+  doc.fillColor("#000");
+}
   // Meta-Block rechts
   if (Array.isArray(metaLines) && metaLines.length) {
     const boxW = 170;
