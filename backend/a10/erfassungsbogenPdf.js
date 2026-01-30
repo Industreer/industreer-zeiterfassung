@@ -230,11 +230,6 @@ doc.text(
   { width: colW.time - 10, align: "right" }
 );
 
-
-      width: colW.time - 10,
-      align: "right",
-    });
-
     // subtle row divider
     doc.moveTo(startX, y + rowHeight).lineTo(startX + usable, y + rowHeight).strokeColor("#E4E7EC").lineWidth(0.7).stroke();
 
