@@ -46,11 +46,16 @@ function groupRows(rows, mode) {
   const keys = Array.from(map.keys()).sort((a, b) => a.localeCompare(b, "de"));
   return keys.map((k) => [k, map.get(k)]);
 }
-
-function drawHeader(doc, { title, periodLabel, logoPath }) {
+function sumMinutes(rows) {
+  return rows.reduce((acc, r) => acc + Number(r.minutes || 0), 0);
+}
+function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
   const margin = 48; // pt
-  doc.fontSize(18).font("Helvetica-Bold");
+  const pageW = doc.page.width;
+  const contentW = pageW - margin * 2;
 
+  // Logo (links)
+  doc.fontSize(18).font("Helvetica-Bold");
   if (logoPath) {
     try {
       doc.image(logoPath, margin, margin - 6, { fit: [140, 42] });
@@ -59,6 +64,44 @@ function drawHeader(doc, { title, periodLabel, logoPath }) {
     }
   }
 
+  // Titel + Zeitraum (links neben/unter Logo)
+  const titleX = margin + (logoPath ? 160 : 0);
+  doc.fillColor("#111").font("Helvetica-Bold").fontSize(18);
+  doc.text(title, titleX, margin, { width: contentW - (logoPath ? 160 : 0) - 170 });
+
+  if (periodLabel) {
+    doc.font("Helvetica").fontSize(10).fillColor("#444");
+    doc.text(periodLabel, titleX, margin + 26, { width: contentW - (logoPath ? 160 : 0) - 170 });
+  }
+
+  // Meta-Block rechts (Kunde/PO/Summe etc.)
+  if (Array.isArray(metaLines) && metaLines.length) {
+    const boxW = 170;
+    const boxX = margin + contentW - boxW;
+    const boxY = margin - 2;
+
+    doc.font("Helvetica").fontSize(9).fillColor("#111");
+    let y = boxY;
+
+    // dezente Box
+    doc.save();
+    doc.roundedRect(boxX, boxY, boxW, 46, 6).fill("#F8FAFC");
+    doc.restore();
+
+    y += 8;
+    for (const line of metaLines.slice(0, 4)) {
+      doc.fillColor("#344054").text(line, boxX + 10, y, { width: boxW - 20, align: "right" });
+      y += 11;
+    }
+    doc.fillColor("#000");
+  }
+
+  // Trennlinie unter Header
+  const lineY = margin + 64;
+  doc.moveTo(margin, lineY).lineTo(margin + contentW, lineY).strokeColor("#E4E7EC").lineWidth(1).stroke();
+
+  doc.y = margin + 76;
+}
   const titleX = margin + (logoPath ? 160 : 0);
   doc.text(title, titleX, margin);
 
@@ -72,19 +115,29 @@ function drawHeader(doc, { title, periodLabel, logoPath }) {
   doc.y = margin + 70;
 }
 
-function drawTable(doc, { rows }) {
+function drawTable(doc, { rows, showKwColumn = false }) {
   const margin = 48;
   const pageWidth = doc.page.width;
   const usable = pageWidth - margin * 2;
 
   // Column widths (tuned for calm layout)
-  const colW = {
-    date: 72,
-    project: 170,
-    po: 70,
-    task: usable - (72 + 170 + 70 + 70),
-    time: 70,
-  };
+const colW = showKwColumn
+  ? {
+      kw: 56,
+      date: 72,
+      project: 160,
+      po: 68,
+      task: usable - (56 + 72 + 160 + 68 + 70),
+      time: 70,
+    }
+  : {
+      date: 72,
+      project: 170,
+      po: 70,
+      task: usable - (72 + 170 + 70 + 70),
+      time: 70,
+    };
+
 
   const startX = margin;
   let y = doc.y;
@@ -96,11 +149,25 @@ function drawTable(doc, { rows }) {
 
   doc.fontSize(9).font("Helvetica-Bold");
   doc.fillColor("#111");
-  doc.text("Datum", startX + 6, y + 6, { width: colW.date - 10 });
-  doc.text("Projekt", startX + colW.date + 6, y + 6, { width: colW.project - 10 });
-  doc.text("PO", startX + colW.date + colW.project + 6, y + 6, { width: colW.po - 10 });
-  doc.text("Tätigkeit", startX + colW.date + colW.project + colW.po + 6, y + 6, { width: colW.task - 10 });
-  doc.text("Zeit", startX + colW.date + colW.project + colW.po + colW.task + 6, y + 6, { width: colW.time - 10, align: "right" });
+let x = startX;
+
+doc.text(showKwColumn ? "KW" : "Datum", x + 6, y + 6, { width: (showKwColumn ? colW.kw : colW.date) - 10 });
+x += showKwColumn ? colW.kw : colW.date;
+
+doc.text(showKwColumn ? "Datum" : "Projekt", x + 6, y + 6, { width: (showKwColumn ? colW.date : colW.project) - 10 });
+x += showKwColumn ? colW.date : colW.project;
+
+doc.text(showKwColumn ? "Projekt" : "PO", x + 6, y + 6, { width: (showKwColumn ? colW.project : colW.po) - 10 });
+x += showKwColumn ? colW.project : colW.po;
+
+doc.text(showKwColumn ? "PO" : "Tätigkeit", x + 6, y + 6, { width: (showKwColumn ? colW.po : colW.task) - 10 });
+x += showKwColumn ? colW.po : colW.task;
+
+doc.text("Tätigkeit", x + 6, y + 6, { width: colW.task - 10 });
+x += colW.task;
+
+doc.text("Zeit", x + 6, y + 6, { width: colW.time - 10, align: "right" });
+
 
   // Lines
   doc.moveTo(startX, y + 20).lineTo(startX + usable, y + 20).strokeColor("#D0D5DD").lineWidth(1).stroke();
@@ -127,11 +194,28 @@ function drawTable(doc, { rows }) {
     const yyyy = d.getFullYear();
     const dateLabel = `${dd}.${mm}.${yyyy}`;
 
-    doc.text(dateLabel, startX + 6, y, { width: colW.date - 10 });
-    doc.text(r.project || "—", startX + colW.date + 6, y, { width: colW.project - 10 });
-    doc.text(r.internal_po || "—", startX + colW.date + colW.project + 6, y, { width: colW.po - 10 });
-    doc.text(r.task || "—", startX + colW.date + colW.project + colW.po + 6, y, { width: colW.task - 10 });
-    doc.text(minutesToHHMM(Number(r.minutes || 0)), startX + colW.date + colW.project + colW.po + colW.task + 6, y, {
+let xx = startX;
+
+if (showKwColumn) {
+  const { year, week } = isoWeek(r.date);
+  doc.text(`KW${String(week).padStart(2, "0")}`, xx + 6, y, { width: colW.kw - 10 });
+  xx += colW.kw;
+}
+
+doc.text(dateLabel, xx + 6, y, { width: colW.date - 10 });
+xx += colW.date;
+
+doc.text(r.project || "—", xx + 6, y, { width: colW.project - 10 });
+xx += colW.project;
+
+doc.text(r.internal_po || "—", xx + 6, y, { width: colW.po - 10 });
+xx += colW.po;
+
+doc.text(r.task || "—", xx + 6, y, { width: colW.task - 10 });
+xx += colW.task;
+
+doc.text(minutesToHHMM(Number(r.minutes || 0)), xx + 6, y, { width: colW.time - 10, align: "right" });
+
       width: colW.time - 10,
       align: "right",
     });
@@ -156,12 +240,22 @@ function drawTable(doc, { rows }) {
 }
 
 function buildErfassungsbogenPdf(res, rows, opts = {}) {
-  const {
-    title = "Erfassungsbogen",
-    groupMode = "week", // "date" | "week" | "project"
-    periodLabel = null,
-    logoPath = null,
-  } = opts;
+const {
+  title = "Erfassungsbogen",
+  groupMode = "week", // "date" | "week" | "project"
+  periodLabel = null,
+  logoPath = null,
+  meta = {},          // { customer, customerPo, internalPo }
+  showKwColumn = false, // optional
+} = opts;
+const totalAll = sumMinutes(rows);
+const metaLines = [
+  meta.customer ? `Kunde: ${meta.customer}` : null,
+  meta.customerPo ? `Kunden-PO: ${meta.customerPo}` : null,
+  meta.internalPo ? `Internal-PO: ${meta.internalPo}` : null,
+  `Gesamt: ${minutesToHHMM(totalAll)}`,
+].filter(Boolean);
+
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", 'inline; filename="erfassungsbogen.pdf"');
@@ -189,7 +283,8 @@ function buildErfassungsbogenPdf(res, rows, opts = {}) {
     // Table
     // sort rows inside group
     const sorted = [...items].sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.project || "").localeCompare(b.project || "", "de"));
-    drawTable(doc, { rows: sorted });
+    drawTable(doc, { rows: sorted, showKwColumn });
+
 
     if (i !== grouped.length - 1) {
       doc.moveDown(0.5);
