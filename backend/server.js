@@ -504,7 +504,9 @@ app.post("/api/admin/invoices/:id/export", async (req, res) => {
   `);
 
     console.log("🧹 staffplan dedupe deleted:", dedupe.rowCount);
-
+      } catch (e) {
+    console.warn("⚠️ staffplan dedupe/index skipped:", e.code || e.message);
+  }
       // Backfill: set source for existing rows where NULL/empty
   await pool.query(`
     UPDATE invoices
