@@ -95,19 +95,15 @@ app.get("/a10/erfassungsbogen.pdf", async (req, res) => {
     ];
 
     const logoPath = path.join(__dirname, "static", "logo.png"); // optional
-    buildErfassungsbogenPdf(res, rows, {
-      title: "Erfassungsbogen (Zeiten)",
-      groupMode: group,
-      periodLabel: "Zeitraum: automatisch",
-    logoPath: LOGO_FILE,
-      showKwColumn,
-
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).send("PDF generation failed");
-  }
+buildErfassungsbogenPdf(res, rows, {
+  title: "Erfassungsbogen (Zeiten)",
+  groupMode: group,
+  periodLabel: "Zeitraum: automatisch",
+  logoPath: LOGO_FILE,
+  showKwColumn,
+  meta: { customer: "—" }
 });
+
 
 // ======================================================
 // ADMIN ROUTE GUARD (VARIANTE B)
