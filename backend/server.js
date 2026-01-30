@@ -685,40 +685,9 @@ await pool.query(`
   `);
 
   console.log("✅ DB migrate finished");
-
-
-
-  // ======================================================
-  // EMPLOYEE ABSENCES (sick / vacation)
-  // ======================================================
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS employee_absences (
-      id BIGSERIAL PRIMARY KEY,
-      employee_id TEXT NOT NULL REFERENCES employees(employee_id) ON DELETE CASCADE,
-      type TEXT NOT NULL CHECK (type IN ('sick','vacation')),
-      date_from DATE NOT NULL,
-      date_to   DATE NOT NULL,
-      note TEXT,
-      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','cancelled')),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS employee_absences_by_emp_dates
-    ON employee_absences (employee_id, date_from, date_to);
-
-    CREATE INDEX IF NOT EXISTS employee_absences_by_type_dates
-    ON employee_absences (type, date_from, date_to);
-
-    CREATE INDEX IF NOT EXISTS employee_absences_active
-    ON employee_absences (employee_id)
-    WHERE status='active';
-  `);
-
-  console.log("✅ DB migrate finished");
 }
+
+
 
 // ======================================================
 // STATIC
