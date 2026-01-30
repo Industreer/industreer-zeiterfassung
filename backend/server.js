@@ -83,6 +83,8 @@ app.get("/api/cron/run", async (req, res) => {
 app.get("/a10/erfassungsbogen.pdf", async (req, res) => {
   try {
     const group = ["date", "week", "project"].includes(req.query.group) ? req.query.group : "week";
+    const showKwColumn = String(req.query.kw || "") === "1";
+
 
     // TODO: Hier später echte Zeiten aus DB holen
     // Beispiel-rows (erstmal zum Proof)
@@ -98,6 +100,8 @@ app.get("/a10/erfassungsbogen.pdf", async (req, res) => {
       groupMode: group,
       periodLabel: "Zeitraum: automatisch",
     logoPath: LOGO_FILE,
+      showKwColumn,
+
     });
   } catch (e) {
     console.error(e);
