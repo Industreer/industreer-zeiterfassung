@@ -98,7 +98,7 @@ app.get("/a10/erfassungsbogen.pdf", async (req, res) => {
       title: "Erfassungsbogen (Zeiten)",
       groupMode: group,
       periodLabel: "Zeitraum: automatisch",
-      logoPath, // wenn kein Logo vorhanden: entweder Ordner+Datei anlegen oder logoPath auf null setzen
+    logoPath: LOGO_FILE,
     });
   } catch (e) {
     console.error(e);
