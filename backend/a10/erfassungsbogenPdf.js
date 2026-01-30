@@ -223,7 +223,13 @@ xx += colW.po;
 doc.text(r.task || "—", xx + 6, y, { width: colW.task - 10 });
 xx += colW.task;
 
-doc.text(minutesToHHMM(Number(r.minutes || 0)), xx + 6, y, { width: colW.time - 10, align: "right" });
+doc.text(
+  minutesToHHMM(Number(r.minutes || 0)),
+  xx + 6,
+  y,
+  { width: colW.time - 10, align: "right" }
+);
+
 
       width: colW.time - 10,
       align: "right",
