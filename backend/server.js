@@ -10,7 +10,6 @@ const XLSX = require("xlsx");
 const PDFDocument = require("pdfkit");
 const { Pool } = require("pg");
 const { downloadExcelFromShareLink } = require("./sharepoint");
-const path = require("path");
 const { buildErfassungsbogenPdf } = require("./a10/erfassungsbogenPdf");
 
 
