@@ -219,6 +219,54 @@ app.get("/api/admin/debug/po-check", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
+app.get("/api/admin/debug/time-entries-sample", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "from/to YYYY-MM-DD required" });
+    }
+
+    const r = await pool.query(
+      `
+      SELECT
+        te.employee_id,
+        te.work_date::date AS work_date,
+        te.start_ts,
+        te.end_ts,
+        te.break_minutes,
+        te.auto_break_minutes,
+        COALESCE(
+          0,
+          FLOOR(
+            (EXTRACT(EPOCH FROM (te.end_ts - te.start_ts)) / 60.0)
+            - COALESCE(te.break_minutes,0)
+            - COALESCE(te.auto_break_minutes,0)
+          )
+        )::int AS minutes,
+        sp.customer_po,
+        sp.internal_po,
+        sp.project_short,
+        sp.customer
+      FROM time_entries te
+      LEFT JOIN staffplan sp
+        ON sp.employee_id = te.employee_id
+       AND sp.work_date = te.work_date
+      WHERE te.work_date BETWEEN $1::date AND $2::date
+        AND te.start_ts IS NOT NULL AND te.end_ts IS NOT NULL
+      ORDER BY te.work_date ASC
+      LIMIT 50
+      `,
+      [from, to]
+    );
+
+    res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("TIME ENTRIES SAMPLE ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 
 // ======================================================
