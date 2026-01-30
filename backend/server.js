@@ -2111,12 +2111,12 @@ app.get("/api/admin/report-hours", async (req, res) => {
       params.push(employee_id);
       where.push(`employee_id = $${params.length}`);
     }
-    if (customer_po) {
-      params.push(customer_po);
-     where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
-
-
+if (customer_po) {
+  params.push(customer_po);
+  where.push(
+    `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g') = regexp_replace($${params.length}, '\\s', '', 'g')`
+  );
+}
     const r = await pool.query(
       `
       SELECT
