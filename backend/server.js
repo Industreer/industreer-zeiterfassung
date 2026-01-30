@@ -2815,7 +2815,7 @@ app.post("/api/admin/staffplan/upload", upload.single("file"), async (req, res) 
 // ZEITERFASSUNG – STEMPLEN (A)
 // =============================
 
-async function ensureEmployeeExists(employee_id) {
+async function ensureEmployeeExistsA(employee_id) {
   await pool.query(
     `
     INSERT INTO employees (employee_id, name)
@@ -2886,7 +2886,8 @@ app.post("/api/clock/in", async (req, res) => {
     const project_id = req.body?.project_id != null ? String(req.body.project_id).trim() : null;
     if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
-    await ensureEmployeeExists(employee_id);
+  await ensureEmployeeExistsA(employee_id);
+
 
     const work_date = todayIsoBerlin();
 
