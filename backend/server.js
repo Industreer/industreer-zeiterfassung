@@ -112,8 +112,13 @@ const customer_po = String(req.query.customer_po || "").trim() || null;
 const internal_po = String(req.query.internal_po || "").trim() || null;
 const project_short = String(req.query.project_short || "").trim() || null;
 
-// 🚧 Platzhalter – echte DB-Daten kommen in Schritt 3.2
-const rows = [];
+const { rows, meta } = await loadErfassungsbogenRows({
+  from,
+  to,
+  customer_po,
+  internal_po,
+  project_short,
+});
 
 // Zeitraum-Label fürs PDF
 const periodLabel = `Zeitraum: ${from} – ${to}`;
@@ -124,25 +129,20 @@ buildErfassungsbogenPdf(res, rows, {
   periodLabel,
   logoPath: LOGO_FILE,
   showKwColumn,
-  meta: { customer: "—" },
+  meta: {
+    customer: meta.customer || "—",
+    customerPo: meta.customerPo,
+    internalPo: meta.internalPo,
+  },
 });
 
 return;
-
-
-    return buildErfassungsbogenPdf(res, rows, {
-      title: "Erfassungsbogen (Zeiten)",
-      groupMode: group,
-      periodLabel: "Zeitraum: automatisch",
-      logoPath: LOGO_FILE,
-      showKwColumn,
-      meta: { customer: "—" }
-    });
-  } catch (e) {
-    console.error("A10 PDF ERROR:", e);
-    return res.status(500).send("PDF generation failed");
-  }
+} catch (e) {
+  console.error("A10 PDF ERROR:", e);
+  return res.status(500).send("PDF generation failed");
+}
 });
+
 // ======================================================
 // ADMIN ROUTE GUARD (VARIANTE B)
 // schützt automatisch alle /api/admin/* Endpunkte
@@ -368,6 +368,72 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
   };
 
   // falls genau ein Customer in den Ergebnissen vorkommt
+  const customers = Array.from(new Set(r.rows.map((x) => x.customer).filter(Boolean)));
+  if (customers.length === 1) meta.customer = customers[0];
+
+  return { rows, meta };
+}
+async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, project_short }) {
+  const params = [from, to];
+  let where = `te.work_date BETWEEN $1::date AND $2::date`;
+
+  if (customer_po) {
+    params.push(customer_po);
+    where += ` AND sp.customer_po = $${params.length}`;
+  }
+  if (internal_po) {
+    params.push(internal_po);
+    where += ` AND sp.internal_po = $${params.length}`;
+  }
+  if (project_short) {
+    params.push(project_short);
+    where += ` AND sp.project_short = $${params.length}`;
+  }
+
+  const sql = `
+    SELECT
+      te.work_date::date AS work_date,
+      COALESCE(NULLIF(TRIM(sp.project_short), ''), '—') AS project,
+      NULLIF(TRIM(sp.internal_po), '') AS internal_po,
+      NULLIF(TRIM(sp.customer_po), '') AS customer_po,
+      COALESCE(NULLIF(TRIM(sp.customer), ''), NULL) AS customer,
+      SUM(
+        GREATEST(
+          0,
+          FLOOR(
+            (EXTRACT(EPOCH FROM (te.end_ts - te.start_ts)) / 60.0)
+            - COALESCE(te.break_minutes, 0)
+            - COALESCE(te.auto_break_minutes, 0)
+          )
+        )
+      )::int AS minutes
+    FROM time_entries te
+    LEFT JOIN staffplan sp
+      ON sp.employee_id = te.employee_id
+     AND sp.work_date = te.work_date
+    WHERE ${where}
+      AND te.start_ts IS NOT NULL
+      AND te.end_ts IS NOT NULL
+    GROUP BY te.work_date, project, internal_po, customer_po, customer
+    ORDER BY te.work_date ASC, project ASC, internal_po ASC
+  `;
+
+  const r = await pool.query(sql, params);
+
+  const rows = r.rows.map((x) => ({
+    date: String(x.work_date), // YYYY-MM-DD
+    project: x.project || "—",
+    internal_po: x.internal_po || null,
+    task: null,
+    minutes: Number(x.minutes || 0),
+  }));
+
+  const meta = {
+    customer: null,
+    customerPo: customer_po || null,
+    internalPo: internal_po || null,
+  };
+
   const customers = Array.from(new Set(r.rows.map((x) => x.customer).filter(Boolean)));
   if (customers.length === 1) meta.customer = customers[0];
 
