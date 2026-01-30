@@ -4222,8 +4222,7 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
     if (!inv.rowCount) return res.status(404).send("Invoice nicht gefunden");
     const invoice = inv.rows[0];
 
-    // ✅ PG liefert DATE oft als JS Date -> String(date) ist "Thu Jan 01..." (kein SQL date)
-    // Deshalb immer ISO "YYYY-MM-DD" bauen:
+    // PG DATE kann als JS Date kommen -> sicher ISO bauen
     const fromIso =
       invoice.period_start instanceof Date
         ? invoice.period_start.toISOString().slice(0, 10)
@@ -4272,8 +4271,29 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
     const doc = new PDFDocument({ size: "A4", margin: 50 });
     doc.pipe(res);
 
-    // Helpers (innerhalb, damit doc verfügbar ist)
+    // Helpers (doc-scope)
     const PAGE_BOTTOM = 760;
+
+    function drawHeader() {
+      if (fs.existsSync(LOGO_FILE)) {
+        doc.image(LOGO_FILE, 50, 35, { width: 120 });
+      }
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(18)
+        .text("Erfassungsbogen für Rechnungserstellung", 50, 40, { align: "right" });
+
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor("#444")
+        .text("Dieses Dokument ist keine Rechnung. Es dient als Grundlage zur Rechnungserstellung.", { align: "right" });
+
+      doc.fillColor("black");
+      doc.y = 120;
+    }
+
     function ensureSpace(minBottom = 80) {
       if (doc.y > (PAGE_BOTTOM - minBottom)) {
         doc.addPage();
@@ -4293,41 +4313,17 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
       doc.moveDown(0.6);
     }
 
-    function moneyOrHours(v) {
+    function fmt(v) {
       if (v === null || v === undefined || v === "") return "";
       const n = Number(v);
       if (!isFinite(n)) return String(v);
       return n.toFixed(2);
     }
 
-    function drawHeader() {
-      // Logo links oben
-      if (fs.existsSync(LOGO_FILE)) {
-        doc.image(LOGO_FILE, 50, 35, { width: 120 });
-      }
-
-      // Titel rechts
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(18)
-        .text("Erfassungsbogen für Rechnungserstellung", 50, 40, { align: "right" });
-
-      doc
-        .font("Helvetica")
-        .fontSize(10)
-        .fillColor("#444")
-        .text("Dieses Dokument ist keine Rechnung. Es dient als Grundlage zur Rechnungserstellung.", { align: "right" });
-
-      doc.fillColor("black");
-
-      // Cursor unter Kopf
-      doc.y = 120;
-    }
-
-    // Start
+    // ===== PDF CONTENT =====
     drawHeader();
 
-    // Meta-Block
+    // Meta
     doc.font("Helvetica-Bold").fontSize(11).text("Daten", { underline: true });
     doc.moveDown(0.4);
 
@@ -4339,11 +4335,10 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
     doc.moveDown(0.6);
     hr();
 
-    // ===== Block 1: Positionen (invoice_lines) =====
+    // Block 1: Positionen
     doc.font("Helvetica-Bold").fontSize(11).text("Positionen (kompakt)");
     doc.moveDown(0.5);
 
-    // Table header
     const xDesc = 50;
     const xQty = 430;
     const xUnit = 470;
@@ -4365,19 +4360,12 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
 
       const y = doc.y;
       const desc = String(li.description || "");
-      const qty = moneyOrHours(li.quantity);
-      const unit = String(li.unit || "");
-      const amt = moneyOrHours(li.amount);
-
-      // Beschreibung kann umbrechen
       doc.text(desc, xDesc, y, { width: 365 });
 
-      // Werte rechts
-      doc.text(qty, xQty, y, { width: 40, align: "right" });
-      doc.text(unit, xUnit, y, { width: 35, align: "right" });
-      doc.text(amt, xAmt, y, { width: 40, align: "right" });
+      doc.text(fmt(li.quantity), xQty, y, { width: 40, align: "right" });
+      doc.text(String(li.unit || ""), xUnit, y, { width: 35, align: "right" });
+      doc.text(fmt(li.amount), xAmt, y, { width: 40, align: "right" });
 
-      // Abstand: orientiert sich an Text-Höhe
       const h = doc.heightOfString(desc, { width: 365 });
       doc.y = y + Math.max(14, h) + 6;
 
@@ -4386,11 +4374,11 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
 
     hr();
     doc.font("Helvetica-Bold").fontSize(10);
-    doc.text(`Gesamtsumme (aus Positionen): ${moneyOrHours(totalLines)} h`, { align: "right" });
+    doc.text(`Gesamtsumme (aus Positionen): ${fmt(totalLines)} h`, { align: "right" });
 
     doc.moveDown(0.8);
 
-    // ===== Block 2: Stundenübersicht (nach Datum) =====
+    // Block 2: Stundenübersicht
     ensureSpace(160);
     doc.font("Helvetica-Bold").fontSize(11).text("Stundenübersicht (nach Datum)");
     doc.moveDown(0.5);
@@ -4428,16 +4416,13 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
       const t = Number(r.travel_hours || 0) || 0;
 
       const y = doc.y;
-
       doc.text(date, xDate, y, { width: 65 });
       doc.text(emp, xEmp, y, { width: 130 });
       doc.text(ipo || "-", xIPO, y, { width: 190 });
-
       doc.text(h.toFixed(2), xH, y, { width: 40, align: "right" });
       doc.text(t.toFixed(2), xT, y, { width: 40, align: "right" });
 
       doc.y = y + 16;
-
       sumHours += h;
       sumTravel += t;
     }
@@ -4456,13 +4441,13 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
     doc.end();
   } catch (e) {
     console.error("PDF ERROR:", e);
-    // Debug optional
     if (String(req.query.debug || "") === "1") {
       return res.status(500).send("PDF Fehler: " + e.message);
     }
     return res.status(500).send("PDF Fehler");
   }
 });
+
 
     // Dateiname: Erfassungsbogen_...
     const safePo = String(invoice.customer_po || "PO").replace(/[^0-9A-Za-z_-]/g, "");
