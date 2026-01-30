@@ -638,10 +638,13 @@ async function migrate() {
 // ======================================================
 // STATIC
 // ======================================================
-app.use(express.static(FRONTEND_DIR));
+// Explizite Routes zuerst, damit /admin zuverlässig funktioniert
 app.get("/", (req, res) => res.redirect("/admin"));
 app.get("/admin", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "admin.html")));
 app.get("/debug.html", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "debug.html")));
+
+// Danach static (ohne auto-index)
+app.use(express.static(FRONTEND_DIR, { index: false }));
 
 // ======================================================
 // HEALTH + BUILD
@@ -672,27 +675,50 @@ app.get("/api/logo", (req, res) => {
 });
 
 app.post("/api/logo", upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
-  fs.writeFileSync(LOGO_FILE, req.file.buffer);
-  res.json({ ok: true });
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+
+    // minimaler Guard (ohne große Umstellung)
+    const mime = String(req.file.mimetype || "");
+    if (mime && mime !== "image/png") {
+      return res.status(400).json({ ok: false, error: "Nur PNG erlaubt" });
+    }
+
+    // nicht-blockierend vermeiden wäre async; 1:1 minimal bleibt sync, aber try/catch
+    fs.writeFileSync(LOGO_FILE, req.file.buffer);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("LOGO UPLOAD ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ======================================================
 // SETTINGS: SharePoint Link + Status
 // ======================================================
 app.get("/api/settings/staffplan-sharelink", async (req, res) => {
-  const url = await getSetting("staffplan_sharelink");
-  const lastHash = await getSetting("staffplan_last_sha256");
-  const lastRunId = await getSetting("staffplan_last_run_id");
-  const lastAt = await getSetting("staffplan_last_import_at");
-  res.json({ ok: true, url, last_hash: lastHash, last_run_id: lastRunId, last_import_at: lastAt });
+  try {
+    const url = await getSetting("staffplan_sharelink");
+    const lastHash = await getSetting("staffplan_last_sha256");
+    const lastRunId = await getSetting("staffplan_last_run_id");
+    const lastAt = await getSetting("staffplan_last_import_at");
+    return res.json({ ok: true, url, last_hash: lastHash, last_run_id: lastRunId, last_import_at: lastAt });
+  } catch (e) {
+    console.error("SETTINGS GET ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.post("/api/settings/staffplan-sharelink", async (req, res) => {
-  const url = String(req.body?.url || "").trim();
-  if (!url.startsWith("https://")) return res.status(400).json({ ok: false, error: "URL ungültig" });
-  await setSetting("staffplan_sharelink", url);
-  res.json({ ok: true });
+  try {
+    const url = String(req.body?.url || "").trim();
+    if (!url.startsWith("https://")) return res.status(400).json({ ok: false, error: "URL ungültig" });
+    await setSetting("staffplan_sharelink", url);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("SETTINGS POST ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ======================================================
@@ -909,38 +935,48 @@ app.post("/api/debug/scan-values", upload.single("file"), async (req, res) => {
 // IMPORT HISTORY API
 // ======================================================
 app.get("/api/import/history", async (req, res) => {
-  const limit = Math.max(1, Math.min(200, parseInt(req.query.limit || "50", 10) || 50));
-  const r = await pool.query(
-    `
-    SELECT run_id, created_at, finished_at, status, mode, filename, file_sha256,
-           target_end, date_from, date_to, date_cols,
-           imported, inserted_rows, updated_rows, skipped_no_employee_rows,
-           rolled_back_at, note
-    FROM import_runs
-    ORDER BY run_id DESC
-    LIMIT $1
-    `,
-    [limit]
-  );
-  res.json({ ok: true, rows: r.rows });
+  try {
+    const limit = Math.max(1, Math.min(200, parseInt(req.query.limit || "50", 10) || 50));
+    const r = await pool.query(
+      `
+      SELECT run_id, created_at, finished_at, status, mode, filename, file_sha256,
+             target_end, date_from, date_to, date_cols,
+             imported, inserted_rows, updated_rows, skipped_no_employee_rows,
+             rolled_back_at, note
+      FROM import_runs
+      ORDER BY run_id DESC
+      LIMIT $1
+      `,
+      [limit]
+    );
+    return res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("IMPORT HISTORY ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.get("/api/import/history/:run_id", async (req, res) => {
-  const runId = String(req.params.run_id || "").trim();
-  const run = await pool.query(`SELECT * FROM import_runs WHERE run_id=$1`, [runId]);
-  if (!run.rowCount) return res.status(404).json({ ok: false, error: "run_id nicht gefunden" });
+  try {
+    const runId = String(req.params.run_id || "").trim();
+    const run = await pool.query(`SELECT * FROM import_runs WHERE run_id=$1`, [runId]);
+    if (!run.rowCount) return res.status(404).json({ ok: false, error: "run_id nicht gefunden" });
 
-  const ch = await pool.query(
-    `
-    SELECT change_type, COUNT(*)::int AS cnt
-    FROM staffplan_changes
-    WHERE run_id=$1
-    GROUP BY change_type
-    `,
-    [runId]
-  );
+    const ch = await pool.query(
+      `
+      SELECT change_type, COUNT(*)::int AS cnt
+      FROM staffplan_changes
+      WHERE run_id=$1
+      GROUP BY change_type
+      `,
+      [runId]
+    );
 
-  res.json({ ok: true, run: run.rows[0], change_counts: ch.rows });
+    return res.json({ ok: true, run: run.rows[0], change_counts: ch.rows });
+  } catch (e) {
+    console.error("IMPORT HISTORY RUN ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ======================================================
@@ -1041,7 +1077,7 @@ app.post("/api/import/rollback", async (req, res) => {
     await client.query("COMMIT");
     return res.json({ ok: true, run_id: runId, deleted_inserts: deleted, restored_updates: restored });
   } catch (e) {
-    await client.query("ROLLBACK");
+    try { await client.query("ROLLBACK"); } catch {}
     console.error("ROLLBACK ERROR:", e);
     return res.status(500).json({ ok: false, error: e.message });
   } finally {
@@ -1082,7 +1118,7 @@ async function doImportStaffplan({
         dryRun ? "dry-run (no db write)" : "write import",
       ]
     );
-  runId = rr.rows[0].run_id;
+    runId = rr.rows[0].run_id;
   } catch (e) {
     console.error("IMPORT_RUNS INSERT ERROR:", e);
   }
@@ -1311,13 +1347,13 @@ async function doImportStaffplan({
             (employee_id, employee_name, requester_name, work_date, calendar_week,
              customer, internal_po, customer_po, project_short, planned_hours)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-ON CONFLICT (
-  employee_id,
-  work_date,
-  COALESCE(customer_po,''),
-  COALESCE(internal_po,''),
-  COALESCE(project_short,'')
-)
+          ON CONFLICT (
+            employee_id,
+            work_date,
+            (COALESCE(customer_po,'')),
+            (COALESCE(internal_po,'')),
+            (COALESCE(project_short,''))
+          )
           DO UPDATE SET
             employee_name  = EXCLUDED.employee_name,
             requester_name = EXCLUDED.requester_name,
@@ -1474,28 +1510,33 @@ ON CONFLICT (
 // Optional: &target_end=YYYY-MM-DD
 // ======================================================
 app.post("/api/import/staffplan", upload.single("file"), async (req, res) => {
-  const dryRun = String(req.query.dry_run || "") === "1";
-  const reset = String(req.query.reset || "0") === "1";
-  const targetEndIso = String(req.query.target_end || "").trim() || null;
+  try {
+    const dryRun = String(req.query.dry_run || "") === "1";
+    const reset = String(req.query.reset || "0") === "1";
+    const targetEndIso = String(req.query.target_end || "").trim() || null;
 
-  const actorIp =
-    (req.headers["x-forwarded-for"] ? String(req.headers["x-forwarded-for"]).split(",")[0].trim() : null) ||
-    req.socket?.remoteAddress ||
-    null;
+    const actorIp =
+      (req.headers["x-forwarded-for"] ? String(req.headers["x-forwarded-for"]).split(",")[0].trim() : null) ||
+      req.socket?.remoteAddress ||
+      null;
 
-  if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
+    if (!req.file) return res.status(400).json({ ok: false, error: "Keine Datei" });
 
-  const result = await doImportStaffplan({
-    buffer: req.file.buffer,
-    originalname: req.file.originalname || "upload.xlsx",
-    dryRun,
-    reset,
-    targetEndIso,
-    actorIp,
-  });
+    const result = await doImportStaffplan({
+      buffer: req.file.buffer,
+      originalname: req.file.originalname || "upload.xlsx",
+      dryRun,
+      reset,
+      targetEndIso,
+      actorIp,
+    });
 
-  if (!result.ok) return res.status(500).json(result);
-  return res.json(result);
+    if (!result.ok) return res.status(500).json(result);
+    return res.json(result);
+  } catch (e) {
+    console.error("UPLOAD IMPORT ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ======================================================
@@ -1521,6 +1562,7 @@ app.post("/api/import/staffplan/sharepoint", async (req, res) => {
     if (!url) return res.status(400).json({ ok: false, error: "Kein SharePoint-Link gespeichert" });
 
     const buf = await downloadExcelFromShareLink(url);
+    if (!buf || !buf.length) return res.status(500).json({ ok: false, error: "Download leer/fehlgeschlagen" });
 
     const hash = sha256Hex(buf);
     const lastHash = await getSetting("staffplan_last_sha256");
@@ -1564,69 +1606,11 @@ app.post("/api/import/staffplan/sharepoint", async (req, res) => {
   }
 });
 
-
 // ======================================================
 // ADMIN: STAFFPLAN + ABSENCES OVERLAY  (Phase 1B)
 // GET /api/admin/staffplan/with-absences?from=YYYY-MM-DD&to=YYYY-MM-DD
 // returns staffplan rows + absence_type (sick|vacation|null)
 // ======================================================
-// ======================================================
-// ADMIN: STAFFPLAN EDIT (planned_hours)
-// PATCH /api/admin/staffplan/planned-hours
-// Body: { employee_id, work_date, customer_po, internal_po, project_short, planned_hours }
-// ======================================================
-app.patch("/api/admin/staffplan/planned-hours", async (req, res) => {
-  try {
-    const employee_id = String(req.body?.employee_id || "").trim();
-    const work_date = String(req.body?.work_date || "").trim();
-
-    // key parts (can be null/empty)
-    const customer_po = req.body?.customer_po != null ? String(req.body.customer_po).trim() : null;
-    const internal_po = req.body?.internal_po != null ? String(req.body.internal_po).trim() : null;
-    const project_short = req.body?.project_short != null ? String(req.body.project_short).trim() : null;
-
-    const planned_hours_raw = req.body?.planned_hours;
-
-    if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(work_date)) {
-      return res.status(400).json({ ok: false, error: "work_date ungültig (YYYY-MM-DD)" });
-    }
-
-    let planned_hours = null;
-    if (planned_hours_raw !== null && planned_hours_raw !== undefined && String(planned_hours_raw).trim() !== "") {
-      const n = Number(planned_hours_raw);
-      if (!isFinite(n) || n < 0) {
-        return res.status(400).json({ ok: false, error: "planned_hours ungültig" });
-      }
-      planned_hours = n;
-    }
-
-    const r = await pool.query(
-      `
-      UPDATE staffplan
-      SET planned_hours = $1
-      WHERE employee_id = $2
-        AND work_date = $3::date
-        AND COALESCE(customer_po,'') = COALESCE($4,'')
-        AND COALESCE(internal_po,'') = COALESCE($5,'')
-        AND COALESCE(project_short,'') = COALESCE($6,'')
-      `,
-      [planned_hours, employee_id, work_date, customer_po, internal_po, project_short]
-    );
-
-    if (!r.rowCount) {
-      return res.status(404).json({
-        ok: false,
-        error: "Staffplan-Zeile nicht gefunden (Key passt nicht)."
-      });
-    }
-
-    res.json({ ok: true, updated: r.rowCount });
-  } catch (e) {
-    console.error("STAFFPLAN PLANNED-HOURS PATCH ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
 app.get("/api/admin/staffplan/with-absences", async (req, res) => {
   try {
     const from = String(req.query.from || "").trim();
@@ -1686,17 +1670,15 @@ app.get("/api/admin/staffplan/with-absences", async (req, res) => {
       ) a ON TRUE
 
       WHERE s.work_date BETWEEN $1::date AND $2::date
-  AND a.absence_type IS DISTINCT FROM 'vacation'
-
       ORDER BY s.work_date ASC, s.employee_name ASC, s.id ASC
       `,
       [from, to]
     );
 
     return res.json({ ok: true, from, to, rows: r.rows });
-      } catch (e) {
-    console.error("WEEKLY REPORT ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+  } catch (e) {
+    console.error("WITH-ABSENCES ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1710,6 +1692,7 @@ app.patch("/api/admin/staffplan/planned-hours", async (req, res) => {
     const employee_id = String(req.body?.employee_id || "").trim();
     const work_date = String(req.body?.work_date || "").trim();
 
+    // key parts (can be null/empty)
     const customer_po = req.body?.customer_po != null ? String(req.body.customer_po).trim() : null;
     const internal_po = req.body?.internal_po != null ? String(req.body.internal_po).trim() : null;
     const project_short = req.body?.project_short != null ? String(req.body.project_short).trim() : null;
@@ -1750,10 +1733,10 @@ app.patch("/api/admin/staffplan/planned-hours", async (req, res) => {
       });
     }
 
-    res.json({ ok: true, updated: r.rowCount });
+    return res.json({ ok: true, updated: r.rowCount });
   } catch (e) {
     console.error("STAFFPLAN PLANNED-HOURS PATCH ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 // ======================================================
@@ -1773,6 +1756,9 @@ app.get("/api/admin/report-hours", async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
     }
+    if (to < from) {
+      return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+    }
 
     const where = [];
     const params = [from, to];
@@ -1780,6 +1766,7 @@ app.get("/api/admin/report-hours", async (req, res) => {
     where.push(`work_date BETWEEN $1::date AND $2::date`);
     where.push(`start_ts IS NOT NULL`);
     where.push(`end_ts IS NOT NULL`);
+    where.push(`clamped_hours IS NOT NULL`);
 
     if (employee_id) {
       params.push(employee_id);
@@ -1806,12 +1793,13 @@ app.get("/api/admin/report-hours", async (req, res) => {
       params
     );
 
-    res.json({ ok: true, from, to, rows: r.rows });
+    return res.json({ ok: true, from, to, rows: r.rows });
   } catch (e) {
     console.error("REPORT HOURS ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // ADMIN: Report Hours Summary (Phase 2A)
 // ======================================================
@@ -1827,6 +1815,9 @@ app.get("/api/admin/report-hours/summary", async (req, res) => {
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
+    }
+    if (to < from) {
+      return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
     }
 
     const groupCols = include_po
@@ -1856,12 +1847,13 @@ app.get("/api/admin/report-hours/summary", async (req, res) => {
       [from, to]
     );
 
-    res.json({ ok: true, from, to, include_po, rows: r.rows });
+    return res.json({ ok: true, from, to, include_po, rows: r.rows });
   } catch (e) {
     console.error("REPORT HOURS SUMMARY ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // ADMIN: Report Hours Weekly (KW) - JSON
 // GET /api/admin/report-hours/weekly?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -1910,7 +1902,12 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
         ROUND(SUM(clamped_hours)::numeric, 2) AS hours
       FROM v_time_entries_clamped
       WHERE ${where.join(" AND ")}
-      GROUP BY isoyear, isoweek, employee_id, customer_po, internal_po
+      GROUP BY
+        EXTRACT(ISOYEAR FROM work_date)::int,
+        EXTRACT(WEEK FROM work_date)::int,
+        employee_id,
+        COALESCE(mapped_customer_po,''),
+        COALESCE(mapped_internal_po,'')
       ORDER BY isoyear ASC, isoweek ASC, employee_id ASC, customer_po ASC, internal_po ASC
       `,
       params
@@ -1923,31 +1920,41 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
   }
 });
 
-
 app.get("/api/debug/staffplan-topdates", async (req, res) => {
-  const r = await pool.query(`
-    SELECT work_date, COUNT(*)::int AS cnt
-    FROM staffplan
-    GROUP BY work_date
-    ORDER BY work_date DESC
-    LIMIT 15
-  `);
-  res.json({ ok: true, rows: r.rows });
+  try {
+    const r = await pool.query(`
+      SELECT work_date, COUNT(*)::int AS cnt
+      FROM staffplan
+      GROUP BY work_date
+      ORDER BY work_date DESC
+      LIMIT 15
+    `);
+    return res.json({ ok: true, rows: r.rows });
+  } catch (e) {
+    console.error("DEBUG STAFFPLAN TOPDATES ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.get("/api/debug/staffplan-check", async (req, res) => {
-  const date = String(req.query.date || "").trim();
-  if (!date) return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
+  try {
+    const date = String(req.query.date || "").trim();
+    if (!date) return res.status(400).json({ ok: false, error: "date fehlt (YYYY-MM-DD)" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ ok: false, error: "date ungültig (YYYY-MM-DD)" });
 
-  const totalOnDate = await pool.query(
-    `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE work_date = $1::date`,
-    [date]
-  );
-  res.json({
-    ok: true,
-    date,
-    total_on_date: totalOnDate.rows[0].cnt
-  });
+    const totalOnDate = await pool.query(
+      `SELECT COUNT(*)::int AS cnt FROM staffplan WHERE work_date = $1::date`,
+      [date]
+    );
+    return res.json({
+      ok: true,
+      date,
+      total_on_date: totalOnDate.rows[0].cnt
+    });
+  } catch (e) {
+    console.error("DEBUG STAFFPLAN CHECK ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ======================================================
@@ -1961,10 +1968,10 @@ function isAutoEmployeeId(id) {
 app.get("/api/employees", async (req, res) => {
   try {
     const r = await pool.query(`SELECT employee_id, name, email, language FROM employees ORDER BY name`);
-    res.json({ ok: true, rows: r.rows });
+    return res.json({ ok: true, rows: r.rows });
   } catch (e) {
     console.error("EMPLOYEES GET ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1996,21 +2003,20 @@ app.get("/api/admin/employees", async (req, res) => {
         ON sp.employee_id = e.employee_id
       LEFT JOIN (SELECT employee_id, COUNT(*) AS cnt FROM time_entries GROUP BY employee_id) te
         ON te.employee_id = e.employee_id
-LEFT JOIN (
-  SELECT employee_id, COUNT(*) AS cnt
-  FROM time_events
-  WHERE event_type IN ('break_start','break_end')
-  GROUP BY employee_id
-) br
-  ON br.employee_id = e.employee_id
-
+      LEFT JOIN (
+        SELECT employee_id, COUNT(*) AS cnt
+        FROM time_events
+        WHERE event_type IN ('break_start','break_end')
+        GROUP BY employee_id
+      ) br
+        ON br.employee_id = e.employee_id
       ORDER BY (CASE WHEN e.employee_id LIKE 'AUTO\\_%' THEN 1 ELSE 0 END) ASC, e.name ASC
     `, [today]);
 
-    res.json({ ok: true, rows: r.rows });
+    return res.json({ ok: true, rows: r.rows });
   } catch (e) {
     console.error("ADMIN EMPLOYEES ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2033,13 +2039,13 @@ app.post("/api/admin/employees", async (req, res) => {
       [employee_id, name, email, language]
     );
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
-    if (String(e.message || "").toLowerCase().includes("duplicate")) {
+    if (String(e.code) === "23505") {
       return res.status(409).json({ ok: false, error: "employee_id existiert bereits" });
     }
     console.error("ADMIN CREATE EMPLOYEE ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2052,14 +2058,15 @@ app.patch("/api/admin/employees", async (req, res) => {
     const name = req.body.name != null ? String(req.body.name).trim() : null;
     const email = req.body.email != null ? String(req.body.email).trim() : null;
     const language = req.body.language != null ? String(req.body.language).trim() : null;
-const weekly_hours =
-  req.body.weekly_hours != null && String(req.body.weekly_hours).trim() !== ""
-    ? Number(req.body.weekly_hours)
-    : null;
 
-if (weekly_hours !== null && (!isFinite(weekly_hours) || weekly_hours <= 0 || weekly_hours > 80)) {
-  return res.status(400).json({ ok: false, error: "weekly_hours ungültig" });
-}
+    const weekly_hours =
+      req.body.weekly_hours != null && String(req.body.weekly_hours).trim() !== ""
+        ? Number(req.body.weekly_hours)
+        : null;
+
+    if (weekly_hours !== null && (!isFinite(weekly_hours) || weekly_hours <= 0 || weekly_hours > 80)) {
+      return res.status(400).json({ ok: false, error: "weekly_hours ungültig" });
+    }
 
     const exists = await pool.query(`SELECT employee_id FROM employees WHERE employee_id=$1`, [employee_id]);
     if (!exists.rowCount) return res.status(404).json({ ok: false, error: "employee_id nicht gefunden" });
@@ -2067,19 +2074,19 @@ if (weekly_hours !== null && (!isFinite(weekly_hours) || weekly_hours <= 0 || we
     await pool.query(
       `
       UPDATE employees
-  SET name = COALESCE($2, name),
-      email = COALESCE($3, email),
-      language = COALESCE($4, language),
-      weekly_hours = COALESCE($5, weekly_hours)
-  WHERE employee_id=$1
-  `,
-  [employee_id, name || null, email || null, language || null, weekly_hours]
-);
+      SET name = COALESCE($2, name),
+          email = COALESCE($3, email),
+          language = COALESCE($4, language),
+          weekly_hours = COALESCE($5, weekly_hours)
+      WHERE employee_id=$1
+      `,
+      [employee_id, name || null, email || null, language || null, weekly_hours]
+    );
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error("ADMIN UPDATE EMPLOYEE ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2114,7 +2121,25 @@ app.post("/api/admin/employee-id", async (req, res) => {
 
     const sp = await client.query(`UPDATE staffplan SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
     const te = await client.query(`UPDATE time_entries SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
-    const br = await client.query(`UPDATE breaks SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
+
+    // Breaks: primär time_events (passt zu deinem /api/admin/employees Count)
+    let br_time_events = 0;
+    try {
+      const br = await client.query(`UPDATE time_events SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
+      br_time_events = br.rowCount;
+    } catch (e) {
+      // falls time_events nicht existiert o.ä.
+      br_time_events = 0;
+    }
+
+    // optional: falls es bei dir doch eine "breaks" Tabelle gibt
+    let br_breaks_table = 0;
+    try {
+      const br2 = await client.query(`UPDATE breaks SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
+      br_breaks_table = br2.rowCount;
+    } catch (e) {
+      br_breaks_table = 0;
+    }
 
     if (!newEmp.rowCount) {
       await client.query(`UPDATE employees SET employee_id=$1 WHERE employee_id=$2`, [newId, oldId]);
@@ -2136,17 +2161,22 @@ app.post("/api/admin/employee-id", async (req, res) => {
 
     await client.query("COMMIT");
 
-    res.json({
+    return res.json({
       ok: true,
       old_employee_id: oldId,
       new_employee_id: newId,
-      updated: { staffplan: sp.rowCount, time_entries: te.rowCount, breaks: br.rowCount },
+      updated: {
+        staffplan: sp.rowCount,
+        time_entries: te.rowCount,
+        time_events: br_time_events,
+        breaks: br_breaks_table
+      },
       merge_mode: newEmp.rowCount ? merge : "rename_pk"
     });
   } catch (e) {
-    await client.query("ROLLBACK");
+    try { await client.query("ROLLBACK"); } catch {}
     console.error("ADMIN EMPLOYEE-ID ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   } finally {
     client.release();
   }
@@ -2158,31 +2188,49 @@ app.delete("/api/admin/employees", async (req, res) => {
     const employee_id = String(req.query.employee_id || "").trim();
     if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
-    const usage = await pool.query(`
-      SELECT
-        (SELECT COUNT(*) FROM staffplan WHERE employee_id=$1)::int AS staffplan_cnt,
-        (SELECT COUNT(*) FROM time_entries WHERE employee_id=$1)::int AS time_cnt,
-        (SELECT COUNT(*) FROM breaks WHERE employee_id=$1)::int AS break_cnt
-    `, [employee_id]);
+    // staffplan + time_entries sind fix
+    const staffplanCntQ = await pool.query(`SELECT COUNT(*)::int AS cnt FROM staffplan WHERE employee_id=$1`, [employee_id]);
+    const timeCntQ = await pool.query(`SELECT COUNT(*)::int AS cnt FROM time_entries WHERE employee_id=$1`, [employee_id]);
 
-    const u = usage.rows[0];
-    if ((u.staffplan_cnt || 0) > 0 || (u.time_cnt || 0) > 0 || (u.break_cnt || 0) > 0) {
+    // breaks: primär time_events, optional breaks table
+    let breakCnt = 0;
+    try {
+      const br = await pool.query(
+        `SELECT COUNT(*)::int AS cnt FROM time_events WHERE employee_id=$1 AND event_type IN ('break_start','break_end')`,
+        [employee_id]
+      );
+      breakCnt += br.rows[0].cnt || 0;
+    } catch {}
+
+    try {
+      const br2 = await pool.query(`SELECT COUNT(*)::int AS cnt FROM breaks WHERE employee_id=$1`, [employee_id]);
+      breakCnt += br2.rows[0].cnt || 0;
+    } catch {}
+
+    const usage = {
+      staffplan_cnt: staffplanCntQ.rows[0].cnt,
+      time_cnt: timeCntQ.rows[0].cnt,
+      break_cnt: breakCnt
+    };
+
+    if ((usage.staffplan_cnt || 0) > 0 || (usage.time_cnt || 0) > 0 || (usage.break_cnt || 0) > 0) {
       return res.status(409).json({
         ok: false,
         error: "Mitarbeiter wird noch verwendet (staffplan/time/breaks). Erst umhängen oder Daten löschen.",
-        usage: u
+        usage
       });
     }
 
     const del = await pool.query(`DELETE FROM employees WHERE employee_id=$1`, [employee_id]);
     if (!del.rowCount) return res.status(404).json({ ok: false, error: "employee_id nicht gefunden" });
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error("ADMIN DELETE EMPLOYEE ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // ADMIN: PO Work Rules (Phase 2A)
 // ======================================================
@@ -2210,12 +2258,13 @@ app.get("/api/admin/po-work-rules", async (req, res) => {
           `
         );
 
-    res.json({ ok: true, rows: r.rows });
+    return res.json({ ok: true, rows: r.rows });
   } catch (e) {
     console.error("PO WORK RULES GET ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // POST /api/admin/po-work-rules
 // Body: { customer_po, weekday (1..7), start_time ("07:00"), grace_minutes? }
 app.post("/api/admin/po-work-rules", async (req, res) => {
@@ -2248,13 +2297,13 @@ app.post("/api/admin/po-work-rules", async (req, res) => {
       [customer_po, weekday, start_time, grace_minutes]
     );
 
-    res.json({ ok: true, id: r.rows[0].id });
+    return res.json({ ok: true, id: r.rows[0].id });
   } catch (e) {
     if (String(e.code) === "23505") {
       return res.status(409).json({ ok: false, error: "Regel existiert bereits für customer_po + weekday" });
     }
     console.error("PO WORK RULES POST ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2297,13 +2346,13 @@ app.patch("/api/admin/po-work-rules/:id", async (req, res) => {
     );
 
     if (!r.rowCount) return res.status(404).json({ ok: false, error: "Regel nicht gefunden" });
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     if (String(e.code) === "23505") {
       return res.status(409).json({ ok: false, error: "Konflikt: customer_po + weekday existiert bereits" });
     }
     console.error("PO WORK RULES PATCH ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2316,12 +2365,13 @@ app.delete("/api/admin/po-work-rules/:id", async (req, res) => {
     const r = await pool.query(`DELETE FROM po_work_rules WHERE id=$1::bigint`, [id]);
     if (!r.rowCount) return res.status(404).json({ ok: false, error: "Regel nicht gefunden" });
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error("PO WORK RULES DELETE ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // ADMIN: Clamp Preview (Phase 2A)
 // ======================================================
@@ -2340,6 +2390,9 @@ app.get("/api/admin/clamp-preview", async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
     }
+    if (to < from) {
+      return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+    }
 
     const where = [];
     const params = [from, to];
@@ -2354,7 +2407,7 @@ app.get("/api/admin/clamp-preview", async (req, res) => {
       where.push(`employee_id = $${params.length}`);
     }
 
-    // WICHTIG: filtert auf mapped_customer_po (aus staffplan), nicht te.customer_po
+    // filtert auf mapped_customer_po (aus staffplan), nicht te.customer_po
     if (customer_po) {
       params.push(customer_po);
       where.push(`mapped_customer_po = $${params.length}`);
@@ -2381,17 +2434,20 @@ app.get("/api/admin/clamp-preview", async (req, res) => {
       params
     );
 
-    res.json({ ok: true, rows: r.rows });
+    return res.json({ ok: true, rows: r.rows });
   } catch (e) {
     console.error("CLAMP PREVIEW ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
 // ======================================================
 // ADMIN: PO Work Rules (Phase 2A) – READ ONLY TEST
+// HINWEIS: NICHT doppelt definieren. Wenn du schon CRUD-Endpunkte hast,
+// dann lass NUR diesen READ-ONLY weg ODER ersetze den anderen.
+// In dieser Version ist es ein Alias-Endpunkt, damit es nicht kollidiert.
 // ======================================================
-app.get("/api/admin/po-work-rules", async (req, res) => {
+app.get("/api/admin/po-work-rules/read-only", async (req, res) => {
   try {
     const r = await pool.query(`
       SELECT
@@ -2405,44 +2461,44 @@ app.get("/api/admin/po-work-rules", async (req, res) => {
       FROM po_work_rules
       ORDER BY customer_po ASC, weekday ASC
     `);
-    res.json({ ok: true, rows: r.rows });
+    return res.json({ ok: true, rows: r.rows });
   } catch (e) {
     console.error("PO WORK RULES GET ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // ADMIN: Helper – list available customer_po values
 // ======================================================
-
 // GET /api/admin/customer-pos
 app.get("/api/admin/customer-pos", async (req, res) => {
   try {
-    const limit =
-      Math.max(1, Math.min(500, Number(req.query.limit) || 200));
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 200));
 
     const r = await pool.query(
       `
       SELECT
-        customer_po,
+        TRIM(customer_po) AS customer_po,
         MAX(customer) AS customer,
         COUNT(*)::int AS cnt
       FROM staffplan
       WHERE customer_po IS NOT NULL
-        AND customer_po <> ''
-      GROUP BY customer_po
+        AND TRIM(customer_po) <> ''
+      GROUP BY TRIM(customer_po)
       ORDER BY cnt DESC
       LIMIT $1
       `,
       [limit]
     );
 
-    res.json({ ok: true, rows: r.rows });
+    return res.json({ ok: true, rows: r.rows });
   } catch (e) {
     console.error("CUSTOMER-PO LIST ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // ADMIN: Helper – list internal_po values for a customer_po
 // GET /api/admin/internal-pos?customer_po=...
@@ -2460,26 +2516,25 @@ app.get("/api/admin/internal-pos", async (req, res) => {
         COALESCE(NULLIF(TRIM(internal_po),''), '') AS internal_po,
         COUNT(*)::int AS cnt
       FROM staffplan
-      WHERE customer_po = $1
+      WHERE TRIM(customer_po) = $1
       GROUP BY COALESCE(NULLIF(TRIM(internal_po),''), '')
       ORDER BY cnt DESC, internal_po ASC
       `,
       [customer_po]
     );
 
-    res.json({ ok: true, rows: r.rows });
+    return res.json({ ok: true, rows: r.rows });
   } catch (e) {
     console.error("INTERNAL-PO LIST ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
-
 
 // ======================================================
 // ADMIN: ABSENCES API
 // ======================================================
 
-// GET /api/admin/absences?employee_id=...&status=active|all
+// GET /api/admin/absences?employee_id=...&status=active|all|cancelled
 app.get("/api/admin/absences", async (req, res) => {
   try {
     const employee_id = String(req.query.employee_id || "").trim();
@@ -2504,10 +2559,10 @@ app.get("/api/admin/absences", async (req, res) => {
       params
     );
 
-    res.json({ ok: true, rows: r.rows });
+    return res.json({ ok: true, rows: r.rows });
   } catch (e) {
     console.error("ADMIN ABSENCES GET ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2531,7 +2586,6 @@ app.post("/api/admin/absences", async (req, res) => {
       return res.status(400).json({ ok: false, error: "date_to muss >= date_from sein" });
     }
 
-    // ensure employee exists
     const emp = await pool.query(`SELECT employee_id FROM employees WHERE employee_id=$1`, [employee_id]);
     if (!emp.rowCount) return res.status(404).json({ ok: false, error: "employee_id nicht gefunden" });
 
@@ -2544,10 +2598,10 @@ app.post("/api/admin/absences", async (req, res) => {
       [employee_id, type, date_from, date_to, note]
     );
 
-    res.json({ ok: true, id: ins.rows[0].id });
+    return res.json({ ok: true, id: ins.rows[0].id });
   } catch (e) {
     console.error("ADMIN ABSENCES POST ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2572,10 +2626,10 @@ app.patch("/api/admin/absences/:id", async (req, res) => {
     );
     if (!upd.rowCount) return res.status(404).json({ ok: false, error: "id nicht gefunden" });
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error("ADMIN ABSENCES PATCH ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2588,10 +2642,10 @@ app.delete("/api/admin/absences/:id", async (req, res) => {
     const del = await pool.query(`DELETE FROM employee_absences WHERE id=$1::bigint`, [id]);
     if (!del.rowCount) return res.status(404).json({ ok: false, error: "id nicht gefunden" });
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error("ADMIN ABSENCES DELETE ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2619,7 +2673,6 @@ app.post("/api/admin/reset", async (req, res) => {
     await client.query(`TRUNCATE staffplan_changes RESTART IDENTITY`);
     await client.query(`TRUNCATE import_runs RESTART IDENTITY`);
 
-    // Optional: AUTO_* Mitarbeiter löschen, damit neu sauber erzeugt wird
     const delAuto = await client.query(`DELETE FROM employees WHERE employee_id LIKE 'AUTO_%'`);
 
     await client.query("COMMIT");
@@ -2630,7 +2683,7 @@ app.post("/api/admin/reset", async (req, res) => {
       deleted_auto_employees: delAuto.rowCount,
     });
   } catch (e) {
-    await client.query("ROLLBACK");
+    try { await client.query("ROLLBACK"); } catch {}
     console.error("ADMIN RESET ERROR:", e);
     return res.status(500).json({ ok: false, error: e.message });
   } finally {
@@ -2648,13 +2701,13 @@ app.get("/api/staffplan/download", async (req, res) => {
     return res.status(403).json({ ok: false, error: "Code falsch oder fehlt (code=2012)" });
   }
 
-  const s = await pool.query(`SELECT value FROM app_settings WHERE key='sharepoint_staffplan_url' LIMIT 1`);
-  const url = s.rowCount ? s.rows[0].value : null;
+  // Konsistent mit restlichem Code:
+  const url = await getSetting("staffplan_sharelink");
 
   if (!url) {
     return res.status(400).json({
       ok: false,
-      error: "Keine SharePoint-URL gesetzt (app_settings key=sharepoint_staffplan_url).",
+      error: "Keine SharePoint-URL gesetzt (settings staffplan_sharelink).",
     });
   }
 
@@ -2715,33 +2768,20 @@ app.post("/api/admin/staffplan/upload", upload.single("file"), async (req, res) 
       return res.status(500).json(result);
     }
 
-    res.json({
+    return res.json({
       ok: true,
       message: "Staffplan erfolgreich importiert",
       ...result
     });
   } catch (e) {
     console.error("ADMIN STAFFPLAN UPLOAD ERROR:", e);
-    res.status(e.status || 500).json({
-      ok: false,
-      error: e.message || "Upload fehlgeschlagen"
-    });
+    return res.status(500).json({ ok: false, error: e.message || "Upload fehlgeschlagen" });
   }
 });
+
 // =============================
 // ZEITERFASSUNG – STEMPLEN (A)
 // =============================
-
-async function ensureEmployeeExistsA(employee_id) {
-  await pool.query(
-    `
-    INSERT INTO employees (employee_id, name)
-    VALUES ($1, $2)
-    ON CONFLICT (employee_id) DO NOTHING
-    `,
-    [employee_id, employee_id]
-  );
-}
 
 // recompute day summary from time_events -> time_entries
 async function recomputeTimeEntryForDay(employee_id, work_date_iso) {
@@ -2774,12 +2814,12 @@ async function recomputeTimeEntryForDay(employee_id, work_date_iso) {
         MIN(event_time) FILTER (WHERE event_type='clock_in') AS start_ts,
         MAX(event_time) FILTER (WHERE event_type='clock_out') AS end_ts,
         COALESCE(
-  CEIL(
-    SUM(EXTRACT(EPOCH FROM (next_time - event_time)) / 60.0)
-      FILTER (WHERE event_type='break_start' AND next_type='break_end')
-  ),
-  0
-)::int AS break_minutes
+          CEIL(
+            SUM(EXTRACT(EPOCH FROM (next_time - event_time)) / 60.0)
+              FILTER (WHERE event_type='break_start' AND next_type='break_end')
+          ),
+          0
+        )::int AS break_minutes
       FROM paired
       GROUP BY employee_id, work_date
     )
@@ -2803,8 +2843,7 @@ app.post("/api/clock/in", async (req, res) => {
     const project_id = req.body?.project_id != null ? String(req.body.project_id).trim() : null;
     if (!employee_id) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
 
-  await ensureEmployeeExistsA(employee_id);
-
+    await ensureEmployeeExists(employee_id);
 
     const work_date = todayIsoBerlin();
 
@@ -2813,12 +2852,11 @@ app.post("/api/clock/in", async (req, res) => {
       [employee_id, project_id]
     );
 
-
     await recomputeTimeEntryForDay(employee_id, work_date);
-    res.json({ ok: true, employee_id, work_date });
+    return res.json({ ok: true, employee_id, work_date });
   } catch (e) {
     console.error("CLOCK IN ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2838,16 +2876,18 @@ app.post("/api/clock/out", async (req, res) => {
     );
 
     await recomputeTimeEntryForDay(employee_id, work_date);
-    res.json({ ok: true, employee_id, work_date });
+    return res.json({ ok: true, employee_id, work_date });
   } catch (e) {
     console.error("CLOCK OUT ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
-    // DEBUG: proof that THIS server.js is running
+
+// DEBUG: proof that THIS server.js is running
 app.get("/api/debug/has-break-routes", (req, res) => {
   res.json({ ok: true, hasBreakRoutes: true });
 });
+
 // POST /api/break/start
 app.post("/api/break/start", async (req, res) => {
   try {
@@ -2864,10 +2904,10 @@ app.post("/api/break/start", async (req, res) => {
     );
 
     await recomputeTimeEntryForDay(employee_id, work_date);
-    res.json({ ok: true, employee_id, work_date });
+    return res.json({ ok: true, employee_id, work_date });
   } catch (e) {
     console.error("BREAK START ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2887,12 +2927,13 @@ app.post("/api/break/end", async (req, res) => {
     );
 
     await recomputeTimeEntryForDay(employee_id, work_date);
-    res.json({ ok: true, employee_id, work_date });
+    return res.json({ ok: true, employee_id, work_date });
   } catch (e) {
     console.error("BREAK END ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // TERMINAL: Login + Allowed Projects
 // ======================================================
@@ -2901,14 +2942,13 @@ app.post("/api/break/end", async (req, res) => {
 app.get("/api/terminal/login", async (req, res) => {
   try {
     const q = String(req.query.employee_id || "").trim();
-    const date = String(req.query.date || "").trim();
+    const date = String(req.query.date || "").trim() || todayIsoBerlin();
 
     if (!q) return res.status(400).json({ ok: false, error: "employee_id fehlt" });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({ ok: false, error: "date fehlt/ungültig (YYYY-MM-DD)" });
+      return res.status(400).json({ ok: false, error: "date ungültig (YYYY-MM-DD)" });
     }
 
-    // 1) Falls exakte employee_id eingegeben wurde: nur zulassen, wenn an diesem Datum geplant
     const plannedExact = await pool.query(
       `
       SELECT employee_id, employee_name AS name
@@ -2922,7 +2962,6 @@ app.get("/api/terminal/login", async (req, res) => {
       return res.json({ ok: true, employee: plannedExact.rows[0] });
     }
 
-    // 2) Name-Suche im Staffplan für GENAU dieses Datum
     const plannedByName = await pool.query(
       `
       SELECT employee_id, employee_name AS name, COUNT(*)::int AS cnt
@@ -2945,7 +2984,6 @@ app.get("/api/terminal/login", async (req, res) => {
       });
     }
 
-    // Niemand geplant -> Login nicht erlaubt
     return res.json({
       ok: false,
       error: "Mitarbeiter ist an diesem Datum nicht eingeplant."
@@ -2955,6 +2993,7 @@ app.get("/api/terminal/login", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // GET /api/allowed-projects?employee_id=...&date=YYYY-MM-DD
 app.get("/api/allowed-projects", async (req, res) => {
   try {
@@ -2979,509 +3018,10 @@ app.get("/api/allowed-projects", async (req, res) => {
     );
 
     const projects = r.rows.map(x => ({ project_id: x.project_id, name: x.project_id }));
-    res.json({ ok: true, projects });
+    return res.json({ ok: true, projects });
   } catch (e) {
     console.error("ALLOWED PROJECTS ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// ======================================================
-// ADMIN: Report CSV Export (semicolon for DE Excel)
-// GET /api/admin/report-hours/summary.csv?from=YYYY-MM-DD&to=YYYY-MM-DD
-// ======================================================
-app.get("/api/admin/report-hours/summary.csv", async (req, res) => {
-  try {
-    const from = String(req.query.from || "").trim();
-    const to = String(req.query.to || "").trim();
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
-      return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-      return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
-    }
-    if (to < from) {
-      return res.status(400).send("to darf nicht vor from liegen");
-    }
-
-    const q = await pool.query(
-      `
-      SELECT
-        employee_id,
-        mapped_customer_po,
-        mapped_internal_po,
-        COUNT(*)::int AS days,
-        ROUND(SUM(clamped_hours)::numeric, 2) AS hours
-      FROM v_time_entries_clamped
-      WHERE work_date BETWEEN $1::date AND $2::date
-        AND clamped_hours IS NOT NULL
-        AND COALESCE(mapped_customer_po,'') <> ''
-      GROUP BY employee_id, mapped_customer_po, mapped_internal_po
-      ORDER BY employee_id, mapped_customer_po, mapped_internal_po
-      `,
-      [from, to]
-    );
-
-    // CSV helpers (semicolon + quoting)
-    function csvCell(v) {
-      const s = (v === null || v === undefined) ? "" : String(v);
-      // quote if contains ; " \n \r
-      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-      return s;
-    }
-
-    // UTF-8 BOM for Excel
-    let csv = "\ufeff" + [
-      ["employee_id", "customer_po", "internal_po", "days", "hours"].join(";")
-    ].join("\n");
-
-    for (const r of q.rows) {
-      csv += "\n" + [
-        csvCell(r.employee_id),
-        csvCell(r.mapped_customer_po),
-        csvCell(r.mapped_internal_po),
-        csvCell(r.days),
-        csvCell(r.hours)
-      ].join(";");
-    }
-
-    const filename = `report_summary_${from}_to_${to}.csv`;
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(csv);
-  } catch (e) {
-    console.error("SUMMARY CSV ERROR:", e);
-    res.status(500).send(e.message || "csv error");
-  }
-});
-// ======================================================
-// ADMIN: Weekly CSV Export (semicolon for DE Excel)
-// GET /api/admin/report-hours/weekly.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&code=2012
-// Optional: &customer_po=&internal_po=&employee_id=
-// ======================================================
-app.get("/api/admin/report-hours/weekly.csv", async (req, res) => {
-  try {
-    // Admin Guard ist aktiv, aber CSV wird oft per ?code=2012 geladen -> akzeptieren wir:
-    try { requireCode2012(req); } catch (e) { return res.status(403).send("Falscher Sicherheitscode"); }
-
-    const from = String(req.query.from || "").trim();
-    const to = String(req.query.to || "").trim();
-    const employee_id = req.query.employee_id ? String(req.query.employee_id).trim() : null;
-    const customer_po = req.query.customer_po ? String(req.query.customer_po).trim() : null;
-    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null;
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
-    if (to < from) return res.status(400).send("to darf nicht vor from liegen");
-
-    const where = [];
-    const params = [from, to];
-    where.push(`work_date BETWEEN $1::date AND $2::date`);
-    where.push(`clamped_hours IS NOT NULL`);
-
-    if (employee_id) { params.push(employee_id); where.push(`employee_id = $${params.length}`); }
-    if (customer_po) { params.push(customer_po); where.push(`mapped_customer_po = $${params.length}`); }
-    if (internal_po !== null) { params.push(internal_po); where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`); }
-
-    const q = await pool.query(
-      `
-      SELECT
-        EXTRACT(ISOYEAR FROM work_date)::int AS isoyear,
-        EXTRACT(WEEK FROM work_date)::int AS isoweek,
-        employee_id,
-        COALESCE(mapped_customer_po,'') AS customer_po,
-        COALESCE(mapped_internal_po,'') AS internal_po,
-        COUNT(*)::int AS days,
-        ROUND(SUM(clamped_hours)::numeric, 2) AS hours
-      FROM v_time_entries_clamped
-      WHERE ${where.join(" AND ")}
-      GROUP BY isoyear, isoweek, employee_id, customer_po, internal_po
-      ORDER BY isoyear ASC, isoweek ASC, employee_id ASC, customer_po ASC, internal_po ASC
-      `,
-      params
-    );
-
-    function csvCell(v){
-      const s = (v === null || v === undefined) ? "" : String(v);
-      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
-      return s;
-    }
-
-    let csv = "\ufeff" + "isoyear;isoweek;employee_id;customer_po;internal_po;days;hours";
-    for (const r of q.rows){
-      csv += "\n" + [
-        csvCell(r.isoyear),
-        csvCell(r.isoweek),
-        csvCell(r.employee_id),
-        csvCell(r.customer_po),
-        csvCell(r.internal_po),
-        csvCell(r.days),
-        csvCell(r.hours),
-      ].join(";");
-    }
-
-    const filename = `report_weekly_${from}_to_${to}.csv`;
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(csv);
-  } catch (e) {
-    console.error("WEEKLY CSV ERROR:", e);
-    res.status(500).send(e.message || "csv error");
-  }
-});
-
-// ======================================================
-// ADMIN: Customer Invoice (DAILY) CSV
-// GET /api/admin/invoice/daily.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=...&code=2012
-// Optional: &internal_po=   (leer erlaubt)
-// Optional: &round_to=0.25&round_mode=nearest|up|down&min_day_hours=1&cap_day_hours=10
-// ======================================================
-app.get("/api/admin/invoice/daily.csv", async (req, res) => {
-  try {
-    // CSV wird oft per ?code=2012 geladen -> akzeptieren wir:
-    try { requireCode2012(req); } catch { return res.status(403).send("Falscher Sicherheitscode"); }
-
-    const from = String(req.query.from || "").trim();
-    const to = String(req.query.to || "").trim();
-    const customer_po = String(req.query.customer_po || "").trim();
-    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null; // kann "" sein
-
-    const round_to = req.query.round_to != null && String(req.query.round_to).trim() !== ""
-      ? Number(req.query.round_to)
-      : null; // z.B. 0.25
-    const round_mode = String(req.query.round_mode || "nearest").trim(); // nearest|up|down
-    const min_day_hours = req.query.min_day_hours != null && String(req.query.min_day_hours).trim() !== ""
-      ? Number(req.query.min_day_hours)
-      : null; // z.B. 1
-    const cap_day_hours = req.query.cap_day_hours != null && String(req.query.cap_day_hours).trim() !== ""
-      ? Number(req.query.cap_day_hours)
-      : null; // z.B. 10
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
-    if (to < from) return res.status(400).send("to darf nicht vor from liegen");
-    if (!customer_po) return res.status(400).send("customer_po fehlt");
-
-    if (round_to !== null && (!isFinite(round_to) || round_to <= 0 || round_to > 4)) {
-      return res.status(400).send("round_to ungültig (z.B. 0.25)");
-    }
-    if (!["nearest","up","down"].includes(round_mode)) {
-      return res.status(400).send("round_mode ungültig (nearest|up|down)");
-    }
-    for (const [k,v] of [["min_day_hours",min_day_hours],["cap_day_hours",cap_day_hours]]) {
-      if (v !== null && (!isFinite(v) || v < 0 || v > 24)) return res.status(400).send(`${k} ungültig (0..24)`);
-    }
-
-    function roundHours(val){
-      const x = Number(val);
-      if (!isFinite(x)) return null;
-      if (round_to === null) return x;
-
-      const units = x / round_to;
-      let r;
-      if (round_mode === "up") r = Math.ceil(units);
-      else if (round_mode === "down") r = Math.floor(units);
-      else r = Math.round(units);
-
-      return r * round_to;
-    }
-
-    function applyMinCap(h){
-      if (h === null) return null;
-      let x = h;
-      if (min_day_hours !== null) x = Math.max(x, min_day_hours);
-      if (cap_day_hours !== null) x = Math.min(x, cap_day_hours);
-      return x;
-    }
-
-    // bill_travel: darf Reisezeit berechnet werden?
-    const bt = await pool.query(
-      `SELECT bool_or(bill_travel) AS bill_travel
-       FROM po_work_rules
-       WHERE customer_po = $1`,
-      [customer_po]
-    );
-    const bill_travel = !!bt.rows?.[0]?.bill_travel;
-
-    const where = [];
-    const params = [from, to, customer_po];
-
-    where.push(`work_date BETWEEN $1::date AND $2::date`);
-    where.push(`clamped_hours IS NOT NULL`);
-    where.push(`mapped_customer_po = $3`);
-
-    // internal_po filter: wenn Parameter gesetzt, filtern wir auch "" (leer) gezielt
-    if (internal_po !== null) {
-      params.push(internal_po);
-      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
-    }
-
-    // pro Tag / Mitarbeiter / interner PO summieren
-    // travel_hours kommt aus deiner v_time_entries_clamped (berechnet aus travel_minutes)
-    const q = await pool.query(
-      `
-SELECT
-  to_char(work_date, 'YYYY-MM-DD') AS work_date,
-        employee_id,
-        mapped_customer_po AS customer_po,
-        COALESCE(mapped_internal_po,'') AS internal_po,
-        SUM(clamped_hours)::numeric AS hours_raw,
-        SUM(COALESCE(travel_hours,0))::numeric AS travel_raw
-      FROM v_time_entries_clamped
-      WHERE ${where.join(" AND ")}
-      GROUP BY work_date, employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
-      ORDER BY work_date ASC, employee_id ASC, internal_po ASC
-      `,
-      params
-    );
-
-    const rows = (q.rows || []).map(r => {
-      const raw = Number(r.hours_raw) || 0;
-      const rounded = roundHours(raw);
-      const billed = applyMinCap(rounded);
-
-      const travel_raw = Number(r.travel_raw) || 0;
-      const travel_billed = bill_travel ? travel_raw : 0;
-
-      const total_billed = (Number(billed) || 0) + (Number(travel_billed) || 0);
-
-      return {
-        work_date: String(r.work_date).slice(0,10),
-        employee_id: r.employee_id,
-        customer_po: r.customer_po,
-        internal_po: r.internal_po,
-        hours_raw: Math.round(raw * 100) / 100,
-        hours_rounded: rounded === null ? "" : (Math.round(Number(rounded) * 100) / 100),
-        hours_billed: billed === null ? "" : (Math.round(Number(billed) * 100) / 100),
-        travel_raw: Math.round(travel_raw * 100) / 100,
-        travel_billed: Math.round(travel_billed * 100) / 100,
-        bill_travel: bill_travel ? "1" : "0",
-        total_billed: Math.round(total_billed * 100) / 100,
-      };
-    });
-
-    function csvCell(v){
-      const s = (v === null || v === undefined) ? "" : String(v);
-      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
-      return s;
-    }
-
-    let csv = "\ufeff" + [
-      [
-        "date","employee_id","customer_po","internal_po",
-        "hours_raw","hours_rounded","hours_billed",
-        "travel_raw","travel_billed","bill_travel","total_billed"
-      ].join(";")
-    ].join("\n");
-
-    for (const r of rows){
-      csv += "\n" + [
-        csvCell(r.work_date),
-        csvCell(r.employee_id),
-        csvCell(r.customer_po),
-        csvCell(r.internal_po),
-        csvCell(r.hours_raw),
-        csvCell(r.hours_rounded),
-        csvCell(r.hours_billed),
-        csvCell(r.travel_raw),
-        csvCell(r.travel_billed),
-        csvCell(r.bill_travel),
-        csvCell(r.total_billed),
-      ].join(";");
-    }
-
-    const filename = `invoice_daily_${customer_po}_${from}_to_${to}.csv`;
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(csv);
-  } catch (e) {
-    console.error("INVOICE DAILY CSV ERROR:", e);
-    res.status(500).send(e.message || "csv error");
-  }
-});
-
-// ======================================================
-// ADMIN: Customer Invoice (SUMMARY) CSV
-// GET /api/admin/invoice/summary.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=...&code=2012
-// Optional: &internal_po=   (leer erlaubt)
-// Optional rounding: &round_to=0.25&round_mode=nearest|up|down&min_day_hours=1&cap_day_hours=10
-// Travel = separat, Rundung = Tagesbasis
-// ======================================================
-app.get("/api/admin/invoice/summary.csv", async (req, res) => {
-  try {
-    try { requireCode2012(req); } catch { return res.status(403).send("Falscher Sicherheitscode"); }
-
-    const from = String(req.query.from || "").trim();
-    const to = String(req.query.to || "").trim();
-    const customer_po = String(req.query.customer_po || "").trim();
-    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null; // kann "" sein
-
-    const round_to = req.query.round_to != null && String(req.query.round_to).trim() !== "" ? Number(req.query.round_to) : null; // z.B. 0.25
-    const round_mode = String(req.query.round_mode || "nearest").trim(); // nearest|up|down
-    const min_day_hours = req.query.min_day_hours != null && String(req.query.min_day_hours).trim() !== "" ? Number(req.query.min_day_hours) : null; // z.B. 1
-    const cap_day_hours = req.query.cap_day_hours != null && String(req.query.cap_day_hours).trim() !== "" ? Number(req.query.cap_day_hours) : null; // z.B. 10
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from fehlt/ungültig (YYYY-MM-DD)");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to fehlt/ungültig (YYYY-MM-DD)");
-    if (to < from) return res.status(400).send("to darf nicht vor from liegen");
-    if (!customer_po) return res.status(400).send("customer_po fehlt");
-
-    if (round_to !== null && (!isFinite(round_to) || round_to <= 0 || round_to > 4)) {
-      return res.status(400).send("round_to ungültig (z.B. 0.25)");
-    }
-    if (!["nearest", "up", "down"].includes(round_mode)) {
-      return res.status(400).send("round_mode ungültig (nearest|up|down)");
-    }
-    for (const [k, v] of [["min_day_hours", min_day_hours], ["cap_day_hours", cap_day_hours]]) {
-      if (v !== null && (!isFinite(v) || v < 0 || v > 24)) return res.status(400).send(`${k} ungültig (0..24)`);
-    }
-
-    function roundHours(val) {
-      const x = Number(val);
-      if (!isFinite(x)) return null;
-      if (round_to === null) return x;
-
-      const units = x / round_to;
-      let r;
-      if (round_mode === "up") r = Math.ceil(units);
-      else if (round_mode === "down") r = Math.floor(units);
-      else r = Math.round(units);
-
-      return r * round_to;
-    }
-
-    function applyMinCap(h) {
-      if (h === null) return null;
-      let x = h;
-      if (min_day_hours !== null) x = Math.max(x, min_day_hours);
-      if (cap_day_hours !== null) x = Math.min(x, cap_day_hours);
-      return x;
-    }
-
-    // bill_travel für diese Customer-PO (einmalig)
-    const btRow = await pool.query(
-      `SELECT bool_or(bill_travel) AS bill_travel
-       FROM po_work_rules
-       WHERE customer_po = $1`,
-      [customer_po]
-    );
-    const bill_travel = !!btRow.rows?.[0]?.bill_travel;
-
-    const where = [];
-    const params = [from, to, customer_po];
-
-    where.push(`work_date BETWEEN $1::date AND $2::date`);
-    where.push(`clamped_hours IS NOT NULL`);
-    where.push(`mapped_customer_po = $3`);
-
-    if (internal_po !== null) {
-      params.push(internal_po);
-      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
-    }
-
-    // Daily-Basis: pro Tag+Mitarbeiter+internal_po summieren
-    const daily = await pool.query(
-      `
-      SELECT
-        work_date,
-        employee_id,
-        mapped_customer_po AS customer_po,
-        COALESCE(mapped_internal_po,'') AS internal_po,
-        SUM(clamped_hours)::numeric AS hours,
-        SUM(COALESCE(travel_hours,0))::numeric AS travel_hours
-      FROM v_time_entries_clamped
-      WHERE ${where.join(" AND ")}
-      GROUP BY work_date, employee_id, mapped_customer_po, COALESCE(mapped_internal_po,'')
-      ORDER BY work_date ASC, employee_id ASC, internal_po ASC
-      `,
-      params
-    );
-
-    // Bucket je employee_id + customer_po + internal_po
-    const bucket = new Map();
-
-    for (const r of (daily.rows || [])) {
-      const rawHours = Number(r.hours) || 0;
-      const roundedHours = roundHours(rawHours);
-      const billedHours = applyMinCap(roundedHours);
-      if (billedHours === null) continue;
-
-      const travelRaw = Number(r.travel_hours) || 0;
-      const travelBilled = bill_travel ? travelRaw : 0;
-
-      const key = `${r.employee_id}||${r.customer_po}||${r.internal_po}`;
-      const prev = bucket.get(key) || {
-        employee_id: r.employee_id,
-        customer_po: r.customer_po,
-        internal_po: r.internal_po,
-        days: new Set(),
-        hours_raw: 0,
-        hours_billed: 0,
-        travel_raw: 0,
-        travel_billed: 0,
-      };
-
-      prev.days.add(String(r.work_date).slice(0, 10));
-      prev.hours_raw += rawHours;
-      prev.hours_billed += Number(billedHours) || 0;
-      prev.travel_raw += travelRaw;
-      prev.travel_billed += travelBilled;
-
-      bucket.set(key, prev);
-    }
-
-    const rows = Array.from(bucket.values())
-      .map(x => {
-        const total_billed = (Number(x.hours_billed) || 0) + (Number(x.travel_billed) || 0);
-        return {
-          employee_id: x.employee_id,
-          customer_po: x.customer_po,
-          internal_po: x.internal_po,
-          days: x.days.size,
-          hours_raw: Math.round(x.hours_raw * 100) / 100,
-          hours_billed: Math.round(x.hours_billed * 100) / 100,
-          travel_raw: Math.round(x.travel_raw * 100) / 100,
-          travel_billed: Math.round(x.travel_billed * 100) / 100,
-          bill_travel: bill_travel ? 1 : 0,
-          total_billed: Math.round(total_billed * 100) / 100,
-        };
-      })
-      .sort((a, b) =>
-        a.employee_id.localeCompare(b.employee_id) ||
-        a.internal_po.localeCompare(b.internal_po)
-      );
-
-    function csvCell(v) {
-      const s = (v === null || v === undefined) ? "" : String(v);
-      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-      return s;
-    }
-
-    let csv = "\ufeff" +
-      "employee_id;customer_po;internal_po;days;hours_raw;hours_billed;travel_raw;travel_billed;bill_travel;total_billed";
-
-    for (const r of rows) {
-      csv += "\n" + [
-        csvCell(r.employee_id),
-        csvCell(r.customer_po),
-        csvCell(r.internal_po),
-        csvCell(r.days),
-        csvCell(r.hours_raw),
-        csvCell(r.hours_billed),
-        csvCell(r.travel_raw),
-        csvCell(r.travel_billed),
-        csvCell(r.bill_travel),
-        csvCell(r.total_billed),
-      ].join(";");
-    }
-
-    const filename = `invoice_summary_${customer_po}_${from}_to_${to}.csv`;
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    return res.send(csv);
-  } catch (e) {
-    console.error("INVOICE SUMMARY CSV ERROR:", e);
-    return res.status(500).send(e.message || "csv error");
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -3525,7 +3065,9 @@ app.post("/api/admin/invoices/create", async (req, res) => {
       return res.status(400).json({ ok: false, error: "round_mode ungültig (nearest|up|down)" });
     }
     for (const [k, v] of [["min_day_hours", min_day_hours], ["cap_day_hours", cap_day_hours]]) {
-      if (v !== null && (!isFinite(v) || v < 0 || v > 24)) return res.status(400).json({ ok: false, error: `${k} ungültig (0..24)` });
+      if (v !== null && (!isFinite(v) || v < 0 || v > 24)) {
+        return res.status(400).json({ ok: false, error: `${k} ungültig (0..24)` });
+      }
     }
 
     function roundHours(val) {
@@ -3674,14 +3216,14 @@ app.post("/api/admin/invoices/create", async (req, res) => {
     await client.query("BEGIN");
 
     // create invoice (draft, no number)
+    const totalRounded = Math.round(totalHours * 100) / 100;
     const inv = await client.query(
       `
-INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
+      INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
       VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5, $6)
       RETURNING id
       `,
-[customer_po, customer, from, to, Math.round(totalHours * 100) / 100, "staffplan"]
-
+      [customer_po, customer, from, to, totalRounded, "clamped"]
     );
     const invoice_id = inv.rows[0].id;
 
@@ -3702,12 +3244,13 @@ INSERT INTO invoices (customer_po, customer, period_start, period_end, status, c
       ok: true,
       invoice_id,
       status: "draft",
+      source: "clamped",
       customer_po,
       customer,
       period_start: from,
       period_end: to,
       currency: "EUR",
-      total_amount: Math.round(totalHours * 100) / 100,
+      total_amount: totalRounded,
       lines: lineItems.length,
       note: "total_amount/amount sind aktuell Stunden (noch kein Stundensatz hinterlegt).",
     });
@@ -3762,6 +3305,7 @@ app.get("/api/admin/open-sessions", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // ADMIN: Report Hours Daily (für Nachweise)
 // GET /api/admin/report-hours/daily?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=&internal_po=
@@ -3819,6 +3363,7 @@ app.get("/api/admin/report-hours/daily", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // ADMIN: Report Hours Daily CSV
 // GET /api/admin/report-hours/daily.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=&internal_po=
@@ -3873,7 +3418,7 @@ app.get("/api/admin/report-hours/daily.csv", async (req, res) => {
     }
 
     let csv = "\ufeff" + [
-      ["work_date","employee_id","customer_po","internal_po","start_ts","end_ts","break_minutes","hours"].join(";")
+      ["work_date","employee_id","customer_po","internal_po","start_ts","end_ts","break_minutes","hours"].join(";"),
     ].join("\n");
 
     for (const r of q.rows) {
@@ -3972,13 +3517,11 @@ app.post("/api/admin/invoices/create-planned", async (req, res) => {
 
     const inv = await client.query(
       `
-INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
-
+      INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
       VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5, $6)
-
       RETURNING id
       `,
-      [customer_po, customer, from, to, totalHours]
+      [customer_po, customer, from, to, totalHours, "staffplan.planned_hours"]
     );
     const invoice_id = inv.rows[0].id;
 
@@ -4053,8 +3596,8 @@ app.post("/api/admin/import/employees", upload.single("file"), async (req, res) 
       if (!rawId || !rawName) { skipped++; continue; }
 
       // IDs aus Excel kommen oft als "1001" oder "1001.0"
-      let employee_id = rawId.replace(/\.0$/, "").trim();
-      let name = commaSwapName(rawName).trim(); // "Nachname, Vorname" -> "Vorname Nachname"
+      const employee_id = rawId.replace(/\.0$/, "").trim();
+      const name = commaSwapName(rawName).trim(); // "Nachname, Vorname" -> "Vorname Nachname"
 
       // sanity
       if (!employee_id || !name) { skipped++; continue; }
@@ -4098,7 +3641,7 @@ app.post("/api/admin/import/employees", upload.single("file"), async (req, res) 
 // ======================================================
 // A9.11: Review Queue - list recent draft invoices
 // GET /api/admin/invoices/review?minutes=60
-// optional: &status=draft|final|exported
+// optional: &status=draft|final|exported|all
 // ======================================================
 app.get("/api/admin/review/invoices", async (req, res) => {
   try {
@@ -4179,10 +3722,12 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
         : String(invoice.period_end).slice(0, 10);
 
     const linesQ = await pool.query(
-      `SELECT description, quantity, unit, unit_price, amount
-       FROM invoice_lines
-       WHERE invoice_id=$1::bigint
-       ORDER BY id ASC`,
+      `
+      SELECT description, quantity, unit, unit_price, amount
+      FROM invoice_lines
+      WHERE invoice_id=$1::bigint
+      ORDER BY id ASC
+      `,
       [id]
     );
     const lines = linesQ.rows || [];
@@ -4351,9 +3896,10 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
     for (const r of (daily.rows || [])) {
       ensureSpace(140);
 
-      const date = (r.work_date instanceof Date)
-        ? r.work_date.toISOString().slice(0, 10)
-        : String(r.work_date).slice(0, 10);
+      const date =
+        r.work_date instanceof Date
+          ? r.work_date.toISOString().slice(0, 10)
+          : String(r.work_date).slice(0, 10);
 
       const emp = String(r.employee_id || "");
       const ipo = String(r.internal_po || "-");
@@ -4392,6 +3938,7 @@ app.get("/api/admin/invoices/:id.pdf", async (req, res) => {
     return res.status(500).send("PDF Fehler");
   }
 });
+
 // ======================================================
 // A8: INVOICES - CSV export from invoice_lines (semicolon, Excel-DE)
 // GET /api/admin/invoices/:id.csv
@@ -4429,7 +3976,15 @@ app.get("/api/admin/invoices/:id.csv", async (req, res) => {
     }
 
     const r0 = inv.rows[0];
-    const filename = `invoice_${r0.invoice_number || ("draft_" + r0.id)}_${r0.customer_po}_${r0.period_start}_to_${r0.period_end}.csv`;
+
+    const startIso =
+      r0.period_start instanceof Date ? r0.period_start.toISOString().slice(0, 10) : String(r0.period_start).slice(0, 10);
+    const endIso =
+      r0.period_end instanceof Date ? r0.period_end.toISOString().slice(0, 10) : String(r0.period_end).slice(0, 10);
+
+    const safePo = String(r0.customer_po || "PO").replace(/[^0-9A-Za-z_\-]/g, "_");
+    const safeNum = String(r0.invoice_number || ("draft_" + r0.id)).replace(/[^0-9A-Za-z_\-]/g, "_");
+    const filename = `invoice_${safeNum}_${safePo}_${startIso}_to_${endIso}.csv`;
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -4462,6 +4017,7 @@ app.get("/api/admin/invoices/:id", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // A8: INVOICES - finalize (assign invoice_number + lock)
 // POST /api/admin/invoices/:id/finalize
@@ -4536,6 +4092,7 @@ app.post("/api/admin/invoices/:id/finalize", async (req, res) => {
     client.release();
   }
 });
+
 // ======================================================
 // A9: AUTOMATION - run billing draft creation from REAL TIMES (v_time_entries_clamped)
 // POST /api/admin/automation/run
@@ -4561,7 +4118,7 @@ app.post("/api/admin/automation/run", async (req, res) => {
       return res.status(400).json({ ok: false, error: "mode muss monthly|weekly|project sein" });
     }
 
-    function isIso(d){ return /^\d{4}-\d{2}-\d{2}$/.test(String(d||"")); }
+    function isIso(d) { return /^\d{4}-\d{2}-\d{2}$/.test(String(d || "")); }
 
     // compute range
     let from, to;
@@ -4569,7 +4126,8 @@ app.post("/api/admin/automation/run", async (req, res) => {
       if (!isIso(fromIn) || !isIso(toIn) || toIn < fromIn) {
         return res.status(400).json({ ok: false, error: "project braucht from/to (YYYY-MM-DD), to>=from" });
       }
-      from = fromIn; to = toIn;
+      from = fromIn;
+      to = toIn;
     } else {
       if (!isIso(date)) return res.status(400).json({ ok: false, error: "monthly/weekly braucht date (YYYY-MM-DD)" });
 
@@ -4597,7 +4155,9 @@ app.post("/api/admin/automation/run", async (req, res) => {
     }
 
     // customer_pos: optional
-    const bodyPos = Array.isArray(req.body?.customer_pos) ? req.body.customer_pos.map(x => String(x).trim()).filter(Boolean) : null;
+    const bodyPos = Array.isArray(req.body?.customer_pos)
+      ? req.body.customer_pos.map(x => String(x).trim()).filter(Boolean)
+      : null;
 
     await client.query("BEGIN");
 
@@ -4709,26 +4269,25 @@ app.post("/api/admin/automation/run", async (req, res) => {
         continue;
       }
 
-      // create invoice draft
-     let invoice_id = null;
-try {
-  const inv = await client.query(
-    `
-    INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
-    VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5, $6)
-    RETURNING id
-    `,
-    [customer_po, customer, from, to, total, "clamped"]
-  );
-  invoice_id = inv.rows[0].id;
-} catch (e) {
-  if (String(e.code) === "23505") {
-    skipped.push({ customer_po, reason: "duplicate_po_period_source" });
-    continue; // next PO
-  }
-  throw e;
-}
-
+      // create invoice draft (duplicate-safe)
+      let invoice_id = null;
+      try {
+        const inv = await client.query(
+          `
+          INSERT INTO invoices (customer_po, customer, period_start, period_end, status, currency, total_amount, source)
+          VALUES ($1, $2, $3::date, $4::date, 'draft', 'EUR', $5, $6)
+          RETURNING id
+          `,
+          [customer_po, customer, from, to, total, "clamped"]
+        );
+        invoice_id = inv.rows[0].id;
+      } catch (e) {
+        if (String(e.code) === "23505") {
+          skipped.push({ customer_po, reason: "duplicate_po_period_source" });
+          continue; // next PO
+        }
+        throw e;
+      }
 
       for (const li of lines) {
         await client.query(
@@ -4742,29 +4301,30 @@ try {
 
       created.push({ invoice_id: String(invoice_id), customer_po, total_amount: total, lines: lines.length });
     }
-// save run log (for notifications)
-try {
-  await pool.query(
-    `
-    INSERT INTO automation_runs
-      (mode, period_start, period_end, created_count, skipped_count, created_json, skipped_json, note)
-    VALUES
-      ($1, $2::date, $3::date, $4, $5, $6::jsonb, $7::jsonb, $8)
-    `,
-    [
-      mode,
-      from,
-      to,
-      created.length,
-      skipped.length,
-      JSON.stringify(created || []),
-      JSON.stringify(skipped || []),
-      "automation/run logged"
-    ]
-  );
-} catch (e) {
-  console.warn("automation_runs insert failed:", e.message);
-}
+
+    // save run log (for notifications) - keep inside same transaction
+    try {
+      await client.query(
+        `
+        INSERT INTO automation_runs
+          (mode, period_start, period_end, created_count, skipped_count, created_json, skipped_json, note)
+        VALUES
+          ($1, $2::date, $3::date, $4, $5, $6::jsonb, $7::jsonb, $8)
+        `,
+        [
+          mode,
+          from,
+          to,
+          created.length,
+          skipped.length,
+          JSON.stringify(created || []),
+          JSON.stringify(skipped || []),
+          "automation/run logged",
+        ]
+      );
+    } catch (e) {
+      console.warn("automation_runs insert failed:", e.message);
+    }
 
     await client.query("COMMIT");
 
@@ -4786,6 +4346,7 @@ try {
     client.release();
   }
 });
+
 // ======================================================
 // A9.9: CRON endpoints (weekly + monthly)
 // ======================================================
@@ -4810,6 +4371,7 @@ app.get("/api/admin/cron/monthly", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ======================================================
 // A9.12: Get last automation run
 // ======================================================
@@ -4843,4 +4405,3 @@ app.get("/api/admin/automation/last-run", async (req, res) => {
     process.exit(1);
   }
 })();
-
