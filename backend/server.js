@@ -10,6 +10,9 @@ const XLSX = require("xlsx");
 const PDFDocument = require("pdfkit");
 const { Pool } = require("pg");
 const { downloadExcelFromShareLink } = require("./sharepoint");
+const path = require("path");
+const { buildErfassungsbogenPdf } = require("./a10/erfassungsbogenPdf");
+
 
 const app = express();
 
@@ -76,6 +79,30 @@ app.get("/api/cron/run", async (req, res) => {
   } catch (e) {
     console.error("CRON RUN ERROR:", e);
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+app.get("/a10/erfassungsbogen.pdf", async (req, res) => {
+  try {
+    const group = ["date", "week", "project"].includes(req.query.group) ? req.query.group : "week";
+
+    // TODO: Hier später echte Zeiten aus DB holen
+    // Beispiel-rows (erstmal zum Proof)
+    const rows = [
+      { date: "2026-01-27", project: "Kunde A", internal_po: "PO-123", task: "Dev", minutes: 120 },
+      { date: "2026-01-28", project: "Kunde A", internal_po: "PO-123", task: "QA", minutes: 90 },
+      { date: "2026-01-29", project: "Internal", internal_po: null, task: "Admin", minutes: 45 },
+    ];
+
+    const logoPath = path.join(__dirname, "static", "logo.png"); // optional
+    buildErfassungsbogenPdf(res, rows, {
+      title: "Erfassungsbogen (Zeiten)",
+      groupMode: group,
+      periodLabel: "Zeitraum: automatisch",
+      logoPath, // wenn kein Logo vorhanden: entweder Ordner+Datei anlegen oder logoPath auf null setzen
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).send("PDF generation failed");
   }
 });
 
