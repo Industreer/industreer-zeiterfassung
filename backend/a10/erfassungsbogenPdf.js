@@ -64,33 +64,39 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
     }
   }
 
-  // Titel + Zeitraum (links neben/unter Logo)
+  // Titel + Zeitraum (links, mit Platz für Meta rechts)
   const titleX = margin + (logoPath ? 160 : 0);
   doc.fillColor("#111").font("Helvetica-Bold").fontSize(18);
-  doc.text(title, titleX, margin, { width: contentW - (logoPath ? 160 : 0) - 170 });
+  doc.text(title, titleX, margin, {
+    width: contentW - (logoPath ? 160 : 0) - 170,
+  });
 
   if (periodLabel) {
     doc.font("Helvetica").fontSize(10).fillColor("#444");
-    doc.text(periodLabel, titleX, margin + 26, { width: contentW - (logoPath ? 160 : 0) - 170 });
+    doc.text(periodLabel, titleX, margin + 26, {
+      width: contentW - (logoPath ? 160 : 0) - 170,
+    });
+    doc.fillColor("#000");
   }
 
-  // Meta-Block rechts (Kunde/PO/Summe etc.)
+  // Meta-Block rechts
   if (Array.isArray(metaLines) && metaLines.length) {
     const boxW = 170;
     const boxX = margin + contentW - boxW;
     const boxY = margin - 2;
 
-    doc.font("Helvetica").fontSize(9).fillColor("#111");
-    let y = boxY;
-
-    // dezente Box
+    // Box
     doc.save();
     doc.roundedRect(boxX, boxY, boxW, 46, 6).fill("#F8FAFC");
     doc.restore();
 
-    y += 8;
+    doc.font("Helvetica").fontSize(9);
+    let y = boxY + 8;
     for (const line of metaLines.slice(0, 4)) {
-      doc.fillColor("#344054").text(line, boxX + 10, y, { width: boxW - 20, align: "right" });
+      doc.fillColor("#344054").text(line, boxX + 10, y, {
+        width: boxW - 20,
+        align: "right",
+      });
       y += 11;
     }
     doc.fillColor("#000");
@@ -98,10 +104,15 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
 
   // Trennlinie unter Header
   const lineY = margin + 64;
-  doc.moveTo(margin, lineY).lineTo(margin + contentW, lineY).strokeColor("#E4E7EC").lineWidth(1).stroke();
+  doc.moveTo(margin, lineY)
+    .lineTo(margin + contentW, lineY)
+    .strokeColor("#E4E7EC")
+    .lineWidth(1)
+    .stroke();
 
   doc.y = margin + 76;
 }
+
   const titleX = margin + (logoPath ? 160 : 0);
   doc.text(title, titleX, margin);
 
