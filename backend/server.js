@@ -159,6 +159,66 @@ app.use("/api/admin", (req, res, next) => {
   }
 });
 console.log("🔐 Admin Route Guard aktiv");
+app.get("/api/admin/debug/po-check", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const customer_po = String(req.query.customer_po || "").trim();
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "from/to YYYY-MM-DD required" });
+    }
+    if (!customer_po) return res.status(400).json({ ok: false, error: "customer_po required" });
+
+    // 1) Gibt es staffplan-Zeilen für diese PO?
+    const sp = await pool.query(
+      `
+      SELECT COUNT(*)::int AS cnt
+      FROM staffplan
+      WHERE work_date BETWEEN $1::date AND $2::date
+        AND regexp_replace(COALESCE(customer_po,''), '\\s', '', 'g')
+            = regexp_replace($3, '\\s', '', 'g')
+      `,
+      [from, to, customer_po]
+    );
+
+    // 2) Gibt es time_entries im Zeitraum?
+    const te = await pool.query(
+      `
+      SELECT COUNT(*)::int AS cnt
+      FROM time_entries
+      WHERE work_date BETWEEN $1::date AND $2::date
+        AND start_ts IS NOT NULL AND end_ts IS NOT NULL
+      `,
+      [from, to]
+    );
+
+    // 3) Gibt es JOIN-Treffer (time_entries <-> staffplan)?
+    const joinCnt = await pool.query(
+      `
+      SELECT COUNT(*)::int AS cnt
+      FROM time_entries te
+      JOIN staffplan sp
+        ON sp.employee_id = te.employee_id
+       AND sp.work_date = te.work_date
+      WHERE te.work_date BETWEEN $1::date AND $2::date
+        AND regexp_replace(COALESCE(sp.customer_po,''), '\\s', '', 'g')
+            = regexp_replace($3, '\\s', '', 'g')
+      `,
+      [from, to, customer_po]
+    );
+
+    return res.json({
+      ok: true,
+      staffplan_po_rows: sp.rows[0].cnt,
+      time_entries_rows: te.rows[0].cnt,
+      join_rows_for_po: joinCnt.rows[0].cnt,
+    });
+  } catch (e) {
+    console.error("PO CHECK ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 
 // ======================================================
@@ -383,10 +443,11 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
   const params = [from, to];
   let where = `te.work_date BETWEEN $1::date AND $2::date`;
 
-  if (customer_po) {
-    params.push(customer_po);
-    where += ` AND sp.customer_po = $${params.length}`;
-  }
+if (customer_po) {
+  params.push(customer_po);
+  where += ` AND regexp_replace(COALESCE(sp.customer_po,''), '\\s', '', 'g')
+                 = regexp_replace($${params.length}, '\\s', '', 'g')`;
+}
   if (internal_po) {
     params.push(internal_po);
     where += ` AND sp.internal_po = $${params.length}`;
