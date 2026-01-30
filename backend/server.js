@@ -308,10 +308,16 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
     te.work_date BETWEEN $1::date AND $2::date
   `;
 
-  if (customer_po) {
-    params.push(customer_po);
-    where += ` AND sp.customer_po = $${params.length}`;
-  }
+if (internal_po) {
+  params.push(internal_po);
+  where += ` AND TRIM(COALESCE(sp.internal_po,'')) = TRIM($${params.length})`;
+}
+
+if (project_short) {
+  params.push(project_short);
+  where += ` AND TRIM(COALESCE(sp.project_short,'')) = TRIM($${params.length})`;
+}
+
   if (internal_po) {
     params.push(internal_po);
     where += ` AND sp.internal_po = $${params.length}`;
