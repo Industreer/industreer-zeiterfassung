@@ -69,7 +69,7 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
 
   // Titel + Zeitraum (links, mit Platz für Meta rechts)
   const titleX = margin + (logoPath ? 160 : 0);
-  doc.fillColor("#111").font("Helvetica-Bold").fontSize(18);
+  doc.fillColor("#111").font("Helvetica-Bold").fontSize(16);
   doc.text(title, titleX, margin, {
     width: contentW - (logoPath ? 160 : 0) - 170,
   });
@@ -89,11 +89,11 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
     const boxY = margin - 2;
 
     doc.save();
-    doc.roundedRect(boxX, boxY, boxW, 46, 6).fill("#F8FAFC");
+    doc.roundedRect(boxX, boxY, boxW, 54, 6).fill("#F8FAFC");
     doc.restore();
 
     doc.font("Helvetica").fontSize(9);
-    let y = boxY + 8;
+    let y = boxY + 10;
     for (const line of metaLines.slice(0, 4)) {
       doc.fillColor("#344054").text(line, boxX + 10, y, {
         width: boxW - 20,
@@ -113,7 +113,7 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
     .lineWidth(1)
     .stroke();
 
-  doc.y = margin + 76;
+  doc.y = margin + 82;
 }
 
 function drawTable(doc, { rows, showKwColumn = false }) {
@@ -152,23 +152,23 @@ function drawTable(doc, { rows, showKwColumn = false }) {
   let x = startX;
 
   if (showKwColumn) {
-    doc.text("KW", x + 6, y + 6, { width: colW.kw - 10 });
+    doc.text("KW", x + 6, y + 5, { width: colW.kw - 10 });
     x += colW.kw;
   }
 
-  doc.text("Datum", x + 6, y + 6, { width: colW.date - 10 });
+  doc.text("Datum", x + 6, y + 5, { width: colW.date - 10 });
   x += colW.date;
 
-  doc.text("Projekt", x + 6, y + 6, { width: colW.project - 10 });
+  doc.text("Projekt", x + 6, y + 5, { width: colW.project - 10 });
   x += colW.project;
 
-  doc.text("PO", x + 6, y + 6, { width: colW.po - 10 });
+  doc.text("PO", x + 6, y + 5, { width: colW.po - 10 });
   x += colW.po;
 
-  doc.text("Tätigkeit", x + 6, y + 6, { width: colW.task - 10 });
+  doc.text("Tätigkeit", x + 6, y + 5, { width: colW.task - 10 });
   x += colW.task;
 
-  doc.text("Zeit", x + 6, y + 6, { width: colW.time - 10, align: "right" });
+  doc.text("Zeit", x + 6, y + 5, { width: colW.time - 10, align: "right" });
 
   // Lines
   doc
@@ -288,13 +288,21 @@ function buildErfassungsbogenPdf(res, rows, opts = {}) {
  for (let i = 0; i < grouped.length; i++) {
   const [groupTitle, items] = grouped[i];
 
-  // Group title – NICHT direkt unter dem Header
-  if (i > 0) {
-    doc.moveDown(0.5);
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111");
-    doc.text(groupTitle);
-    doc.moveDown(0.25);
-  }
+// Group separator (ruhiger als Überschrift)
+if (i > 0) {
+  doc.moveDown(0.6);
+  const margin = 48;
+  const usable = doc.page.width - margin * 2;
+  const yLine = doc.y;
+  doc
+    .moveTo(margin, yLine)
+    .lineTo(margin + usable, yLine)
+    .strokeColor("#E4E7EC")
+    .lineWidth(1)
+    .stroke();
+  doc.moveDown(0.6);
+}
+
     const sorted = [...items].sort(
       (a, b) =>
         (a.date || "").localeCompare(b.date || "") ||
