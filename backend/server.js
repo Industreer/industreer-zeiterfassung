@@ -425,189 +425,110 @@ async function ensureColumn(table, column, typeSql) {
 }
 async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, project_short }) {
   const params = [from, to];
-  let where = `
-    te.work_date BETWEEN $1::date AND $2::date
-  `;
+  let where = `b.work_date BETWEEN $1::date AND $2::date`;
 
-if (internal_po) {
-  params.push(internal_po);
-  where += ` AND TRIM(COALESCE(sp.internal_po,'')) = TRIM($${params.length})`;
-}
-
-if (project_short) {
-  params.push(project_short);
-  where += ` AND TRIM(COALESCE(sp.project_short,'')) = TRIM($${params.length})`;
-}
-
+  if (customer_po) {
+    params.push(customer_po);
+    where += ` AND regexp_replace(COALESCE(NULLIF(TRIM(sp.customer_po), ''), NULLIF(TRIM(p.customer_po), ''), ''), '\\s', '', 'g')
+                 = regexp_replace($${params.length}, '\\s', '', 'g')`;
+  }
   if (internal_po) {
     params.push(internal_po);
-    where += ` AND sp.internal_po = $${params.length}`;
+    where += ` AND regexp_replace(COALESCE(NULLIF(TRIM(sp.internal_po), ''), NULLIF(TRIM(p.internal_po), ''), ''), '\\s', '', 'g')
+                 = regexp_replace($${params.length}, '\\s', '', 'g')`;
   }
   if (project_short) {
     params.push(project_short);
-    where += ` AND sp.project_short = $${params.length}`;
-  }
-const sql = `
-  WITH te_base AS (
-    SELECT
-      te.employee_id,
-      te.work_date::date AS work_date,
-      te.start_ts,
-      te.end_ts,
-      te.break_minutes,
-      te.auto_break_minutes
-    FROM time_entries te
-    WHERE te.work_date BETWEEN $1::date AND $2::date
-      AND te.start_ts IS NOT NULL
-      AND te.end_ts IS NOT NULL
-  ),
-  te_proj AS (
-    -- letzter clock_in.project_id pro (employee_id, work_date)
-    SELECT
-      b.employee_id,
-      b.work_date,
-      (
-        SELECT NULLIF(TRIM(e.project_id), '')
-        FROM time_events e
-        WHERE e.employee_id = b.employee_id
-          AND (e.event_time AT TIME ZONE 'Europe/Berlin')::date = b.work_date
-          AND e.event_type = 'clock_in'
-          AND e.project_id IS NOT NULL
-        ORDER BY e.event_time DESC
-        LIMIT 1
-      ) AS project_id
-    FROM te_base b
-  )
-  SELECT
-    b.work_date::date AS work_date,
-
-    COALESCE(
-      NULLIF(TRIM(sp.project_short), ''),
-      NULLIF(TRIM(tp.project_id), ''),
-      '—'
-    ) AS project,
-
-    COALESCE(
-      NULLIF(TRIM(sp.internal_po), ''),
-      NULLIF(TRIM(p.internal_po), '')
-    ) AS internal_po,
-
-    COALESCE(
-      NULLIF(TRIM(sp.customer_po), ''),
-      NULLIF(TRIM(p.customer_po), '')
-    ) AS customer_po,
-
-    COALESCE(
-      NULLIF(TRIM(sp.customer), ''),
-      NULLIF(TRIM(p.customer), ''),
-      NULL
-    ) AS customer,
-
-    SUM(
-      GREATEST(
-        0,
-        FLOOR(
-          (EXTRACT(EPOCH FROM (b.end_ts - b.start_ts)) / 60.0)
-          - COALESCE(b.break_minutes, 0)
-          - COALESCE(b.auto_break_minutes, 0)
-        )
-      )
-    )::int AS minutes
-
-  FROM te_base b
-  LEFT JOIN staffplan sp
-    ON sp.employee_id = b.employee_id
-   AND sp.work_date = b.work_date
-
-  LEFT JOIN te_proj tp
-    ON tp.employee_id = b.employee_id
-   AND tp.work_date = b.work_date
-
-  LEFT JOIN projects p
-    ON TRIM(p.project_id) = TRIM(tp.project_id)
-
-  WHERE ${where}
-  GROUP BY b.work_date, project, internal_po, customer_po, customer
-  ORDER BY b.work_date ASC, project ASC, internal_po ASC
-`;
-
-
-  const r = await pool.query(sql, params);
-
-  // PDF rows format
-  const rows = r.rows.map((x) => ({
-    date: String(x.work_date),              // YYYY-MM-DD
-    project: x.project || "—",
-    internal_po: x.internal_po || null,
-    task: null,
-    minutes: Number(x.minutes || 0),
-  }));
-
-  // Meta (optional)
-  const meta = {
-    customer: null,
-    customerPo: customer_po || null,
-    internalPo: internal_po || null,
-  };
-
-  // falls genau ein Customer in den Ergebnissen vorkommt
-  const customers = Array.from(new Set(r.rows.map((x) => x.customer).filter(Boolean)));
-  if (customers.length === 1) meta.customer = customers[0];
-
-  return { rows, meta };
-}
-async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, project_short }) {
-  const params = [from, to];
-  let where = `te.work_date BETWEEN $1::date AND $2::date`;
-
-if (customer_po) {
-  params.push(customer_po);
-  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
-}
-if (internal_po) {
-  params.push(internal_po);
-  where += ` AND regexp_replace(COALESCE(sp.internal_po, p.internal_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
-}
-
-  if (project_short) {
-    params.push(project_short);
-    where += ` AND sp.project_short = $${params.length}`;
+    where += ` AND TRIM(COALESCE(NULLIF(TRIM(sp.project_short), ''), NULLIF(TRIM(tp.project_id), ''), '')) = TRIM($${params.length})`;
   }
 
   const sql = `
+    WITH te_base AS (
+      SELECT
+        te.employee_id,
+        te.work_date::date AS work_date,
+        te.start_ts,
+        te.end_ts,
+        te.break_minutes,
+        te.auto_break_minutes
+      FROM time_entries te
+    ),
+    te_proj AS (
+      SELECT
+        b.employee_id,
+        b.work_date,
+        (
+          SELECT NULLIF(TRIM(e.project_id), '')
+          FROM time_events e
+          WHERE e.employee_id = b.employee_id
+            AND (e.event_time AT TIME ZONE 'Europe/Berlin')::date = b.work_date
+            AND e.event_type = 'clock_in'
+            AND e.project_id IS NOT NULL
+          ORDER BY e.event_time DESC
+          LIMIT 1
+        ) AS project_id
+      FROM te_base b
+    )
     SELECT
-      te.work_date::date AS work_date,
-      COALESCE(NULLIF(TRIM(sp.project_short), ''), '—') AS project,
-      NULLIF(TRIM(sp.internal_po), '') AS internal_po,
-      NULLIF(TRIM(sp.customer_po), '') AS customer_po,
-      COALESCE(NULLIF(TRIM(sp.customer), ''), NULL) AS customer,
+      b.work_date::date AS work_date,
+
+      COALESCE(
+        NULLIF(TRIM(sp.project_short), ''),
+        NULLIF(TRIM(tp.project_id), ''),
+        '—'
+      ) AS project,
+
+      COALESCE(
+        NULLIF(TRIM(sp.internal_po), ''),
+        NULLIF(TRIM(p.internal_po), '')
+      ) AS internal_po,
+
+      COALESCE(
+        NULLIF(TRIM(sp.customer_po), ''),
+        NULLIF(TRIM(p.customer_po), '')
+      ) AS customer_po,
+
+      COALESCE(
+        NULLIF(TRIM(sp.customer), ''),
+        NULLIF(TRIM(p.customer), ''),
+        NULL
+      ) AS customer,
+
       SUM(
         GREATEST(
           0,
           FLOOR(
-            (EXTRACT(EPOCH FROM (te.end_ts - te.start_ts)) / 60.0)
-            - COALESCE(te.break_minutes, 0)
-            - COALESCE(te.auto_break_minutes, 0)
+            (EXTRACT(EPOCH FROM (b.end_ts - b.start_ts)) / 60.0)
+            - COALESCE(b.break_minutes, 0)
+            - COALESCE(b.auto_break_minutes, 0)
           )
         )
       )::int AS minutes
-    FROM time_entries te
+
+    FROM te_base b
     LEFT JOIN staffplan sp
-      ON sp.employee_id = te.employee_id
-     AND sp.work_date = te.work_date
+      ON sp.employee_id = b.employee_id
+     AND sp.work_date = b.work_date
+
+    LEFT JOIN te_proj tp
+      ON tp.employee_id = b.employee_id
+     AND tp.work_date = b.work_date
+
+    LEFT JOIN projects p
+      ON TRIM(p.project_id) = TRIM(tp.project_id)
+
     WHERE ${where}
-      AND te.start_ts IS NOT NULL
-      AND te.end_ts IS NOT NULL
-    GROUP BY te.work_date, project, internal_po, customer_po, customer
-    ORDER BY te.work_date ASC, project ASC, internal_po ASC
+      AND b.start_ts IS NOT NULL
+      AND b.end_ts IS NOT NULL
+
+    GROUP BY b.work_date, project, internal_po, customer_po, customer
+    ORDER BY b.work_date ASC, project ASC, internal_po ASC
   `;
 
   const r = await pool.query(sql, params);
 
   const rows = r.rows.map((x) => ({
-    date: String(x.work_date), // YYYY-MM-DD
+    date: String(x.work_date),
     project: x.project || "—",
     internal_po: x.internal_po || null,
     task: null,
