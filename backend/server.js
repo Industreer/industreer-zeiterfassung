@@ -136,11 +136,24 @@ buildErfassungsbogenPdf(res, rows, {
   },
 });
 
-return;
 } catch (e) {
   console.error("A10 PDF ERROR:", e);
+
+  // Nur wenn du debug=1 & code=2012 setzt, geben wir Details zurück
+  const debug = String(req.query.debug || "") === "1";
+  const code = String(req.query.code || "").trim();
+
+  if (debug && code === "2012") {
+    return res.status(500).json({
+      ok: false,
+      error: e.message,
+      hint: "Diese Debug-Ausgabe später wieder entfernen",
+    });
+  }
+
   return res.status(500).send("PDF generation failed");
 }
+
 });
 
 // ======================================================
