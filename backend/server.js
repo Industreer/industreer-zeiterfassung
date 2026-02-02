@@ -443,32 +443,33 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
   }
 
   const sql = `
-    WITH te_base AS (
-      SELECT
-        te.employee_id,
-        te.work_date::date AS work_date,
-        te.start_ts,
-        te.end_ts,
-        te.break_minutes,
-        te.auto_break_minutes
-      FROM time_entries te
-    ),
-    te_proj AS (
-      SELECT
-        b.employee_id,
-        b.work_date,
-        (
-          SELECT NULLIF(TRIM(e.project_id), '')
-          FROM time_events e
-          WHERE e.employee_id = b.employee_id
-            AND (e.event_time AT TIME ZONE 'Europe/Berlin')::date = b.work_date
-            AND e.event_type = 'clock_in'
-            AND e.project_id IS NOT NULL
-          ORDER BY e.event_time DESC
-          LIMIT 1
-        ) AS project_id
-      FROM te_base b
-    )
+  WITH te_base AS (
+    SELECT
+      te.employee_id,
+      te.work_date::date AS work_date,
+      te.start_ts,
+      te.end_ts,
+      te.break_minutes,
+      te.auto_break_minutes
+    FROM time_entries te
+  ),
+  te_proj AS (
+    SELECT
+      b.employee_id,
+      b.work_date,
+      (
+        SELECT NULLIF(TRIM(e.project_id), '')
+        FROM time_events e
+        WHERE e.employee_id = b.employee_id
+          AND (e.event_time AT TIME ZONE 'Europe/Berlin')::date = b.work_date
+          AND e.event_type = 'clock_in'
+          AND e.project_id IS NOT NULL
+        ORDER BY e.event_time DESC
+        LIMIT 1
+      ) AS project_id
+    FROM te_base b
+  ),
+  base_rows AS (
     SELECT
       b.work_date::date AS work_date,
 
@@ -494,14 +495,12 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
         NULL
       ) AS customer,
 
-      SUM(
-        GREATEST(
-          0,
-          FLOOR(
-            (EXTRACT(EPOCH FROM (b.end_ts - b.start_ts)) / 60.0)
-            - COALESCE(b.break_minutes, 0)
-            - COALESCE(b.auto_break_minutes, 0)
-          )
+      GREATEST(
+        0,
+        FLOOR(
+          (EXTRACT(EPOCH FROM (b.end_ts - b.start_ts)) / 60.0)
+          - COALESCE(b.break_minutes, 0)
+          - COALESCE(b.auto_break_minutes, 0)
         )
       )::int AS minutes
 
@@ -520,10 +519,19 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
     WHERE ${where}
       AND b.start_ts IS NOT NULL
       AND b.end_ts IS NOT NULL
+  )
+  SELECT
+    work_date,
+    project,
+    internal_po,
+    customer_po,
+    customer,
+    SUM(minutes)::int AS minutes
+  FROM base_rows
+  GROUP BY work_date, project, internal_po, customer_po, customer
+  ORDER BY work_date ASC, project ASC, internal_po ASC
+`;
 
-    GROUP BY b.work_date, project, internal_po, customer_po, customer
-    ORDER BY b.work_date ASC, project ASC, internal_po ASC
-  `;
 
   const r = await pool.query(sql, params);
 
