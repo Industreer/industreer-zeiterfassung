@@ -434,8 +434,7 @@ if (project_short) {
     params.push(project_short);
     where += ` AND sp.project_short = $${params.length}`;
   }
-
-  const sql = `
+const sql = `
   WITH te_base AS (
     SELECT
       te.employee_id,
@@ -450,7 +449,7 @@ if (project_short) {
       AND te.end_ts IS NOT NULL
   ),
   te_proj AS (
-    -- project_id vom selben Tag (letzter clock_in des Tages)
+    -- letzter clock_in.project_id pro (employee_id, work_date)
     SELECT
       b.employee_id,
       b.work_date,
@@ -519,6 +518,7 @@ if (project_short) {
   ORDER BY b.work_date ASC, project ASC, internal_po ASC
 `;
 
+
   const r = await pool.query(sql, params);
 
   // PDF rows format
@@ -549,13 +549,15 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
 
 if (customer_po) {
   params.push(customer_po);
-  where += ` AND regexp_replace(COALESCE(sp.customer_po,''), '\\s', '', 'g')
-                 = regexp_replace($${params.length}, '\\s', '', 'g')`;
+  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
 }
-  if (internal_po) {
-    params.push(internal_po);
-    where += ` AND sp.internal_po = $${params.length}`;
-  }
+if (internal_po) {
+  params.push(internal_po);
+  where += ` AND regexp_replace(COALESCE(sp.internal_po, p.internal_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
+}
+
   if (project_short) {
     params.push(project_short);
     where += ` AND sp.project_short = $${params.length}`;
@@ -2113,10 +2115,10 @@ app.get("/api/admin/report-hours", async (req, res) => {
     }
 if (customer_po) {
   params.push(customer_po);
-  where.push(
-    `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g') = regexp_replace($${params.length}, '\\s', '', 'g')`
-  );
+  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
 }
+
     const r = await pool.query(
       `
       SELECT
@@ -2221,10 +2223,11 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
       params.push(employee_id);
       where.push(`employee_id = $${params.length}`);
     }
-    if (customer_po) {
-      params.push(customer_po);
-      where.push(`mapped_customer_po = $${params.length}`);
-    }
+if (customer_po) {
+  params.push(customer_po);
+  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
+}
     if (internal_po !== null) {
       params.push(internal_po);
       where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
@@ -2748,10 +2751,12 @@ app.get("/api/admin/clamp-preview", async (req, res) => {
     }
 
     // filtert auf mapped_customer_po (aus staffplan), nicht te.customer_po
-    if (customer_po) {
-      params.push(customer_po);
-      where.push(`mapped_customer_po = $${params.length}`);
-    }
+ if (customer_po) {
+  params.push(customer_po);
+  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
+}
+
 
     const r = await pool.query(
       `
@@ -3670,14 +3675,18 @@ app.get("/api/admin/report-hours/daily", async (req, res) => {
       `clamped_hours IS NOT NULL`,
     ];
 
-    if (customer_po) {
-      params.push(customer_po);
-      where.push(`COALESCE(mapped_customer_po,'') = $${params.length}`);
-    }
-    if (internal_po) {
-      params.push(internal_po);
-      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
-    }
+if (customer_po) {
+  params.push(customer_po);
+  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
+}
+
+if (internal_po) {
+  params.push(internal_po);
+  where += ` AND regexp_replace(COALESCE(sp.internal_po, p.internal_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
+}
+
 
     const r = await pool.query(
       `
@@ -3724,14 +3733,18 @@ app.get("/api/admin/report-hours/daily.csv", async (req, res) => {
       `clamped_hours IS NOT NULL`,
     ];
 
-    if (customer_po) {
-      params.push(customer_po);
-      where.push(`COALESCE(mapped_customer_po,'') = $${params.length}`);
-    }
-    if (internal_po) {
-      params.push(internal_po);
-      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
-    }
+if (customer_po) {
+  params.push(customer_po);
+  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
+}
+
+if (internal_po) {
+  params.push(internal_po);
+  where += ` AND regexp_replace(COALESCE(sp.internal_po, p.internal_po, ''), '\\s', '', 'g')
+               = regexp_replace($${params.length}, '\\s', '', 'g')`;
+}
+
 
     const q = await pool.query(
       `
