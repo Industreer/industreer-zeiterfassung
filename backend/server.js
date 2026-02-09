@@ -4842,27 +4842,35 @@ app.get("/api/a10/erfassungsbogen", async (req, res) => {
       return res.status(400).json({ ok: false, error: "employee_id, from, to required" });
     }
 
-// Zeiten laden (ohne Projekt – kommt aus staffplan)
+// Zeiten laden: Minuten aus start_ts / end_ts berechnen
 const r = await db.pool.query(
   `
   SELECT
     work_date::date AS work_date,
-    SUM(minutes) AS minutes
+    SUM(
+      GREATEST(
+        0,
+        (EXTRACT(EPOCH FROM (end_ts - start_ts)) / 60)::int
+        - COALESCE(break_minutes, 0)
+        - COALESCE(auto_break_minutes, 0)
+      )
+    ) AS minutes
   FROM time_entries
   WHERE employee_id = $1
     AND work_date::date BETWEEN $2::date AND $3::date
+    AND start_ts IS NOT NULL
+    AND end_ts IS NOT NULL
   GROUP BY work_date::date
   ORDER BY work_date::date
   `,
   [employee_id, from, to]
 );
+
 const rows = r.rows.map((x) => ({
   date: String(x.work_date).slice(0, 10), // YYYY-MM-DD
-  project: "—",          // wird durch staffplan ersetzt
-  internal_po: null,     // wird durch staffplan ersetzt
-  task: null,
-  minutes: Number(x.minutes || 0),
-}));
+  project: "—",          // wird durch staffplan ersetzt (A10.3)
+  internal_po: null,_
+
 
     // A10.3: staffplan mapping (latest staffplan wins)
     const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
