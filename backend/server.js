@@ -4831,7 +4831,7 @@ app.get("/api/admin/debug/a10-po-coverage", async (req, res) => {
   }
 });
 // A10.3 Test-Route: Erfassungsbogen als PDF
-const { buildErfassungsbogenPdf } = require("./a10/erfassungsbogenPdf");
+
 const { loadStaffplanMapping } = require("./lib/staffplanProjectMapping");
 const db = require("./db");
 
