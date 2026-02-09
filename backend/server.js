@@ -596,7 +596,7 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
   const r = await pool.query(sql, params);
 
   const rows = r.rows.map((x) => ({
-    date: String(x.work_date),
+    date: String(x.work_date).slice(0, 10), // YYYY-MM-DD
     project: x.project || "—",
     internal_po: x.internal_po || null,
     task: null,
