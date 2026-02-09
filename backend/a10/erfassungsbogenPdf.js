@@ -250,10 +250,10 @@ function drawTable(doc, { rows, showKwColumn = false }) {
     width: colW.task - 10,
     align: "right",
   });
-  doc.text(minutesToHHMM(total), startX + usable - colW.time, y, {
-    width: colW.time - 10,
-    align: "right",
-  });
+doc.text(minutesToHHMM(total), startX + usable - colW.time + 6, y, {
+  width: colW.time - 12,
+  align: "right",
+});
 
   doc.font("Helvetica").moveDown(2);
   doc.y = y + 22;
