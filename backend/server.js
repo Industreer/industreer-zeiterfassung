@@ -157,7 +157,7 @@ buildErfassungsbogenPdf(res, rows, {
   return res.status(500).send("PDF generation failed");
 }
 
-});
+}); 
 
 // ======================================================
 // ADMIN ROUTE GUARD (VARIANTE B)
