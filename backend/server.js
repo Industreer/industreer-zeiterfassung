@@ -612,6 +612,8 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
   }));
 // A10.3 – staffplan mapping (latest staffplan wins)
 const staffplanMap = await loadStaffplanMapping(db, { from, to });
+  console.log("[A10.3] staffplanMap size =", staffplanMap.size);
+
 
   const meta = {
     customer: null,
