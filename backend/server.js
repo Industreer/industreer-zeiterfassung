@@ -4830,10 +4830,6 @@ app.get("/api/admin/debug/a10-po-coverage", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
-// A10.3 Test-Route: Erfassungsbogen als PDF
-
-const { loadStaffplanMapping } = require("./lib/staffplanProjectMapping");
-const db = require("./db");
 
 app.get("/api/a10/erfassungsbogen", async (req, res) => {
   try {
