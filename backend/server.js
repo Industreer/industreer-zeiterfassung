@@ -18,6 +18,9 @@ const app = express();
 // CONFIG
 // ======================================================
 const PORT = process.env.PORT || 10000;
+app.get("/api/_deploy_check", (req, res) => {
+  res.json({ ok: true, msg: "deploy-check-2026-02-09-1" });
+});
 
 
 // ======================================================
