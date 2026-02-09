@@ -4843,7 +4843,7 @@ app.get("/api/a10/erfassungsbogen", async (req, res) => {
     }
 
     // Times laden (falls deine Query anders ist, ersetzen wir sie später)
-    const r = await db.query(
+    const r = await db.pool.query(
       `
       SELECT
         work_date::date AS work_date,
@@ -4868,9 +4868,8 @@ app.get("/api/a10/erfassungsbogen", async (req, res) => {
     }));
 
     // A10.3: staffplan mapping (latest staffplan wins)
-    const staffplanMap = await loadStaffplanMapping(db, { from, to });
+    const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
     console.log("[A10.3] staffplanMap size =", staffplanMap.size);
-
     const periodLabel = `${from} – ${to}`;
 
     buildErfassungsbogenPdf(res, rows, {
