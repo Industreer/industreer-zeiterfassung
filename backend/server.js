@@ -4830,6 +4830,67 @@ app.get("/api/admin/debug/a10-po-coverage", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
+// A10.3 Test-Route: Erfassungsbogen als PDF
+const { buildErfassungsbogenPdf } = require("./a10/erfassungsbogenPdf");
+const { loadStaffplanMapping } = require("./lib/staffplanProjectMapping");
+const db = require("./db");
+
+app.get("/api/a10/erfassungsbogen", async (req, res) => {
+  try {
+    const employee_id = String(req.query.employee_id || "");
+    const from = String(req.query.from || "");
+    const to = String(req.query.to || "");
+
+    if (!employee_id || !from || !to) {
+      return res.status(400).json({ ok: false, error: "employee_id, from, to required" });
+    }
+
+    // Times laden (falls deine Query anders ist, ersetzen wir sie später)
+    const r = await db.query(
+      `
+      SELECT
+        work_date::date AS work_date,
+        project_short AS project,
+        internal_po,
+        SUM(minutes) AS minutes
+      FROM time_entries
+      WHERE employee_id = $1
+        AND work_date::date BETWEEN $2::date AND $3::date
+      GROUP BY work_date::date, project_short, internal_po
+      ORDER BY work_date::date
+      `,
+      [employee_id, from, to]
+    );
+
+    const rows = r.rows.map((x) => ({
+      date: String(x.work_date).slice(0, 10),
+      project: x.project || "—",
+      internal_po: x.internal_po || null,
+      task: null,
+      minutes: Number(x.minutes || 0),
+    }));
+
+    // A10.3: staffplan mapping (latest staffplan wins)
+    const staffplanMap = await loadStaffplanMapping(db, { from, to });
+    console.log("[A10.3] staffplanMap size =", staffplanMap.size);
+
+    const periodLabel = `${from} – ${to}`;
+
+    buildErfassungsbogenPdf(res, rows, {
+      title: "Erfassungsbogen (Zeiten)",
+      groupMode: "week",
+      periodLabel,
+      employee_id,
+      staffplanMap,
+      meta: {},
+      showKwColumn: true,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ======================================================
 // START
 // ======================================================
