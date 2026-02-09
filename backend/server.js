@@ -11,6 +11,8 @@ const PDFDocument = require("pdfkit");
 const { Pool } = require("pg");
 const { downloadExcelFromShareLink } = require("./sharepoint");
 const { buildErfassungsbogenPdf } = require("./a10/erfassungsbogenPdf");
+const { loadStaffplanMapping } = require("./lib/staffplanProjectMapping");
+
 
 
 const app = express();
@@ -132,12 +134,18 @@ buildErfassungsbogenPdf(res, rows, {
   periodLabel,
   logoPath: LOGO_FILE,
   showKwColumn,
+
+  // 🚀 A10.3 aktiv
+  employee_id,
+  staffplanMap,
+
   meta: {
     customer: meta.customer || "—",
     customerPo: meta.customerPo,
     internalPo: meta.internalPo,
   },
 });
+
 
 } catch (e) {
   console.error("A10 PDF ERROR:", e);
@@ -602,6 +610,8 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
     task: null,
     minutes: Number(x.minutes || 0),
   }));
+// A10.3 – staffplan mapping (latest staffplan wins)
+const staffplanMap = await loadStaffplanMapping(db, { from, to });
 
   const meta = {
     customer: null,
