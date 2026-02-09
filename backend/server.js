@@ -4842,30 +4842,27 @@ app.get("/api/a10/erfassungsbogen", async (req, res) => {
       return res.status(400).json({ ok: false, error: "employee_id, from, to required" });
     }
 
-    // Times laden (falls deine Query anders ist, ersetzen wir sie später)
-    const r = await db.pool.query(
-      `
-      SELECT
-        work_date::date AS work_date,
-     project AS project,
-        internal_po,
-        SUM(minutes) AS minutes
-      FROM time_entries
-      WHERE employee_id = $1
-        AND work_date::date BETWEEN $2::date AND $3::date
-      GROUP BY work_date::date, project_short, internal_po
-      ORDER BY work_date::date
-      `,
-      [employee_id, from, to]
-    );
-
-    const rows = r.rows.map((x) => ({
-      date: String(x.work_date).slice(0, 10),
-      project: x.project || "—",
-      internal_po: x.internal_po || null,
-      task: null,
-      minutes: Number(x.minutes || 0),
-    }));
+// Zeiten laden (ohne Projekt – kommt aus staffplan)
+const r = await db.pool.query(
+  `
+  SELECT
+    work_date::date AS work_date,
+    SUM(minutes) AS minutes
+  FROM time_entries
+  WHERE employee_id = $1
+    AND work_date::date BETWEEN $2::date AND $3::date
+  GROUP BY work_date::date
+  ORDER BY work_date::date
+  `,
+  [employee_id, from, to]
+);
+const rows = r.rows.map((x) => ({
+  date: String(x.work_date).slice(0, 10), // YYYY-MM-DD
+  project: "—",          // wird durch staffplan ersetzt
+  internal_po: null,     // wird durch staffplan ersetzt
+  task: null,
+  minutes: Number(x.minutes || 0),
+}));
 
     // A10.3: staffplan mapping (latest staffplan wins)
     const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
