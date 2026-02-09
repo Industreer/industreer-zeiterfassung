@@ -197,77 +197,7 @@ app.get("/api/admin/debug/po-check", async (req, res) => {
       `,
       [from, to, customer_po]
     );
-// ======================================================
-// ADMIN DEBUG: A10 PO Coverage
-// ======================================================
-app.get("/api/admin/debug/a10-po-coverage", async (req, res) => {
-  try {
-    const from = String(req.query.from || "").trim();
-    const to = String(req.query.to || "").trim();
-    const customer_po = String(req.query.customer_po || "").trim();
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-      return res.status(400).json({ ok: false, error: "from/to YYYY-MM-DD required" });
-    }
-    if (!customer_po) return res.status(400).json({ ok: false, error: "customer_po required" });
-
-    const q = await pool.query(
-      `
-      WITH te_base AS (
-        SELECT te.employee_id, te.work_date::date AS work_date
-        FROM time_entries te
-        WHERE te.work_date BETWEEN $1::date AND $2::date
-          AND te.start_ts IS NOT NULL AND te.end_ts IS NOT NULL
-      ),
-      te_proj AS (
-        SELECT
-          b.employee_id,
-          b.work_date,
-          (
-            SELECT NULLIF(TRIM(e.project_id), '')
-            FROM time_events e
-            WHERE e.employee_id = b.employee_id
-              AND (e.event_time AT TIME ZONE 'Europe/Berlin')::date = b.work_date
-              AND e.event_type='clock_in'
-              AND e.project_id IS NOT NULL
-            ORDER BY e.event_time DESC
-            LIMIT 1
-          ) AS project_id
-        FROM te_base b
-      ),
-      joined AS (
-        SELECT
-          b.employee_id,
-          b.work_date,
-          sp.customer_po AS sp_po,
-          tp.project_id,
-          p.customer_po AS p_po
-        FROM te_base b
-        LEFT JOIN staffplan sp
-          ON sp.employee_id=b.employee_id AND sp.work_date=b.work_date
-        LEFT JOIN te_proj tp
-          ON tp.employee_id=b.employee_id AND tp.work_date=b.work_date
-        LEFT JOIN projects p
-          ON TRIM(p.project_id)=TRIM(tp.project_id)
-      )
-      SELECT
-        (SELECT COUNT(*)::int FROM te_base) AS time_entries_days,
-        (SELECT COUNT(*)::int FROM joined WHERE NULLIF(TRIM(project_id),'') IS NOT NULL) AS with_project_id,
-        (SELECT COUNT(*)::int FROM joined WHERE NULLIF(TRIM(sp_po),'') IS NOT NULL) AS with_staffplan_po,
-        (SELECT COUNT(*)::int FROM joined WHERE NULLIF(TRIM(p_po),'') IS NOT NULL) AS with_projects_po,
-        (SELECT COUNT(*)::int FROM joined
-          WHERE regexp_replace(COALESCE(sp_po, p_po, ''), '\\s', '', 'g') = regexp_replace($3, '\\s', '', 'g')
-        ) AS match_po_count
-      `,
-      [from, to, customer_po]
-    );
-
-    return res.json({ ok: true, ...q.rows[0] });
-  } catch (e) {
-    console.error("A10 PO COVERAGE ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
-  }
-});
 
     // 2) Gibt es time_entries im Zeitraum?
     const te = await pool.query(
@@ -4761,7 +4691,77 @@ app.get("/api/admin/automation/last-run", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// ADMIN DEBUG: A10 PO Coverage
+// ======================================================
+app.get("/api/admin/debug/a10-po-coverage", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const customer_po = String(req.query.customer_po || "").trim();
 
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "from/to YYYY-MM-DD required" });
+    }
+    if (!customer_po) return res.status(400).json({ ok: false, error: "customer_po required" });
+
+    const q = await pool.query(
+      `
+      WITH te_base AS (
+        SELECT te.employee_id, te.work_date::date AS work_date
+        FROM time_entries te
+        WHERE te.work_date BETWEEN $1::date AND $2::date
+          AND te.start_ts IS NOT NULL AND te.end_ts IS NOT NULL
+      ),
+      te_proj AS (
+        SELECT
+          b.employee_id,
+          b.work_date,
+          (
+            SELECT NULLIF(TRIM(e.project_id), '')
+            FROM time_events e
+            WHERE e.employee_id = b.employee_id
+              AND (e.event_time AT TIME ZONE 'Europe/Berlin')::date = b.work_date
+              AND e.event_type='clock_in'
+              AND e.project_id IS NOT NULL
+            ORDER BY e.event_time DESC
+            LIMIT 1
+          ) AS project_id
+        FROM te_base b
+      ),
+      joined AS (
+        SELECT
+          b.employee_id,
+          b.work_date,
+          sp.customer_po AS sp_po,
+          tp.project_id,
+          p.customer_po AS p_po
+        FROM te_base b
+        LEFT JOIN staffplan sp
+          ON sp.employee_id=b.employee_id AND sp.work_date=b.work_date
+        LEFT JOIN te_proj tp
+          ON tp.employee_id=b.employee_id AND tp.work_date=b.work_date
+        LEFT JOIN projects p
+          ON TRIM(p.project_id)=TRIM(tp.project_id)
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM te_base) AS time_entries_days,
+        (SELECT COUNT(*)::int FROM joined WHERE NULLIF(TRIM(project_id),'') IS NOT NULL) AS with_project_id,
+        (SELECT COUNT(*)::int FROM joined WHERE NULLIF(TRIM(sp_po),'') IS NOT NULL) AS with_staffplan_po,
+        (SELECT COUNT(*)::int FROM joined WHERE NULLIF(TRIM(p_po),'') IS NOT NULL) AS with_projects_po,
+        (SELECT COUNT(*)::int FROM joined
+          WHERE regexp_replace(COALESCE(sp_po, p_po, ''), '\\s', '', 'g') = regexp_replace($3, '\\s', '', 'g')
+        ) AS match_po_count
+      `,
+      [from, to, customer_po]
+    );
+
+    return res.json({ ok: true, ...q.rows[0] });
+  } catch (e) {
+    console.error("A10 PO COVERAGE ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
 // ======================================================
 // START
 // ======================================================
