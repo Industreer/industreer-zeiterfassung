@@ -4847,7 +4847,7 @@ app.get("/api/a10/erfassungsbogen", async (req, res) => {
       `
       SELECT
         work_date::date AS work_date,
-        project_short AS project,
+     project AS project,
         internal_po,
         SUM(minutes) AS minutes
       FROM time_entries
