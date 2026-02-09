@@ -175,6 +175,62 @@ app.use("/api/admin", (req, res, next) => {
   }
 });
 console.log("🔐 Admin Route Guard aktiv");
+// ======================================================
+// ADMIN DEBUG: A10 PO Sample
+// ======================================================
+app.get("/api/admin/debug/a10-po-sample", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+
+    const q = await pool.query(
+      `
+      WITH te_base AS (
+        SELECT te.employee_id, te.work_date::date AS work_date
+        FROM time_entries te
+        WHERE te.work_date BETWEEN $1::date AND $2::date
+          AND te.start_ts IS NOT NULL AND te.end_ts IS NOT NULL
+      ),
+      te_proj AS (
+        SELECT
+          b.employee_id,
+          b.work_date,
+          (
+            SELECT NULLIF(TRIM(e.project_id), '')
+            FROM time_events e
+            WHERE e.employee_id = b.employee_id
+              AND (e.event_time AT TIME ZONE 'Europe/Berlin')::date = b.work_date
+              AND e.event_type='clock_in'
+              AND e.project_id IS NOT NULL
+            ORDER BY e.event_time DESC
+            LIMIT 1
+          ) AS project_id
+        FROM te_base b
+      )
+      SELECT
+        b.work_date,
+        b.employee_id,
+        tp.project_id,
+        p.customer_po AS projects_customer_po,
+        p.internal_po AS projects_internal_po,
+        p.customer   AS projects_customer
+      FROM te_base b
+      LEFT JOIN te_proj tp
+        ON tp.employee_id=b.employee_id AND tp.work_date=b.work_date
+      LEFT JOIN projects p
+        ON TRIM(p.project_id)=TRIM(tp.project_id)
+      ORDER BY b.work_date ASC, b.employee_id ASC
+      LIMIT 50
+      `,
+      [from, to]
+    );
+
+    return res.json({ ok: true, rows: q.rows });
+  } catch (e) {
+    console.error("A10 PO SAMPLE ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
 app.get("/api/admin/debug/po-check", async (req, res) => {
   try {
     const from = String(req.query.from || "").trim();
