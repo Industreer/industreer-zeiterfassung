@@ -1,4 +1,6 @@
+// backend/a10/erfassungsbogenPdf.js
 const PDFDocument = require("pdfkit");
+const { loadStaffplanMapping, toYMD } = require("../lib/staffplanProjectMapping");
 
 /**
  * rows: Array of
@@ -52,6 +54,51 @@ function sumMinutes(rows) {
   return rows.reduce((acc, r) => acc + Number(r.minutes || 0), 0);
 }
 
+/**
+ * Optional staffplan overrides
+ * - No-op, wenn employee_id oder staffplanMap fehlt
+ * - "latest staffplan wins" ist bereits im staffplanMap enthalten
+ * - Überschreibt project/internal_po/customer_po/customer im Row
+ * - Liefert optional metaOverride aus dem "letzten Datum" im Zeitraum
+ */
+function applyStaffplanOverrides(rows, { employee_id, staffplanMap }) {
+  if (!employee_id || !staffplanMap) return { rows, metaOverride: null };
+
+  const out = (rows || []).map((r) => {
+    const key = `${employee_id}|${r.date}`;
+    const sp = staffplanMap.get(key);
+    if (!sp) return r;
+
+    return {
+      ...r,
+      // staffplan wins:
+      project: sp.project_short || r.project,
+      internal_po: sp.internal_po ?? r.internal_po,
+      customer_po: sp.customer_po ?? r.customer_po,
+      customer: sp.customer ?? r.customer,
+      _source: "staffplan",
+    };
+  });
+
+  const lastDate = out
+    .map((r) => r.date)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+    .slice(-1)[0];
+
+  const spLast = lastDate ? staffplanMap.get(`${employee_id}|${lastDate}`) : null;
+
+  const metaOverride = spLast
+    ? {
+        customer: spLast.customer || null,
+        customerPo: spLast.customer_po || null,
+        internalPo: spLast.internal_po || null,
+      }
+    : null;
+
+  return { rows: out, metaOverride };
+}
+
 function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
   const margin = 48; // pt
   const pageW = doc.page.width;
@@ -68,27 +115,29 @@ function drawHeader(doc, { title, periodLabel, logoPath, metaLines }) {
   }
 
   // Titel + Zeitraum (links, mit Platz für Meta rechts)
-const titleX = margin + (logoPath ? 160 : 0);
-const titleWidth = contentW - (logoPath ? 160 : 0) - 170;
+  const titleX = margin + (logoPath ? 160 : 0);
+  const titleWidth = contentW - (logoPath ? 160 : 0) - 170;
 
-doc.fillColor("#111").font("Helvetica-Bold").fontSize(16);
-doc.text(title, titleX, margin, {
-  width: titleWidth,
-  align: "center",
-});
-if (periodLabel) {
-  const afterTitleY = doc.y + 4; // automatisch unter Titel
+  doc.fillColor("#111").font("Helvetica-Bold").fontSize(16);
+  doc.text(title, titleX, margin, {
+    width: titleWidth,
+    align: "center",
+  });
+  if (periodLabel) {
+    const afterTitleY = doc.y + 4; // automatisch unter Titel
 
-  doc.font("Helvetica")
-    .fontSize(10)
-    .fillColor("#444")
-    .text(periodLabel, titleX, afterTitleY, {
-      width: titleWidth,
-      align: "center",
-    });
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .fillColor("#444")
+      .text(periodLabel, titleX, afterTitleY, {
+        width: titleWidth,
+        align: "center",
+      });
 
-  doc.fillColor("#000");
-}
+    doc.fillColor("#000");
+  }
+
   // Meta-Block rechts
   if (Array.isArray(metaLines) && metaLines.length) {
     const boxW = 170;
@@ -250,10 +299,10 @@ function drawTable(doc, { rows, showKwColumn = false }) {
     width: colW.task - 10,
     align: "right",
   });
-doc.text(minutesToHHMM(total), startX + usable - colW.time + 6, y, {
-  width: colW.time - 12,
-  align: "right",
-});
+  doc.text(minutesToHHMM(total), startX + usable - colW.time + 6, y, {
+    width: colW.time - 12,
+    align: "right",
+  });
 
   doc.font("Helvetica").moveDown(2);
   doc.y = y + 22;
@@ -269,7 +318,20 @@ function buildErfassungsbogenPdf(res, rows, opts = {}) {
     showKwColumn = false,
   } = opts;
 
-  const totalAll = sumMinutes(rows);
+  // Optional staffplan override (no-op wenn nichts übergeben)
+  const { rows: rows2, metaOverride } = applyStaffplanOverrides(rows, {
+    employee_id: opts.employee_id,
+    staffplanMap: opts.staffplanMap,
+  });
+
+  // Meta optional aus staffplan überschreiben (wenn vorhanden)
+  if (metaOverride) {
+    meta.customer = metaOverride.customer || meta.customer;
+    meta.customerPo = metaOverride.customerPo || meta.customerPo;
+    meta.internalPo = metaOverride.internalPo || meta.internalPo;
+  }
+
+  const totalAll = sumMinutes(rows2);
   const metaLines = [
     meta.customer ? `Kunde: ${meta.customer}` : null,
     meta.customerPo ? `Kunden-PO: ${meta.customerPo}` : null,
@@ -290,25 +352,25 @@ function buildErfassungsbogenPdf(res, rows, opts = {}) {
 
   drawHeader(doc, { title, periodLabel, logoPath, metaLines });
 
-  const grouped = groupRows(rows, groupMode);
+  const grouped = groupRows(rows2, groupMode);
 
- for (let i = 0; i < grouped.length; i++) {
-  const [groupTitle, items] = grouped[i];
+  for (let i = 0; i < grouped.length; i++) {
+    const [groupTitle, items] = grouped[i];
 
-// Group separator (ruhiger als Überschrift)
-if (i > 0) {
-  doc.moveDown(0.6);
-  const margin = 48;
-  const usable = doc.page.width - margin * 2;
-  const yLine = doc.y;
-  doc
-    .moveTo(margin, yLine)
-    .lineTo(margin + usable, yLine)
-    .strokeColor("#E4E7EC")
-    .lineWidth(1)
-    .stroke();
-  doc.moveDown(0.6);
-}
+    // Group separator (ruhiger als Überschrift)
+    if (i > 0) {
+      doc.moveDown(0.6);
+      const margin = 48;
+      const usable = doc.page.width - margin * 2;
+      const yLine = doc.y;
+      doc
+        .moveTo(margin, yLine)
+        .lineTo(margin + usable, yLine)
+        .strokeColor("#E4E7EC")
+        .lineWidth(1)
+        .stroke();
+      doc.moveDown(0.6);
+    }
 
     const sorted = [...items].sort(
       (a, b) =>
