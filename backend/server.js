@@ -4844,6 +4844,11 @@ app.get("/api/a10/erfassungsbogen", async (req, res) => {
     if (!employee_id || !from || !to) {
       return res.status(400).json({ ok: false, error: "employee_id, from, to required" });
     }
+const meta = {
+  customer: "—",
+  customerPo: null,
+  internalPo: null,
+};
 
 // Zeiten laden: Minuten aus start_ts / end_ts berechnen
 const r = await db.pool.query(
@@ -4910,9 +4915,10 @@ buildErfassungsbogenPdf(res, rows, {
   periodLabel,
   employee_id,
   staffplanMap,
-  meta: {},
+  meta,              // ← HIER dein echtes meta verwenden
   showKwColumn: true,
 });
+
 
   } catch (e) {
     console.error(e);
