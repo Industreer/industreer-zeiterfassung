@@ -14,6 +14,8 @@ const { downloadExcelFromShareLink } = require("./sharepoint");
 const { buildErfassungsbogenPdf } = require("./a10/erfassungsbogenPdf");
 const { loadStaffplanMapping } = require("./lib/staffplanProjectMapping");
 const { applyStaffplanToRows } = require("./lib/applyStaffplanToRows");
+const { applyStaffplanToRows } = require("./lib/applyStaffplanToRows");
+
 
 const app = express();
 // ======================================================
@@ -2168,6 +2170,8 @@ app.get("/api/admin/report-hours/summary", async (req, res) => {
     const from = String(req.query.from || "").trim();
     const to = String(req.query.to || "").trim();
     const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
+const from = String(req.query.from || "");
+const to = String(req.query.to || "");
 
     const include_po = String(req.query.include_po || "0") === "1";
 
@@ -4852,7 +4856,7 @@ const meta = {
 };
 
 // Zeiten laden: Minuten aus start_ts / end_ts berechnen
-const r = await db.pool.query(
+r.raws(
   `
   SELECT
     work_date::date AS work_date,
@@ -4863,6 +4867,7 @@ const r = await db.pool.query(
         - COALESCE(break_minutes, 0)
         - COALESCE(auto_break_minutes, 0)
       )
+
     ) AS minutes
   FROM time_entries
   WHERE employee_id = $1
@@ -4874,6 +4879,9 @@ const r = await db.pool.query(
   `,
   [employee_id, from, to]
 );
+let raw = r.rows;
+raw = applyStaffplanToRows(raw, staffplanMap);
+
 // 1) rows korrekt beenden
 const rows = r.rows.map((x) => ({
   date: String(x.work_date).slice(0, 10), // YYYY-MM-DD
