@@ -13,8 +13,7 @@ const { Pool } = require("pg");
 const { downloadExcelFromShareLink } = require("./sharepoint");
 const { buildErfassungsbogenPdf } = require("./a10/erfassungsbogenPdf");
 const { loadStaffplanMapping } = require("./lib/staffplanProjectMapping");
-
-
+const { applyStaffplanToRows } = require("./lib/applyStaffplanToRows");
 
 const app = express();
 // ======================================================
