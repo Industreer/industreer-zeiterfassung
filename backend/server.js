@@ -128,6 +128,9 @@ const { rows, meta } = await loadErfassungsbogenRows({
 
 // Zeitraum-Label fürs PDF
 const periodLabel = `Zeitraum: ${from} – ${to}`;
+    console.log("[A10.3] employee_id used =", employee_id);
+console.log("[A10.3] has key? ", staffplanMap.has(`${employee_id}|${from}`), `${employee_id}|${from}`);
+
 
 buildErfassungsbogenPdf(res, rows, {
   title: "Erfassungsbogen (Zeiten)",
