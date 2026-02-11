@@ -33,11 +33,10 @@ async function loadStaffplanMapping(db, { from, to }) {
       sp.customer
     FROM staffplan sp
     WHERE sp.work_date::date BETWEEN $1::date AND $2::date
-    ORDER BY
-      sp.employee_id,
-      sp.work_date::date,
-      sp.updated_at DESC NULLS LAST,
-      sp.id DESC
+ORDER BY
+  sp.employee_id,
+  sp.work_date::date,
+  sp.id DESC
   `;
 
   const { rows } = await db.query(sql, [from, to]);
