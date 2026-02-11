@@ -4865,27 +4865,32 @@ const r = await db.pool.query(
   `,
   [employee_id, from, to]
 );
-
+// 1) rows korrekt beenden
 const rows = r.rows.map((x) => ({
   date: String(x.work_date).slice(0, 10), // YYYY-MM-DD
-  project: "—",          // wird durch staffplan ersetzt (A10.3)
-  internal_po: null,_
+  project: "—",
+  internal_po: null,
+  task: null,
+  minutes: Number(x.minutes || 0),
+}));
 
+// 2) JETZT erst staffplan laden (außerhalb vom map!)
+const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
+console.log("[A10.3] staffplanMap size =", staffplanMap.size);
 
-    // A10.3: staffplan mapping (latest staffplan wins)
-    const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
-    console.log("[A10.3] staffplanMap size =", staffplanMap.size);
-    const periodLabel = `${from} – ${to}`;
+const periodLabel = `${from} – ${to}`;
 
-    buildErfassungsbogenPdf(res, rows, {
-      title: "Erfassungsbogen (Zeiten)",
-      groupMode: "week",
-      periodLabel,
-      employee_id,
-      staffplanMap,
-      meta: {},
-      showKwColumn: true,
-    });
+// 3) PDF bauen
+buildErfassungsbogenPdf(res, rows, {
+  title: "Erfassungsbogen (Zeiten)",
+  groupMode: "week",
+  periodLabel,
+  employee_id,
+  staffplanMap,
+  meta: {},
+  showKwColumn: true,
+});
+
   } catch (e) {
     console.error(e);
     res.status(500).json({ ok: false, error: e.message });
