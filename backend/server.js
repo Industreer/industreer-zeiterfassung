@@ -2167,6 +2167,8 @@ app.get("/api/admin/report-hours/summary", async (req, res) => {
   try {
     const from = String(req.query.from || "").trim();
     const to = String(req.query.to || "").trim();
+    const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
+
     const include_po = String(req.query.include_po || "0") === "1";
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
