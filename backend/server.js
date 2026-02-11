@@ -4879,6 +4879,26 @@ const rows = r.rows.map((x) => ({
 
 // 2) JETZT erst staffplan laden (außerhalb vom map!)
 const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
+    // Wenn keine time_entries vorhanden sind: trotzdem eine Zeile erzeugen,
+// damit staffplan (Projekt/PO) im PDF sichtbar wird.
+if (!rows.length) {
+  rows.push({
+    date: from,
+    project: "—",
+    internal_po: null,
+    task: null,
+    minutes: 0,
+  });
+}
+
+// Meta (Header) auch ohne Zeiten aus staffplan ziehen
+const spMeta = staffplanMap.get(`${employee_id}|${from}`);
+if (spMeta) {
+  meta.customer = spMeta.customer || meta.customer;
+  meta.customerPo = spMeta.customer_po || meta.customerPo;
+  meta.internalPo = spMeta.internal_po || meta.internalPo;
+}
+
 console.log("[A10.3] staffplanMap size =", staffplanMap.size);
 
 const periodLabel = `${from} – ${to}`;
