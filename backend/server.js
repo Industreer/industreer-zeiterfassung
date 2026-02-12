@@ -622,12 +622,7 @@ if (project_short) {
     task: null,
     minutes: Number(x.minutes || 0),
   }));
-// A10.3 – staffplan mapping (latest staffplan wins)
-const staffplanMap = await loadStaffplanMapping(db, { from, to });
-  console.log("[A10.3] staffplanMap size =", staffplanMap.size);
-
-
-  const meta = {
+const meta = {
     customer: null,
     customerPo: customer_po || null,
     internalPo: internal_po || null,
