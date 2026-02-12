@@ -496,30 +496,31 @@ async function ensureColumn(table, column, typeSql) {
     END $$;
   `);
 }
-async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, project_short }) {
-  const params = [from, to];
-  let where = `b.work_date BETWEEN $1::date AND $2::date`;
+const params = [from, to];
+const where = [`b.work_date BETWEEN $1::date AND $2::date`];
 
-  if (customer_po) {
-    params.push(customer_po);
-where.push(
-  `regexp_replace(COALESCE(NULLIF(TRIM(sp.customer_po), ''), NULLIF(TRIM(p.customer_po), ''), ''), '\\s', '', 'g')
-   = regexp_replace($${params.length}, '\\s', '', 'g')`
-);
+if (customer_po) {
+  params.push(customer_po);
+  where.push(
+    `regexp_replace(COALESCE(NULLIF(TRIM(sp.customer_po), ''), NULLIF(TRIM(p.customer_po), ''), ''), '\\s', '', 'g')
+     = regexp_replace($${params.length}, '\\s', '', 'g')`
+  );
+}
 
-  if (internal_po) {
-    params.push(internal_po);
-where.push(
-  `regexp_replace(COALESCE(NULLIF(TRIM(sp.internal_po), ''), NULLIF(TRIM(p.internal_po), ''), ''), '\\s', '', 'g')
-   = regexp_replace($${params.length}, '\\s', '', 'g')`
-);
+if (internal_po) {
+  params.push(internal_po);
+  where.push(
+    `regexp_replace(COALESCE(NULLIF(TRIM(sp.internal_po), ''), NULLIF(TRIM(p.internal_po), ''), ''), '\\s', '', 'g')
+     = regexp_replace($${params.length}, '\\s', '', 'g')`
+  );
+}
 
-  if (project_short) {
-    params.push(project_short);
-where.push(
-  `TRIM(COALESCE(NULLIF(TRIM(sp.project_short), ''), NULLIF(TRIM(tp.project_id), ''), '')) = TRIM($${params.length})`
-);
-
+if (project_short) {
+  params.push(project_short);
+  where.push(
+    `TRIM(COALESCE(NULLIF(TRIM(sp.project_short), ''), NULLIF(TRIM(tp.project_id), ''), '')) = TRIM($${params.length})`
+  );
+}
 
   const sql = `
   WITH te_base AS (
@@ -595,7 +596,7 @@ where.push(
     LEFT JOIN projects p
       ON TRIM(p.project_id) = TRIM(tp.project_id)
 
-    WHERE ${where}
+    WHERE ${where.join(" AND ")}
       AND b.start_ts IS NOT NULL
       AND b.end_ts IS NOT NULL
   )
@@ -2140,10 +2141,11 @@ app.get("/api/admin/report-hours", async (req, res) => {
     }
 if (customer_po) {
   params.push(customer_po);
-  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
+  where.push(
+    `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g')
+     = regexp_replace($${params.length}, '\\s', '', 'g')`
+  );
 }
-
     const r = await pool.query(
       `
       SELECT
@@ -2900,15 +2902,13 @@ app.get("/api/admin/clamp-preview", async (req, res) => {
       where.push(`employee_id = $${params.length}`);
     }
 
-    // filtert auf mapped_customer_po (aus staffplan), nicht te.customer_po
- if (customer_po) {
+if (customer_po) {
   params.push(customer_po);
-where.push(
-  `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g')
-   = regexp_replace($${params.length}, '\\s', '', 'g')`
-);
-
-
+  where.push(
+    `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g')
+     = regexp_replace($${params.length}, '\\s', '', 'g')`
+  );
+}
 
     const r = await pool.query(
       `
