@@ -2420,7 +2420,12 @@ app.get("/api/admin/report-hours/weekly.csv", async (req, res) => {
         csvCell(r.customer_po),
         csvCell(r.internal_po),
         csvCell(r.days),
-        csvCell(r.hours),
+       csvCell(
+  r.hours != null
+    ? String(r.hours).replace(".", ",")
+    : ""
+),
+
       ].join(";");
     }
 
