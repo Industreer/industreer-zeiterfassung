@@ -3669,7 +3669,6 @@ app.get("/api/admin/open-sessions", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
 // ======================================================
 // ADMIN: Report Hours Daily (für Nachweise)
 // GET /api/admin/report-hours/daily?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=&internal_po=
@@ -3687,6 +3686,9 @@ app.get("/api/admin/report-hours/daily", async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
     }
+    if (to < from) {
+      return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+    }
 
     const params = [from, to];
     const where = [
@@ -3694,18 +3696,22 @@ app.get("/api/admin/report-hours/daily", async (req, res) => {
       `clamped_hours IS NOT NULL`,
     ];
 
-if (customer_po) {
-  params.push(customer_po);
-  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
-}
+    // Filter auf mapped_* (kommt aus staffplan/clamp-view)
+    if (customer_po) {
+      params.push(customer_po);
+      where.push(
+        `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g')
+         = regexp_replace($${params.length}, '\\s', '', 'g')`
+      );
+    }
 
-if (internal_po) {
-  params.push(internal_po);
-  where += ` AND regexp_replace(COALESCE(sp.internal_po, p.internal_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
-}
-
+    if (internal_po) {
+      params.push(internal_po);
+      where.push(
+        `regexp_replace(COALESCE(mapped_internal_po,''), '\\s', '', 'g')
+         = regexp_replace($${params.length}, '\\s', '', 'g')`
+      );
+    }
 
     const r = await pool.query(
       `
@@ -3725,13 +3731,12 @@ if (internal_po) {
       params
     );
 
-    res.json({ ok: true, from, to, rows: r.rows });
+    return res.json({ ok: true, from, to, rows: r.rows });
   } catch (e) {
     console.error("REPORT DAILY ERROR:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
-
 // ======================================================
 // ADMIN: Report Hours Daily CSV
 // GET /api/admin/report-hours/daily.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&customer_po=&internal_po=
@@ -3745,6 +3750,7 @@ app.get("/api/admin/report-hours/daily.csv", async (req, res) => {
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from ungültig");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to ungültig");
+    if (to < from) return res.status(400).send("to darf nicht vor from liegen");
 
     const params = [from, to];
     const where = [
@@ -3752,18 +3758,21 @@ app.get("/api/admin/report-hours/daily.csv", async (req, res) => {
       `clamped_hours IS NOT NULL`,
     ];
 
-if (customer_po) {
-  params.push(customer_po);
-  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
-}
+    if (customer_po) {
+      params.push(customer_po);
+      where.push(
+        `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g')
+         = regexp_replace($${params.length}, '\\s', '', 'g')`
+      );
+    }
 
-if (internal_po) {
-  params.push(internal_po);
-  where += ` AND regexp_replace(COALESCE(sp.internal_po, p.internal_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
-}
-
+    if (internal_po) {
+      params.push(internal_po);
+      where.push(
+        `regexp_replace(COALESCE(mapped_internal_po,''), '\\s', '', 'g')
+         = regexp_replace($${params.length}, '\\s', '', 'g')`
+      );
+    }
 
     const q = await pool.query(
       `
@@ -3809,10 +3818,10 @@ if (internal_po) {
     const filename = `report_daily_${from}_to_${to}.csv`;
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(csv);
+    return res.send(csv);
   } catch (e) {
     console.error("DAILY CSV ERROR:", e);
-    res.status(500).send(e.message || "csv error");
+    return res.status(500).send(e.message || "csv error");
   }
 });
 // ======================================================
