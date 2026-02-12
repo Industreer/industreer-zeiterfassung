@@ -2334,6 +2334,105 @@ app.get("/api/debug/staffplan-check", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ======================================================
+// ADMIN: Report Hours Weekly (KW) - CSV
+// GET /api/admin/report-hours/weekly.csv?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Optional: &customer_po=&internal_po=&employee_id=
+// (Admin geschützt: code=2012)
+// ======================================================
+app.get("/api/admin/report-hours/weekly.csv", async (req, res) => {
+  try {
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const employee_id = req.query.employee_id ? String(req.query.employee_id).trim() : null;
+    const customer_po = req.query.customer_po ? String(req.query.customer_po).trim() : null;
+    const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null; // kann "" sein
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).send("from ungültig");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).send("to ungültig");
+    if (to < from) return res.status(400).send("to darf nicht vor from liegen");
+
+    const where = [];
+    const params = [from, to];
+
+    where.push(`work_date BETWEEN $1::date AND $2::date`);
+    where.push(`clamped_hours IS NOT NULL`);
+
+    if (employee_id) {
+      params.push(employee_id);
+      where.push(`employee_id = $${params.length}`);
+    }
+
+    if (customer_po) {
+      params.push(customer_po);
+      where.push(
+        `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g')
+         = regexp_replace($${params.length}, '\\s', '', 'g')`
+      );
+    }
+
+    if (internal_po !== null) {
+      params.push(internal_po);
+      where.push(
+        `regexp_replace(COALESCE(mapped_internal_po,''), '\\s', '', 'g')
+         = regexp_replace($${params.length}, '\\s', '', 'g')`
+      );
+    }
+
+    const q = await pool.query(
+      `
+      SELECT
+        EXTRACT(ISOYEAR FROM work_date)::int AS isoyear,
+        EXTRACT(WEEK FROM work_date)::int AS isoweek,
+        employee_id,
+        COALESCE(mapped_customer_po,'') AS customer_po,
+        COALESCE(mapped_internal_po,'') AS internal_po,
+        COUNT(DISTINCT work_date)::int AS days,
+        ROUND(SUM(clamped_hours)::numeric, 2) AS hours
+      FROM v_time_entries_clamped
+      WHERE ${where.join(" AND ")}
+      GROUP BY
+        EXTRACT(ISOYEAR FROM work_date)::int,
+        EXTRACT(WEEK FROM work_date)::int,
+        employee_id,
+        COALESCE(mapped_customer_po,''),
+        COALESCE(mapped_internal_po,'')
+      ORDER BY isoyear ASC, isoweek ASC, employee_id ASC, customer_po ASC, internal_po ASC
+      `,
+      params
+    );
+
+    function csvCell(v) {
+      const s = (v === null || v === undefined) ? "" : String(v);
+      if (/[;"\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    }
+
+    let csv = "\ufeff" + [
+      ["isoyear","isoweek","employee_id","customer_po","internal_po","days","hours"].join(";"),
+    ].join("\n");
+
+    for (const r of q.rows) {
+      csv += "\n" + [
+        csvCell(r.isoyear),
+        csvCell(r.isoweek),
+        csvCell(r.employee_id),
+        csvCell(r.customer_po),
+        csvCell(r.internal_po),
+        csvCell(r.days),
+        csvCell(r.hours),
+      ].join(";");
+    }
+
+    const filename = `report_weekly_${from}_to_${to}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.send(csv);
+  } catch (e) {
+    console.error("WEEKLY CSV ERROR:", e);
+    return res.status(500).send(e.message || "csv error");
+  }
+});
 
 // ======================================================
 // ADMIN: Mitarbeiter-IDs (Hybrid AUTO_* -> echte ID)
