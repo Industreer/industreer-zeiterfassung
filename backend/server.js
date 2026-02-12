@@ -611,10 +611,7 @@ if (project_short) {
   GROUP BY work_date, project, internal_po, customer_po, customer
   ORDER BY work_date ASC, project ASC, internal_po ASC
 `;
-
-
   const r = await pool.query(sql, params);
-
   const rows = r.rows.map((x) => ({
     date: String(x.work_date).slice(0, 10), // YYYY-MM-DD
     project: x.project || "—",
@@ -630,7 +627,6 @@ const meta = {
 
   const customers = Array.from(new Set(r.rows.map((x) => x.customer).filter(Boolean)));
   if (customers.length === 1) meta.customer = customers[0];
-
   return { rows, meta };
 }
 
