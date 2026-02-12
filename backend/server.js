@@ -5019,9 +5019,6 @@ const rows = r.rows.map((x) => ({
   task: null,
   minutes: Number(x.minutes || 0),
 }));
-
-// 2) JETZT erst staffplan laden (außerhalb vom map!)
-const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
     // Wenn keine time_entries vorhanden sind: trotzdem eine Zeile erzeugen,
 // damit staffplan (Projekt/PO) im PDF sichtbar wird.
 if (!rows.length) {
@@ -5041,8 +5038,6 @@ if (spMeta) {
   meta.customerPo = spMeta.customer_po || meta.customerPo;
   meta.internalPo = spMeta.internal_po || meta.internalPo;
 }
-
-console.log("[A10.3] staffplanMap size =", staffplanMap.size);
 
 const periodLabel = `${from} – ${to}`;
 
