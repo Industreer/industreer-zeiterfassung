@@ -2298,21 +2298,26 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
 });
 
 
-app.get("/api/debug/staffplan-topdates", async (req, res) => {
-  try {
-    const r = await pool.query(`
-      SELECT work_date, COUNT(*)::int AS cnt
-      FROM staffplan
-      GROUP BY work_date
-      ORDER BY work_date DESC
-      LIMIT 15
-    `);
-    return res.json({ ok: true, rows: r.rows });
-  } catch (e) {
-    console.error("DEBUG STAFFPLAN TOPDATES ERROR:", e);
-    return res.status(500).json({ ok: false, error: e.message });
-  }
-});
+if (process.env.ENABLE_DEBUG_ROUTES === "1") {
+
+  app.get("/api/debug/staffplan-topdates", async (req, res) => {
+    try {
+      const r = await pool.query(`
+        SELECT work_date, COUNT(*)::int AS cnt
+        FROM staffplan
+        GROUP BY work_date
+        ORDER BY work_date DESC
+        LIMIT 15
+      `);
+      return res.json({ ok: true, rows: r.rows });
+    } catch (e) {
+      console.error("DEBUG STAFFPLAN TOPDATES ERROR:", e);
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+}
+
 
 app.get("/api/debug/staffplan-check", async (req, res) => {
   try {
