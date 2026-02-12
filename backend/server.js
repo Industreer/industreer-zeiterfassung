@@ -502,18 +502,24 @@ async function loadErfassungsbogenRows({ from, to, customer_po, internal_po, pro
 
   if (customer_po) {
     params.push(customer_po);
-    where += ` AND regexp_replace(COALESCE(NULLIF(TRIM(sp.customer_po), ''), NULLIF(TRIM(p.customer_po), ''), ''), '\\s', '', 'g')
-                 = regexp_replace($${params.length}, '\\s', '', 'g')`;
-  }
+where.push(
+  `regexp_replace(COALESCE(NULLIF(TRIM(sp.customer_po), ''), NULLIF(TRIM(p.customer_po), ''), ''), '\\s', '', 'g')
+   = regexp_replace($${params.length}, '\\s', '', 'g')`
+);
+
   if (internal_po) {
     params.push(internal_po);
-    where += ` AND regexp_replace(COALESCE(NULLIF(TRIM(sp.internal_po), ''), NULLIF(TRIM(p.internal_po), ''), ''), '\\s', '', 'g')
-                 = regexp_replace($${params.length}, '\\s', '', 'g')`;
-  }
+where.push(
+  `regexp_replace(COALESCE(NULLIF(TRIM(sp.internal_po), ''), NULLIF(TRIM(p.internal_po), ''), ''), '\\s', '', 'g')
+   = regexp_replace($${params.length}, '\\s', '', 'g')`
+);
+
   if (project_short) {
     params.push(project_short);
-    where += ` AND TRIM(COALESCE(NULLIF(TRIM(sp.project_short), ''), NULLIF(TRIM(tp.project_id), ''), '')) = TRIM($${params.length})`;
-  }
+where.push(
+  `TRIM(COALESCE(NULLIF(TRIM(sp.project_short), ''), NULLIF(TRIM(tp.project_id), ''), '')) = TRIM($${params.length})`
+);
+
 
   const sql = `
   WITH te_base AS (
@@ -2897,9 +2903,11 @@ app.get("/api/admin/clamp-preview", async (req, res) => {
     // filtert auf mapped_customer_po (aus staffplan), nicht te.customer_po
  if (customer_po) {
   params.push(customer_po);
-  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
-}
+where.push(
+  `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g')
+   = regexp_replace($${params.length}, '\\s', '', 'g')`
+);
+
 
 
     const r = await pool.query(
