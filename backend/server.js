@@ -2164,14 +2164,10 @@ if (customer_po) {
 // ======================================================
 // ADMIN: Report Hours Summary (Phase 2A)
 // ======================================================
-// GET /api/admin/report-hours/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&include_po=0|1
 app.get("/api/admin/report-hours/summary", async (req, res) => {
   try {
     const from = String(req.query.from || "").trim();
     const to = String(req.query.to || "").trim();
-    const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
-const from = String(req.query.from || "");
-const to = String(req.query.to || "");
 
     const include_po = String(req.query.include_po || "0") === "1";
 
