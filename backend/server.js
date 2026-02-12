@@ -2228,9 +2228,15 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
     const customer_po = req.query.customer_po ? String(req.query.customer_po).trim() : null;
     const internal_po = req.query.internal_po != null ? String(req.query.internal_po).trim() : null; // kann "" sein
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).json({ ok: false, error: "from ungültig (YYYY-MM-DD)" });
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
-    if (to < from) return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({ ok: false, error: "from ungültig (YYYY-MM-DD)" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "to ungültig (YYYY-MM-DD)" });
+    }
+    if (to < from) {
+      return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+    }
 
     const where = [];
     const params = [from, to];
@@ -2242,14 +2248,23 @@ app.get("/api/admin/report-hours/weekly", async (req, res) => {
       params.push(employee_id);
       where.push(`employee_id = $${params.length}`);
     }
-if (customer_po) {
-  params.push(customer_po);
-  where += ` AND regexp_replace(COALESCE(sp.customer_po, p.customer_po, ''), '\\s', '', 'g')
-               = regexp_replace($${params.length}, '\\s', '', 'g')`;
-}
+
+    // customer_po: filter auf mapped_customer_po (staffplan-based)
+    if (customer_po) {
+      params.push(customer_po);
+      where.push(
+        `regexp_replace(COALESCE(mapped_customer_po,''), '\\s', '', 'g')
+         = regexp_replace($${params.length}, '\\s', '', 'g')`
+      );
+    }
+
+    // internal_po: wenn Param vorhanden (auch ""), dann filtere auf mapped_internal_po
     if (internal_po !== null) {
       params.push(internal_po);
-      where.push(`COALESCE(mapped_internal_po,'') = $${params.length}`);
+      where.push(
+        `regexp_replace(COALESCE(mapped_internal_po,''), '\\s', '', 'g')
+         = regexp_replace($${params.length}, '\\s', '', 'g')`
+      );
     }
 
     const r = await pool.query(
@@ -2281,6 +2296,7 @@ if (customer_po) {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 
 app.get("/api/debug/staffplan-topdates", async (req, res) => {
   try {
