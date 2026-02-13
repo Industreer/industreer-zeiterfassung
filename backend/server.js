@@ -5013,8 +5013,6 @@ app.get("/api/a10/erfassungsbogen", async (req, res) => {
 
 
 // Zeiten laden: Minuten aus start_ts / end_ts berechnen
-r.raws(
-  `
   SELECT
     work_date::date AS work_date,
     SUM(
