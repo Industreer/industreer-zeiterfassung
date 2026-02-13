@@ -4968,7 +4968,10 @@ app.get("/api/admin/debug/a10-po-coverage", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
-
+// ======================================================
+// A10: Erfassungsbogen PDF (Zeiten + Staffplan-Mapping)
+// GET /api/a10/erfassungsbogen?employee_id=...&from=YYYY-MM-DD&to=YYYY-MM-DD
+// ======================================================
 app.get("/api/a10/erfassungsbogen", async (req, res) => {
   try {
     const employee_id = String(req.query.employee_id || "").trim();
@@ -4978,15 +4981,97 @@ app.get("/api/a10/erfassungsbogen", async (req, res) => {
     if (!employee_id || !from || !to) {
       return res.status(400).json({ ok: false, error: "employee_id, from, to required" });
     }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ ok: false, error: "from/to ungültig (YYYY-MM-DD)" });
+    }
+    if (to < from) {
+      return res.status(400).json({ ok: false, error: "to darf nicht vor from liegen" });
+    }
 
-    // 1️⃣ Daten + Meta sauber laden
-    const { rows, meta } = await loadErfassungsbogenRows({
-      from,
-      to,
-      customer_po: null,
+    // 1) Staffplan laden (für Mapping + Meta)
+    const staffplanMap = await loadStaffplanMapping(pool, { from, to });
+
+    // 2) Zeiten laden: Minuten aus start_ts / end_ts berechnen
+    const r = await pool.query(
+      `
+      SELECT
+        work_date::date AS work_date,
+        SUM(
+          GREATEST(
+            0,
+            FLOOR(
+              (EXTRACT(EPOCH FROM (end_ts - start_ts)) / 60.0)
+              - COALESCE(break_minutes, 0)
+              - COALESCE(auto_break_minutes, 0)
+            )
+          )
+        )::int AS minutes
+      FROM time_entries
+      WHERE employee_id = $1
+        AND work_date::date BETWEEN $2::date AND $3::date
+        AND start_ts IS NOT NULL
+        AND end_ts IS NOT NULL
+      GROUP BY work_date::date
+      ORDER BY work_date::date ASC
+      `,
+      [employee_id, from, to]
+    );
+
+    // rows fürs PDF (Projekt/PO kommt via staffplanMap in buildErfassungsbogenPdf)
+    const rows = (r.rows || []).map((x) => ({
+      date: String(x.work_date).slice(0, 10), // YYYY-MM-DD
+      project: "—",
       internal_po: null,
-      project_short: null,
+      task: null,
+      minutes: Number(x.minutes || 0),
+    }));
+
+    // Wenn keine time_entries vorhanden sind: trotzdem Zeile erzeugen,
+    // damit Staffplan-Projekt/PO im PDF sichtbar wird
+    if (!rows.length) {
+      rows.push({
+        date: from,
+        project: "—",
+        internal_po: null,
+        task: null,
+        minutes: 0,
+      });
+    }
+
+    // 3) Meta aus Staffplan (latest wins: bevorzugt "to", fallback "from")
+    const meta = { customer: "—", customerPo: null, internalPo: null };
+    const spMeta =
+      staffplanMap.get(`${employee_id}|${to}`) ||
+      staffplanMap.get(`${employee_id}|${from}`) ||
+      null;
+
+    if (spMeta) {
+      meta.customer = spMeta.customer || meta.customer;
+      meta.customerPo = spMeta.customer_po || meta.customerPo;
+      meta.internalPo = spMeta.internal_po || meta.internalPo;
+    }
+
+    const periodLabel = `${from} – ${to}`;
+
+    // 4) PDF bauen
+    return buildErfassungsbogenPdf(res, rows, {
+      title: "Erfassungsbogen (Zeiten)",
+      groupMode: "week",
+      periodLabel,
+      logoPath: LOGO_FILE,
+      showKwColumn: true,
+
+      // A10.3 Mapping aktivieren
+      employee_id,
+      staffplanMap,
+
+      meta,
     });
+  } catch (e) {
+    console.error("A10 ERFASSUNGSBOGEN ERROR:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
     // 2️⃣ Staffplan Mapping für PDF-Override
     const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
