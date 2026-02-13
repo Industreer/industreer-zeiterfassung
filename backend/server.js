@@ -4971,18 +4971,46 @@ app.get("/api/admin/debug/a10-po-coverage", async (req, res) => {
 
 app.get("/api/a10/erfassungsbogen", async (req, res) => {
   try {
-    const employee_id = String(req.query.employee_id || "");
-    const from = String(req.query.from || "");
-    const to = String(req.query.to || "");
+    const employee_id = String(req.query.employee_id || "").trim();
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
 
     if (!employee_id || !from || !to) {
       return res.status(400).json({ ok: false, error: "employee_id, from, to required" });
     }
-const meta = {
-  customer: "—",
-  customerPo: null,
-  internalPo: null,
-};
+
+    // 1️⃣ Daten + Meta sauber laden
+    const { rows, meta } = await loadErfassungsbogenRows({
+      from,
+      to,
+      customer_po: null,
+      internal_po: null,
+      project_short: null,
+    });
+
+    // 2️⃣ Staffplan Mapping für PDF-Override
+    const staffplanMap = await loadStaffplanMapping(db.pool, { from, to });
+
+    // 3️⃣ Zeitraum Label
+    const periodLabel = `${from} – ${to}`;
+
+    // 4️⃣ PDF bauen
+    buildErfassungsbogenPdf(res, rows, {
+      title: "Erfassungsbogen (Zeiten)",
+      groupMode: "week",
+      periodLabel,
+      employee_id,
+      staffplanMap,
+      meta,
+      showKwColumn: true,
+    });
+
+  } catch (e) {
+    console.error("ERFASSUNGSBOGEN ERROR:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 
 // Zeiten laden: Minuten aus start_ts / end_ts berechnen
 r.raws(
