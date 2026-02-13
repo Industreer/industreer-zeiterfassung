@@ -610,7 +610,7 @@ if (project_short) {
   FROM base_rows
   GROUP BY work_date, project, internal_po, customer_po, customer
   ORDER BY work_date ASC, project ASC, internal_po ASC
-`;
+`; 
   const r = await pool.query(sql, params);
   const rows = r.rows.map((x) => ({
     date: String(x.work_date).slice(0, 10), // YYYY-MM-DD
