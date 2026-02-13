@@ -5079,14 +5079,6 @@ buildErfassungsbogenPdf(res, rows, {
   meta,              // ← HIER dein echtes meta verwenden
   showKwColumn: true,
 });
-
-
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
 // ======================================================
 // START
 // ======================================================
